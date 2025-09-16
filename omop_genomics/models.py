@@ -146,3 +146,101 @@ class GenomicTestResult(models.Model):
 
     def __str__(self):
         return f"Genomic Test Result {self.genomic_test_result_id} for Person {self.person_id}"
+
+
+class BiomarkerMeasurement(models.Model):
+    """Biomarker measurements for cancer patients (ER, PR, HER2, PD-L1, etc.)"""
+    biomarker_measurement_id = models.BigIntegerField(primary_key=True)
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, db_column='person_id')
+    biomarker_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='biomarker_measurements', 
+                                        db_column='biomarker_concept_id')
+    measurement_date = models.DateField()
+    measurement_datetime = models.DateTimeField(null=True, blank=True)
+    
+    # Result values
+    value_as_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='biomarker_values',
+                                       db_column='value_as_concept_id', null=True, blank=True)
+    value_as_number = models.DecimalField(max_digits=15, decimal_places=5, null=True, blank=True)
+    value_as_string = models.CharField(max_length=100, null=True, blank=True)
+    unit_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='biomarker_units',
+                                   db_column='unit_concept_id', null=True, blank=True)
+    
+    # Biomarker-specific fields
+    biomarker_type = models.CharField(max_length=50, choices=[
+        ('HORMONE_RECEPTOR', 'Hormone Receptor'),
+        ('HER2', 'HER2/neu'),
+        ('PD_L1', 'PD-L1'),
+        ('PROLIFERATION', 'Proliferation Marker'),
+        ('GENETIC', 'Genetic Marker'),
+        ('OTHER', 'Other Biomarker')
+    ], help_text="Type of biomarker")
+    
+    # Test details
+    assay_method = models.CharField(max_length=100, null=True, blank=True, help_text="Assay method used")
+    laboratory = models.CharField(max_length=100, null=True, blank=True, help_text="Testing laboratory")
+    specimen_type = models.CharField(max_length=50, null=True, blank=True, help_text="Specimen type")
+    
+    # Clinical interpretation
+    clinical_significance = models.CharField(max_length=20, choices=[
+        ('POSITIVE', 'Positive'),
+        ('NEGATIVE', 'Negative'),
+        ('EQUIVOCAL', 'Equivocal'),
+        ('UNKNOWN', 'Unknown'),
+        ('HIGH', 'High'),
+        ('LOW', 'Low'),
+        ('INTERMEDIATE', 'Intermediate')
+    ], null=True, blank=True)
+    
+    class Meta:
+        db_table = 'biomarker_measurement'
+
+    def __str__(self):
+        return f"Biomarker {self.biomarker_concept} for Person {self.person_id}"
+
+
+class TumorAssessment(models.Model):
+    """Tumor assessments and response evaluations"""
+    tumor_assessment_id = models.BigIntegerField(primary_key=True)
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, db_column='person_id')
+    assessment_date = models.DateField()
+    assessment_datetime = models.DateTimeField(null=True, blank=True)
+    
+    # Assessment details
+    assessment_method = models.CharField(max_length=50, choices=[
+        ('RECIST_1_1', 'RECIST 1.1'),
+        ('RANO', 'RANO'),
+        ('IMWG', 'IMWG'),
+        ('CLINICAL', 'Clinical Assessment'),
+        ('OTHER', 'Other')
+    ], help_text="Assessment methodology")
+    
+    # Response evaluation
+    overall_response = models.CharField(max_length=20, choices=[
+        ('CR', 'Complete Response'),
+        ('PR', 'Partial Response'),
+        ('SD', 'Stable Disease'),
+        ('PD', 'Progressive Disease'),
+        ('NE', 'Not Evaluable'),
+        ('MR', 'Minimal Response'),
+        ('VGPR', 'Very Good Partial Response')
+    ], null=True, blank=True)
+    
+    # Measurable disease
+    target_lesions_sum = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, 
+                                           help_text="Sum of target lesions (mm)")
+    new_lesions_present = models.BooleanField(null=True, blank=True)
+    non_target_lesion_status = models.CharField(max_length=20, null=True, blank=True)
+    
+    # Disease status
+    disease_status = models.CharField(max_length=30, choices=[
+        ('MEASURABLE', 'Measurable Disease'),
+        ('NON_MEASURABLE', 'Non-measurable Disease'),
+        ('NO_EVIDENCE', 'No Evidence of Disease'),
+        ('UNKNOWN', 'Unknown')
+    ], null=True, blank=True)
+    
+    class Meta:
+        db_table = 'tumor_assessment'
+
+    def __str__(self):
+        return f"Tumor Assessment {self.tumor_assessment_id} for Person {self.person_id}"
