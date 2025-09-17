@@ -92,7 +92,7 @@ While this project achieves full OMOP CDM v6.0 compliance, we have added **one k
 class PersonLanguageSkill(models.Model):
     person = models.ForeignKey(Person, on_delete=models.CASCADE)
     language_concept = models.ForeignKey(Concept, on_delete=models.PROTECT)
-    skill_level = models.CharField(choices=['speak', 'write', 'both'])
+    skill_level = models.CharField(choices=['speak/understand', 'read/write', 'both'])
     is_primary = models.BooleanField(default=False)
     
     class Meta:
