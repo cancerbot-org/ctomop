@@ -171,6 +171,11 @@ class Command(BaseCommand):
         for field, value in performance_data.items():
             setattr(patient_info, field, value)
 
+        # Populate genetic mutations
+        genetic_data = self.get_genetic_mutations(person)
+        for field, value in genetic_data.items():
+            setattr(patient_info, field, value)
+
         # Set last updated timestamp
         patient_info.last_updated = timezone.now()
 
@@ -691,7 +696,78 @@ class Command(BaseCommand):
             
             if 'ecog' in concept_name and obs.value_as_number is not None:
                 data['ecog_performance_status'] = int(obs.value_as_number)
+                break
             elif 'karnofsky' in concept_name and obs.value_as_number is not None:
                 data['karnofsky_performance_score'] = int(obs.value_as_number)
+                break
 
+        return data
+
+    def get_genetic_mutations(self, person):
+        """Extract genetic mutations from standard OMOP Measurement table"""
+        data = {}
+        
+        # LOINC codes for genetic tests
+        genetic_loinc_codes = {
+            '21636-6': 'BRCA1',    # BRCA1 gene mutation
+            '21637-4': 'BRCA2',    # BRCA2 gene mutation  
+            '21667-1': 'TP53',     # TP53 gene mutation
+            '48013-7': 'KRAS',     # KRAS gene mutation
+            '62862-8': 'EGFR',     # EGFR gene mutation
+            '62318-1': 'PIK3CA',   # PIK3CA gene mutation
+        }
+        
+        # SNOMED codes for mutation origin
+        origin_concepts = {
+            255395001: 'germline',
+            255461003: 'somatic'
+        }
+        
+        # SNOMED codes for clinical interpretation
+        interpretation_concepts = {
+            30166007: 'pathogenic',
+            10828004: 'benign', 
+            42425007: 'vus'  # Variant of Unknown Significance - shortened
+        }
+        
+        mutations = []
+        
+        # Get all genetic test measurements for this person
+        genetic_measurements = Measurement.objects.filter(
+            person=person,
+            measurement_concept__concept_code__in=genetic_loinc_codes.keys()
+        ).order_by('-measurement_date')
+        
+        for measurement in genetic_measurements:
+            # Skip if no result
+            if not measurement.value_as_string:
+                continue
+                
+            gene = genetic_loinc_codes.get(measurement.measurement_concept.concept_code)
+            if not gene:
+                continue
+                
+            mutation_data = {
+                'gene': gene.lower(),  # Lowercase gene name as requested
+                'variant': measurement.value_as_string,  # HGVS notation
+                'test_date': measurement.measurement_date.isoformat() if measurement.measurement_date else None,
+            }
+            
+            # Add origin (germline/somatic) from qualifier_concept_id
+            if measurement.qualifier_concept_id and measurement.qualifier_concept_id in origin_concepts:
+                mutation_data['origin'] = origin_concepts[measurement.qualifier_concept_id]
+            
+            # Add clinical interpretation from value_as_concept_id  
+            if measurement.value_as_concept_id and measurement.value_as_concept_id in interpretation_concepts:
+                mutation_data['interpretation'] = interpretation_concepts[measurement.value_as_concept_id]
+            
+            # Add assay method if available in qualifier_source_value
+            if measurement.qualifier_source_value:
+                mutation_data['assay_method'] = measurement.qualifier_source_value
+                
+            mutations.append(mutation_data)
+        
+        # Set the genetic_mutations field
+        data['genetic_mutations'] = mutations
+        
         return data

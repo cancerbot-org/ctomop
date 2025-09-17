@@ -1,26 +1,6 @@
 # ctomop
 
-Django project with comprehensive OMOP CDM models enhanced with standard oncology extensions for cancer clinical trial matching.
-
-## OMOP CDM Compliance & Clinical Trial Data Storage
-
-This project follows **OMOP CDM v6.0 best practices** by storing all clinical data in standard OMOP tables using standardized vocabularies (LOINC, SNOMED CT, ICD-O-3). All extension models have been removed to ensure full OMOP compliance while maintaining comprehensive clinical trial eligibility screening capabilities.
-
-### Standard OMOP Tables Used
-
-#### Core OMOP CDM Tables (omop_core/models.py)
-
-**Person Model**
-- Standard OMOP Person table for patient demographics
-- Connected to `PersonLanguageSkill` model for multiple language support
-
-**PersonLanguageSkill Model**
-- `language_concept` - Reference to language concept (English, Spanish, etc.)
-- `skill_level` - Skill level choices: "speak", "write", "both"
-- `is_primary` - Boolean flag for primary language
-- Unique constraint per person/language combination
-
-**Measurement Table**
+Django projec**Measurement Table** (Standard OMOP CDM)
 - **Vital Signs & Anthropometrics**: Essential measurements for clinical trial eligibility
   - Systolic BP (LOINC: 8480-6), Diastolic BP (LOINC: 8462-4)
   - Weight (LOINC: 29463-7), Height (LOINC: 8302-2), BMI (LOINC: 39156-5)
@@ -30,7 +10,38 @@ This project follows **OMOP CDM v6.0 best practices** by storing all clinical da
   - ER/PR status, HER2 status, PD-L1 expression
   - Genetic mutations (BRCA1/2, TP53, PIK3CA, KRAS, EGFR, ALK)
 
-**Observation Table**
+**Observation Table** (Standard OMOP CDM)rehensive OMOP CDM models enhanced with standard oncology extensions for cancer clinical trial matching.
+
+## OMOP CDM Compliance & Clinical Trial Data Storage
+
+This project follows **OMOP CDM v6.0 best practices** by storing all clinical data in standard OMOP tables using standardized vocabularies (LOINC, SNOMED CT, ICD-O-3). All extension models have been removed to ensure full OMOP compliance while maintaining comprehensive clinical trial eligibility screening capabilities.
+
+### Standard OMOP Tables Used
+
+#### Core OMOP CDM Tables (omop_core/models.py)
+
+**Person Model** (Standard OMOP CDM)
+- Standard OMOP Person table for patient demographics
+- Connected to `PersonLanguageSkill` model for multiple language support
+
+**🆕 PersonLanguageSkill Model** (Custom Addition for Clinical Trials)
+- `language_concept` - Reference to language concept (English, Spanish, etc.)
+- `skill_level` - Skill level choices: "speak", "write", "both"
+- `is_primary` - Boolean flag for primary language
+- Unique constraint per person/language combination
+- **Purpose**: Clinical trials often require specific language capabilities for informed consent and communication
+
+**Measurement Table** (Standard OMOP CDM)
+- **Vital Signs & Anthropometrics**: Essential measurements for clinical trial eligibility
+  - Systolic BP (LOINC: 8480-6), Diastolic BP (LOINC: 8462-4)
+  - Weight (LOINC: 29463-7), Height (LOINC: 8302-2), BMI (LOINC: 39156-5)
+- **Laboratory Results**: Critical lab values for trial screening
+  - Hemoglobin, Creatinine, Calcium, Albumin, Bilirubin, AST, ALT
+- **Cancer Biomarkers**: Key biomarkers for trial matching
+  - ER/PR status, HER2 status, PD-L1 expression
+  - Genetic mutations (BRCA1/2, TP53, PIK3CA, KRAS, EGFR, ALK)
+
+**Observation Table** (Standard OMOP CDM)
 - **Social Determinants**: Employment, insurance status for trial eligibility
 - **Health Behaviors**: Tobacco use status critical for lung cancer trials
   - Never smoker (SNOMED: 266919005)
@@ -41,12 +52,12 @@ This project follows **OMOP CDM v6.0 best practices** by storing all clinical da
   - Treatment response (Complete: 182840001, Partial: 182841002)
   - Stable disease (182843004), Progressive disease (182842009)
 
-**DrugExposure Table**
+**DrugExposure Table** (Standard OMOP CDM)
 - **Treatment History**: All cancer treatments and medications
 - **Treatment Lines**: Derived from drug exposure patterns and dates
 - **Therapy Classification**: Platinum-based, immunotherapy identification
 
-**ConditionOccurrence Table**
+**ConditionOccurrence Table** (Standard OMOP CDM)
 - **Primary Diagnoses**: Cancer diagnoses with ICD-O-3 concepts
 - **Comorbidities**: All medical conditions
 
@@ -67,6 +78,60 @@ This project follows **OMOP CDM v6.0 best practices** by storing all clinical da
 
 **StemTable Model** (Standard OMOP Oncology Extension)
 - Pre-processing staging table for oncology data
+
+## 🆕 Custom Extensions for Clinical Trial Matching
+
+### Extensions Beyond Standard OMOP CDM & Official Extensions
+
+While this project achieves full OMOP CDM v6.0 compliance, we have added **one key extension** to support comprehensive clinical trial patient matching:
+
+#### 1. PersonLanguageSkill Model (Custom Addition)
+**Purpose**: Clinical trials require specific language capabilities for informed consent and communication.
+
+```python
+class PersonLanguageSkill(models.Model):
+    person = models.ForeignKey(Person, on_delete=models.CASCADE)
+    language_concept = models.ForeignKey(Concept, on_delete=models.PROTECT)
+    skill_level = models.CharField(choices=['speak', 'write', 'both'])
+    is_primary = models.BooleanField(default=False)
+    
+    class Meta:
+        unique_together = ['person', 'language_concept']
+```
+
+**Key Features:**
+- **Multi-language Support**: One person can have multiple language skills
+- **Skill Level Granularity**: Distinguish between speaking, writing, or both capabilities
+- **Primary Language**: Identify the patient's primary communication language
+- **OMOP Integration**: Uses standard OMOP Concept table for language references
+- **Clinical Trial Relevance**: Essential for patient consent and communication protocols
+
+#### 2. PatientInfo Model (Integration/Denormalization Model)
+**Purpose**: Research-friendly, denormalized view for rapid clinical trial eligibility screening.
+
+- **Not an OMOP Extension**: This is an integration model that aggregates data from standard OMOP tables
+- **Data Sources**: All data extracted from standard OMOP CDM tables (Person, Measurement, Observation, DrugExposure, ConditionOccurrence)
+- **No Additional Storage**: Does not store additional clinical data beyond what's in OMOP tables
+- **Performance Optimization**: Provides single-table access for common clinical trial queries
+
+### All Other Data from Standard OMOP Tables
+
+**✅ No Custom Clinical Data Storage:**
+- All biomarkers → Standard Measurement table with LOINC concepts
+- All lab values → Standard Measurement table with LOINC concepts  
+- All vital signs → Standard Measurement table with LOINC concepts
+- All social factors → Standard Observation table with SNOMED concepts
+- All treatments → Standard DrugExposure table
+- All conditions → Standard ConditionOccurrence table
+- All staging data → Standard Observation table with cancer concepts
+
+**✅ Standard OMOP Oncology Extensions Used:**
+- Episode, EpisodeEvent, CancerModifier, Histology, StemTable models
+- All part of official OMOP Oncology Extension specification
+
+**✅ Removed Non-Standard Extensions:**
+- ❌ BiomarkerMeasurement, TumorAssessment, TreatmentLine, SocialDeterminant, HealthBehavior, InfectionStatus
+- All data migrated to standard OMOP tables for full compliance
 
 ### PatientInfo Model (Comprehensive Clinical Profile)
 **Integration model with 100+ fields covering:**
@@ -287,5 +352,23 @@ The project consists of three main Django apps designed for **full OMOP CDM v6.0
   - All treatment and assessment data in standard OMOP tables
 
 **Data Architecture:** All clinical trial matching data is extracted from standard OMOP tables using standardized vocabularies, ensuring complete interoperability with OMOP analytical tools and other OMOP CDM implementations.
+
+## Summary of Extensions Beyond Standard OMOP CDM
+
+### ✅ **Single Custom Extension Added:**
+1. **PersonLanguageSkill Model** - Multi-language support for clinical trial communication requirements
+
+### ✅ **Standard OMOP Extensions Used:**
+- **OMOP Oncology Extension**: Episode, EpisodeEvent, CancerModifier, Histology, StemTable
+- **OMOP Genomics Extension**: Placeholder (currently using standard Measurement/Observation tables)
+
+### ✅ **Integration Models (Not Extensions):**
+- **PatientInfo Model** - Denormalized view aggregating data from standard OMOP tables for performance
+
+### ✅ **Full OMOP Compliance Achieved:**
+- All clinical data stored in standard OMOP CDM v6.0 tables
+- Standardized vocabularies used (LOINC, SNOMED CT, ICD-O-3, RxNorm)
+- Complete interoperability with OMOP analytical tools
+- No non-standard clinical data storage
 
 This ensures **full OMOP CDM compliance** while maintaining all clinical trial eligibility screening capabilities through intelligent extraction from standard OMOP tables.
