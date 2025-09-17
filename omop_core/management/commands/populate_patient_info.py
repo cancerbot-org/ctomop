@@ -754,12 +754,12 @@ class Command(BaseCommand):
             }
             
             # Add origin (germline/somatic) from qualifier_concept_id
-            if measurement.qualifier_concept_id and measurement.qualifier_concept_id in origin_concepts:
-                mutation_data['origin'] = origin_concepts[measurement.qualifier_concept_id]
+            if measurement.qualifier_concept and measurement.qualifier_concept.concept_id in origin_concepts:
+                mutation_data['origin'] = origin_concepts[measurement.qualifier_concept.concept_id]
             
             # Add clinical interpretation from value_as_concept_id  
-            if measurement.value_as_concept_id and measurement.value_as_concept_id in interpretation_concepts:
-                mutation_data['interpretation'] = interpretation_concepts[measurement.value_as_concept_id]
+            if measurement.value_as_concept and measurement.value_as_concept.concept_id in interpretation_concepts:
+                mutation_data['interpretation'] = interpretation_concepts[measurement.value_as_concept.concept_id]
             
             # Add assay method if available in qualifier_source_value
             if measurement.qualifier_source_value:
