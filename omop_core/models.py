@@ -686,143 +686,15 @@ class PatientInfo(models.Model):
         super().save(*args, **kwargs)
 
 
-class MeasurementExtension(models.Model):
-    """Extensions to standard OMOP Measurement for additional clinical data"""
-    measurement_extension_id = models.BigIntegerField(primary_key=True)
-    measurement = models.OneToOneField('Measurement', on_delete=models.CASCADE, db_column='measurement_id')
-    
-    # Laboratory result details
-    normal_range_low = models.DecimalField(max_digits=15, decimal_places=3, null=True, blank=True)
-    normal_range_high = models.DecimalField(max_digits=15, decimal_places=3, null=True, blank=True)
-    critical_low = models.DecimalField(max_digits=15, decimal_places=3, null=True, blank=True)
-    critical_high = models.DecimalField(max_digits=15, decimal_places=3, null=True, blank=True)
-    
-    # Clinical significance
-    is_abnormal = models.BooleanField(null=True, blank=True)
-    clinical_significance = models.CharField(max_length=30, choices=[
-        ('NORMAL', 'Normal'),
-        ('ABNORMAL_LOW', 'Abnormally Low'),
-        ('ABNORMAL_HIGH', 'Abnormally High'),
-        ('CRITICAL_LOW', 'Critically Low'),
-        ('CRITICAL_HIGH', 'Critically High'),
-        ('INDETERMINATE', 'Indeterminate')
-    ], null=True, blank=True)
-    
-    # Test methodology
-    assay_method = models.CharField(max_length=200, null=True, blank=True)
-    specimen_source = models.CharField(max_length=100, null=True, blank=True)
-    
-    # Quality indicators
-    test_quality = models.CharField(max_length=20, choices=[
-        ('VALID', 'Valid'),
-        ('QUESTIONABLE', 'Questionable'),
-        ('INVALID', 'Invalid'),
-        ('HEMOLYZED', 'Hemolyzed'),
-        ('CLOTTED', 'Clotted'),
-        ('INSUFFICIENT', 'Insufficient Sample')
-    ], null=True, blank=True)
-    
-    class Meta:
-        db_table = 'measurement_extension'
 
-    def __str__(self):
-        return f"Measurement Extension for Measurement {self.measurement_id}"
-
-
-class ObservationExtension(models.Model):
-    """Extensions to standard OMOP Observation for additional clinical data"""
-    observation_extension_id = models.BigIntegerField(primary_key=True)
-    observation = models.OneToOneField('Observation', on_delete=models.CASCADE, db_column='observation_id')
-    
-    # Performance status details
-    assessment_method = models.CharField(max_length=100, null=True, blank=True)
-    assessor_type = models.CharField(max_length=30, choices=[
-        ('PHYSICIAN', 'Physician'),
-        ('NURSE', 'Nurse'),
-        ('PATIENT', 'Patient Self-Assessment'),
-        ('CAREGIVER', 'Caregiver'),
-        ('OTHER', 'Other')
-    ], null=True, blank=True)
-    
-    # Symptom assessment
-    symptom_severity = models.CharField(max_length=20, choices=[
-        ('NONE', 'None'),
-        ('MILD', 'Mild'),
-        ('MODERATE', 'Moderate'),
-        ('SEVERE', 'Severe'),
-        ('LIFE_THREATENING', 'Life Threatening')
-    ], null=True, blank=True)
-    
-    # Clinical context
-    assessment_context = models.CharField(max_length=50, choices=[
-        ('ROUTINE', 'Routine Assessment'),
-        ('BASELINE', 'Baseline Assessment'),
-        ('PRE_TREATMENT', 'Pre-Treatment'),
-        ('POST_TREATMENT', 'Post-Treatment'),
-        ('FOLLOW_UP', 'Follow-up'),
-        ('ADVERSE_EVENT', 'Adverse Event Assessment')
-    ], null=True, blank=True)
-    
-    # Additional details
-    clinical_notes = models.TextField(null=True, blank=True)
-    
-    class Meta:
-        db_table = 'observation_extension'
-
-    def __str__(self):
-        return f"Observation Extension for Observation {self.observation_id}"
-
-
-class VitalSignMeasurement(models.Model):
-    """Specialized vital signs tracking"""
-    vital_sign_id = models.BigIntegerField(primary_key=True)
-    person = models.ForeignKey(Person, on_delete=models.CASCADE, db_column='person_id')
-    measurement_date = models.DateField()
-    measurement_datetime = models.DateTimeField(null=True, blank=True)
-    
-    # Vital sign type
-    vital_sign_type = models.CharField(max_length=30, choices=[
-        ('BLOOD_PRESSURE', 'Blood Pressure'),
-        ('HEART_RATE', 'Heart Rate'),
-        ('RESPIRATORY_RATE', 'Respiratory Rate'),
-        ('TEMPERATURE', 'Temperature'),
-        ('OXYGEN_SATURATION', 'Oxygen Saturation'),
-        ('WEIGHT', 'Weight'),
-        ('HEIGHT', 'Height'),
-        ('BMI', 'Body Mass Index'),
-        ('BSA', 'Body Surface Area'),
-        ('PAIN_SCORE', 'Pain Score')
-    ])
-    
-    # Values
-    systolic_bp = models.IntegerField(null=True, blank=True, help_text="Systolic blood pressure (mmHg)")
-    diastolic_bp = models.IntegerField(null=True, blank=True, help_text="Diastolic blood pressure (mmHg)")
-    heart_rate = models.IntegerField(null=True, blank=True, help_text="Heart rate (bpm)")
-    respiratory_rate = models.IntegerField(null=True, blank=True, help_text="Respiratory rate (breaths/min)")
-    temperature = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Temperature")
-    temperature_unit = models.CharField(max_length=10, choices=[('C', 'Celsius'), ('F', 'Fahrenheit')], null=True, blank=True)
-    oxygen_saturation = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="O2 saturation (%)")
-    weight = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True, help_text="Weight")
-    weight_unit = models.CharField(max_length=10, choices=[('kg', 'Kilograms'), ('lb', 'Pounds')], null=True, blank=True)
-    height = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True, help_text="Height")
-    height_unit = models.CharField(max_length=10, choices=[('cm', 'Centimeters'), ('in', 'Inches')], null=True, blank=True)
-    bmi = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Body Mass Index")
-    bsa = models.DecimalField(max_digits=5, decimal_places=3, null=True, blank=True, help_text="Body Surface Area (m²)")
-    pain_score = models.IntegerField(null=True, blank=True, help_text="Pain score (0-10)")
-    
-    # Measurement context
-    measurement_position = models.CharField(max_length=20, choices=[
-        ('SITTING', 'Sitting'),
-        ('STANDING', 'Standing'),
-        ('LYING', 'Lying Down'),
-        ('SUPINE', 'Supine'),
-        ('OTHER', 'Other')
-    ], null=True, blank=True)
-    
-    measurement_method = models.CharField(max_length=100, null=True, blank=True)
-    
-    class Meta:
-        db_table = 'vital_sign_measurement'
-
-    def __str__(self):
-        return f"Vital Sign {self.vital_sign_type} for Person {self.person_id}"
+# VitalSignMeasurement model removed - Use standard OMOP Measurement table
+# Vital signs should be stored in the Measurement table using standardized LOINC concepts:
+# - Systolic BP: LOINC 8480-6
+# - Diastolic BP: LOINC 8462-4  
+# - Heart Rate: LOINC 8867-4
+# - Weight: LOINC 29463-7
+# - Height: LOINC 8302-2
+# - BMI: LOINC 39156-5
+# - Temperature: LOINC 8310-5
+# - Oxygen Saturation: LOINC 2708-6
+# Blood pressure measurements are split into separate records as per OMOP CDM standards

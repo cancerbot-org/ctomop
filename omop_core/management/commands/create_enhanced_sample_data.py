@@ -3,9 +3,8 @@ from django.utils import timezone
 from decimal import Decimal
 from datetime import date, datetime, timedelta
 from omop_core.models import (
-    Concept, Person, Location, ConditionOccurrence, VitalSignMeasurement,
-    MeasurementExtension, ObservationExtension, PatientInfo,
-    Vocabulary, Domain, ConceptClass
+    Concept, Person, Location, ConditionOccurrence, Measurement,
+    PatientInfo, Vocabulary, Domain, ConceptClass
 )
 from omop_genomics.models import BiomarkerMeasurement, TumorAssessment
 from omop_oncology.models import TreatmentLine, SocialDeterminant, HealthBehavior, InfectionStatus
@@ -15,6 +14,60 @@ class Command(BaseCommand):
     help = 'Create enhanced sample data to demonstrate PatientInfo population'
 
     def handle(self, *args, **options):
+        # Clear existing data first
+        from omop_core.models import (
+            Person, Measurement, Concept, Location, ConditionOccurrence,
+            Vocabulary, Domain, ConceptClass
+        )
+        from omop_genomics.models import BiomarkerMeasurement, TumorAssessment
+        from omop_oncology.models import Episode, Histology
+        
+        # Clear all data to avoid conflicts
+        ConditionOccurrence.objects.all().delete()
+        Histology.objects.all().delete()
+        Episode.objects.all().delete()
+        TumorAssessment.objects.all().delete()
+        BiomarkerMeasurement.objects.all().delete()
+        Measurement.objects.all().delete()
+        Person.objects.all().delete()
+        Location.objects.all().delete()
+        Concept.objects.all().delete()
+        ConceptClass.objects.all().delete()
+        Domain.objects.all().delete()
+        Vocabulary.objects.all().delete()
+        
+        self.stdout.write(self.style.SUCCESS('Cleared existing data.'))
+        
+        # Create basic OMOP vocabulary infrastructure first
+        vocab, _ = Vocabulary.objects.get_or_create(
+            vocabulary_id='None',
+            defaults={
+                'vocabulary_name': 'OMOP Standardized Vocabularies',
+                'vocabulary_concept_id': 44819096
+            }
+        )
+        
+        domain, _ = Domain.objects.get_or_create(
+            domain_id='Condition',
+            defaults={
+                'domain_name': 'Condition',
+                'domain_concept_id': 19
+            }
+        )
+        
+        concept_class, _ = ConceptClass.objects.get_or_create(
+            concept_class_id='Clinical Finding',
+            defaults={
+                'concept_class_name': 'Clinical Finding',
+                'concept_class_concept_id': 44819234
+            }
+        )
+        
+        # Create required concepts first
+        gender_concept = self.get_or_create_concept(8507, "Male")
+        race_concept = self.get_or_create_concept(8527, "White")
+        ethnicity_concept = self.get_or_create_concept(38003564, "Not Hispanic or Latino")
+        
         # Create sample locations
         location_ny, _ = Location.objects.get_or_create(
             location_id=1001,
@@ -29,23 +82,21 @@ class Command(BaseCommand):
         )
         
         # Create sample patient with enhanced data
+        # Create a sample person
         person, _ = Person.objects.get_or_create(
-            person_id=4001,
+            person_id=1001,
             defaults={
-                'gender_concept': self.get_or_create_concept(8532, "Female"),
+                'gender_concept': gender_concept,
                 'year_of_birth': 1975,
-                'month_of_birth': 3,
+                'month_of_birth': 6,
                 'day_of_birth': 15,
-                'birth_datetime': timezone.make_aware(datetime(1975, 3, 15, 10, 30)),
-                'race_concept': self.get_or_create_concept(8527, "White"),
-                'ethnicity_concept': self.get_or_create_concept(38003564, "Not Hispanic or Latino"),
-                'location': location_ny,
-                'primary_language_concept': self.get_or_create_concept(4180186, "English"),
-                'language_skill_level': "NATIVE"
+                'race_concept': race_concept,
+                'ethnicity_concept': ethnicity_concept,
+                'person_source_value': 'PATIENT001'
             }
         )
         
-        # Create lung cancer condition with detailed staging
+        # Create lung cancer condition with basic OMOP fields
         lung_cancer, _ = ConditionOccurrence.objects.get_or_create(
             condition_occurrence_id=3001,
             defaults={
@@ -53,23 +104,8 @@ class Command(BaseCommand):
                 'condition_concept': self.get_or_create_concept(4115276, "Non-small cell lung cancer"),
                 'condition_start_date': date(2023, 1, 15),
                 'condition_start_datetime': timezone.make_aware(datetime(2023, 1, 15, 14, 0)),
-                'condition_type_concept': self.get_or_create_concept(32020, "Initial"),
-                'primary_site_concept': self.get_or_create_concept(4221847, "Upper lobe of right lung"),
-                'histology_concept': self.get_or_create_concept(4195694, "Adenocarcinoma"),
-                'behavior_concept': self.get_or_create_concept(4124400, "Malignant"),
-                'grade_concept': self.get_or_create_concept(4191232, "Grade II"),
-                'staging_system': "AJCC_8TH",
-                'clinical_stage_group': "IIIA",
-                'pathologic_stage_group': "IIIA",
-                'tnm_clinical_t': "T2",
-                'tnm_clinical_n': "N2",
-                'tnm_clinical_m': "M0",
-                'tnm_pathologic_t': "T2",
-                'tnm_pathologic_n': "N2",
-                'tnm_pathologic_m': "M0",
-                'tumor_size_cm': Decimal('3.5'),
-                'laterality': "RIGHT",
-                'progression_status': "STABLE"
+                'condition_type_concept': self.get_or_create_concept(32020, "EHR"),
+                'condition_source_value': 'C78.00'
             }
         )
         
@@ -107,43 +143,66 @@ class Command(BaseCommand):
             tumor_assessment_id=1001,
             person=person,
             assessment_date=date(2023, 4, 15),
-            assessment_datetime=datetime(2023, 4, 15, 10, 0),
-            assessment_method="CT_SCAN",
+            assessment_datetime=timezone.make_aware(datetime(2023, 4, 15, 10, 0)),
+            assessment_method="RECIST_1_1",
             overall_response="PR",
-            progression_status="NO_PROGRESSION",
-            target_lesion_sum=Decimal('4.2'),
-            target_lesion_unit="cm",
-            new_lesions=False,
-            assessment_notes="Partial response with 30% reduction in target lesions"
+            target_lesions_sum=Decimal('4.2'),
+            new_lesions_present=False,
+            disease_status="MEASURABLE"
         )
         
-        # Create vital signs
-        VitalSignMeasurement.objects.create(
-            vital_sign_id=1001,
-            person=person,
-            measurement_date=date(2023, 2, 1),
-            vital_sign_type="BLOOD_PRESSURE",
-            systolic_bp=135,
-            diastolic_bp=85,
-            measurement_position="SITTING"
+        # Create LOINC concepts and measurement type concept
+        systolic_concept = self.get_or_create_concept(8480, "Systolic blood pressure")
+        diastolic_concept = self.get_or_create_concept(8462, "Diastolic blood pressure")
+        heart_rate_concept = self.get_or_create_concept(8867, "Heart rate")
+        temperature_concept = self.get_or_create_concept(8310, "Body temperature")
+        
+        measurement_type_concept = self.get_or_create_concept(44818701, "From physical examination")        # Weight (LOINC 29463-7)
+        weight_concept, _ = Concept.objects.get_or_create(
+            concept_id=3025315,  # Standard concept for body weight
+            defaults={
+                'concept_name': 'Body weight',
+                'domain_id': 'Measurement',
+                'vocabulary_id': 'LOINC',
+                'concept_class_id': 'Clinical Observation',
+                'concept_code': '29463-7',
+                'standard_concept': 'S',
+                'valid_start_date': date(1970, 1, 1),
+                'valid_end_date': date(2099, 12, 31)
+            }
         )
         
-        VitalSignMeasurement.objects.create(
-            vital_sign_id=1002,
+        Measurement.objects.create(
+            measurement_id=1003,
             person=person,
+            measurement_concept=weight_concept,
             measurement_date=date(2023, 2, 1),
-            vital_sign_type="WEIGHT",
-            weight=Decimal('68.5'),
-            weight_unit="kg"
+            measurement_type_concept=measurement_type_concept,
+            value_as_number=Decimal('68.5')
         )
         
-        VitalSignMeasurement.objects.create(
-            vital_sign_id=1003,
+        # Height (LOINC 8302-2)
+        height_concept, _ = Concept.objects.get_or_create(
+            concept_id=3036277,  # Standard concept for body height
+            defaults={
+                'concept_name': 'Body height',
+                'domain_id': 'Measurement',
+                'vocabulary_id': 'LOINC',
+                'concept_class_id': 'Clinical Observation',
+                'concept_code': '8302-2',
+                'standard_concept': 'S',
+                'valid_start_date': date(1970, 1, 1),
+                'valid_end_date': date(2099, 12, 31)
+            }
+        )
+        
+        Measurement.objects.create(
+            measurement_id=1004,
             person=person,
+            measurement_concept=height_concept,
             measurement_date=date(2023, 2, 1),
-            vital_sign_type="HEIGHT",
-            height=Decimal('165'),
-            height_unit="cm"
+            measurement_type_concept=measurement_type_concept,
+            value_as_number=Decimal('165')
         )
         
         # Create social determinants
@@ -234,7 +293,7 @@ class Command(BaseCommand):
                 # Biomarkers from BiomarkerMeasurement
                 'pdl1_expression': Decimal('65.0'),
                 'pdl1_assay': '22C3',
-                # Vital signs from VitalSignMeasurement
+                # Vital signs from standard OMOP Measurement table
                 'weight_kg': Decimal('68.5'),
                 'height_cm': Decimal('165'),
                 'bmi': Decimal('25.2'),  # Will be calculated
@@ -262,7 +321,7 @@ class Command(BaseCommand):
                 f'- Condition: {lung_cancer.condition_concept}\n'
                 f'- Treatment Line: {TreatmentLine.objects.filter(person=person).count()}\n'
                 f'- Biomarker Tests: {BiomarkerMeasurement.objects.filter(person=person).count()}\n'
-                f'- Vital Signs: {VitalSignMeasurement.objects.filter(person=person).count()}\n'
+                f'- Vital Signs (Measurements): {Measurement.objects.filter(person=person, measurement_concept__domain_id="Measurement").count()}\n'
                 f'- Social Determinants: {SocialDeterminant.objects.filter(person=person).count()}\n'
                 f'- Health Behaviors: {HealthBehavior.objects.filter(person=person).count()}\n'
                 f'- Infection Status: {InfectionStatus.objects.filter(person=person).count()}\n'

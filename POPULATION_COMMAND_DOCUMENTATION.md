@@ -13,10 +13,9 @@ The project was extended with comprehensive tables to support all PatientInfo fi
 #### Core OMOP Enhancements (omop_core/models.py)
 - **Location**: Geographic location tracking with address, city, state, country
 - **Person**: Enhanced with language support and death tracking for age calculation
-- **ConditionOccurrence**: Extended with cancer staging (TNM, histology, grade, primary site)
-- **MeasurementExtension**: Laboratory result interpretation and quality indicators
+- **ConditionOccurrence**: Standard OMOP condition tracking with cancer diagnoses
+- **Measurement**: Laboratory and vital signs data using standard OMOP approach with LOINC concepts
 - **ObservationExtension**: Performance status assessment details
-- **VitalSignMeasurement**: Specialized vital signs tracking (BP, weight, height, BMI)
 
 #### Genomics Extensions (omop_genomics/models.py)
 - **BiomarkerMeasurement**: Hormone receptors, HER2, PD-L1 testing
@@ -48,7 +47,7 @@ The command includes specialized functions to extract data from each model:
 2. **get_location_data()**: Geographic information from Location model
 3. **get_disease_data()**: Cancer diagnosis, staging, histology from ConditionOccurrence
 4. **get_treatment_data()**: Treatment lines, regimens, responses from TreatmentLine
-5. **get_vitals_data()**: Blood pressure, weight, height from VitalSignMeasurement
+5. **get_vitals_data()**: Blood pressure, weight, height from standard OMOP Measurement table
 6. **get_biomarker_data()**: PD-L1, hormone receptors from BiomarkerMeasurement
 7. **get_social_data()**: Employment, insurance from SocialDeterminant
 8. **get_behavior_data()**: Smoking status from HealthBehavior

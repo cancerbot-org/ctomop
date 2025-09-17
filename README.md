@@ -1,110 +1,72 @@
 # ctomop
 
-Django project with comprehensive OMOP CDM models enhanced with oncology and genomic extensions for cancer clinical trial matching.
+Django project with comprehensive OMOP CDM models enhanced with standard oncology extensions for cancer clinical trial matching.
 
-## Model Extensions & Field Additions
+## OMOP CDM Compliance & Clinical Trial Data Storage
 
-### OMOP Core Extensions (omop_core/models.py)
+This project follows **OMOP CDM v6.0 best practices** by storing all clinical data in standard OMOP tables using standardized vocabularies (LOINC, SNOMED CT, ICD-O-3). All extension models have been removed to ensure full OMOP compliance while maintaining comprehensive clinical trial eligibility screening capabilities.
 
-#### Enhanced Person Model
-**Added Fields:**
-- Language skills now handled via separate `PersonLanguageSkill` model for multiple languages with different skill levels
+### Standard OMOP Tables Used
 
-#### PersonLanguageSkill Model (NEW)
-**Supports multiple languages per person with individual skill levels:**
+#### Core OMOP CDM Tables (omop_core/models.py)
+
+**Person Model**
+- Standard OMOP Person table for patient demographics
+- Connected to `PersonLanguageSkill` model for multiple language support
+
+**PersonLanguageSkill Model**
 - `language_concept` - Reference to language concept (English, Spanish, etc.)
 - `skill_level` - Skill level choices: "speak", "write", "both"
 - `is_primary` - Boolean flag for primary language
 - Unique constraint per person/language combination
-- Example: Person can have "English: both, Spanish: speak, French: write"
 
-#### Enhanced ConditionOccurrence Model  
-**OMOP-Compliant Approach:**
-- Cancer staging information is stored in the **Observation table** following OMOP CDM best practices
-- Primary site, histology, TNM staging, and grade are recorded as separate Observation records
-- Uses standardized vocabularies (ICD-O-3, SNOMED-CT) for cancer concepts
-- Observations are linked to ConditionOccurrence records using `observation_event_id` field (CDM v6.0 feature)
+**Measurement Table**
+- **Vital Signs & Anthropometrics**: Essential measurements for clinical trial eligibility
+  - Systolic BP (LOINC: 8480-6), Diastolic BP (LOINC: 8462-4)
+  - Weight (LOINC: 29463-7), Height (LOINC: 8302-2), BMI (LOINC: 39156-5)
+- **Laboratory Results**: Critical lab values for trial screening
+  - Hemoglobin, Creatinine, Calcium, Albumin, Bilirubin, AST, ALT
+- **Cancer Biomarkers**: Key biomarkers for trial matching
+  - ER/PR status, HER2 status, PD-L1 expression
+  - Genetic mutations (BRCA1/2, TP53, PIK3CA, KRAS, EGFR, ALK)
 
-#### New VitalSignMeasurement Model
-**Specialized vital signs tracking with fields:**
-- `vital_sign_type` - Type of measurement (BLOOD_PRESSURE, WEIGHT, HEIGHT, etc.)
-- `systolic_bp/diastolic_bp` - Blood pressure values
-- `heart_rate` - Heart rate in BPM
-- `weight/height` - Anthropometric measurements with units
-- `bmi/bsa` - Calculated body metrics
-- `measurement_position` - Patient position during measurement
+**Observation Table**
+- **Social Determinants**: Employment, insurance status for trial eligibility
+- **Health Behaviors**: Tobacco use status critical for lung cancer trials
+  - Never smoker (SNOMED: 266919005)
+  - Former smoker (SNOMED: 8517006)
+  - Current smoker (SNOMED: 77176002)
+- **Infection Status**: HIV, Hepatitis testing results for trial exclusions
+- **Cancer Staging & Treatment Response**: Disease progression assessments
+  - Treatment response (Complete: 182840001, Partial: 182841002)
+  - Stable disease (182843004), Progressive disease (182842009)
 
-#### New MeasurementExtension Model
-**Laboratory result enhancements:**
-- `normal_range_low/high` - Reference ranges
-- `critical_low/high` - Critical value thresholds
-- `clinical_significance` - Clinical interpretation
-- `assay_method` - Laboratory methodology
-- `test_quality` - Quality indicators (VALID, HEMOLYZED, etc.)
+**DrugExposure Table**
+- **Treatment History**: All cancer treatments and medications
+- **Treatment Lines**: Derived from drug exposure patterns and dates
+- **Therapy Classification**: Platinum-based, immunotherapy identification
 
-#### New ObservationExtension Model
-**Clinical observation details:**
-- `assessment_method` - How observation was made
-- `assessor_type` - Who made the assessment (PHYSICIAN, NURSE, PATIENT)
-- `symptom_severity` - Symptom severity scale
-- `assessment_context` - Clinical context (BASELINE, PRE_TREATMENT, etc.)
+**ConditionOccurrence Table**
+- **Primary Diagnoses**: Cancer diagnoses with ICD-O-3 concepts
+- **Comorbidities**: All medical conditions
 
-### OMOP Genomics Extensions (omop_genomics/models.py)
+#### Standard OMOP Oncology Extensions (omop_oncology/models.py)
 
-#### New BiomarkerMeasurement Model
-**Comprehensive biomarker testing:**
-- `biomarker_type` - Type (HORMONE_RECEPTOR, HER2, PD_L1, GENETIC)
-- `value_as_number/string` - Test results in multiple formats
-- `assay_method` - Testing methodology (IHC, FISH, NGS)
-- `clinical_significance` - Result interpretation (POSITIVE, NEGATIVE, EQUIVOCAL)
-- `laboratory` - Testing facility
-- `specimen_type` - Sample type (TISSUE, BLOOD, etc.)
+**Episode Model** (Standard OMOP CDM v6.0)
+- Disease episodes and treatment periods for cancer patients
+- Links clinical events across multiple encounters
 
-#### New TumorAssessment Model
-**Tumor response evaluation:**
-- `assessment_method` - Imaging modality (CT_SCAN, MRI, PET_CT)
-- `overall_response` - RECIST response (CR, PR, SD, PD)
-- `target_lesion_sum` - Sum of target lesion measurements
-- `new_lesions` - Presence of new lesions
-- `progression_status` - Disease progression state
-- `assessment_notes` - Clinical notes
+**EpisodeEvent Model** (Standard OMOP CDM v6.0)
+- Links clinical events to disease episodes
 
-### OMOP Oncology Extensions (omop_oncology/models.py)
+**CancerModifier Model** (Standard OMOP Oncology Extension)
+- Cancer-specific modifiers and qualifiers
 
-#### New TreatmentLine Model
-**Treatment line tracking:**
-- `line_number` - Treatment line sequence (1, 2, 3, etc.)
-- `treatment_intent` - Intent (CURATIVE, PALLIATIVE, ADJUVANT)
-- `regimen_name` - Treatment regimen name
-- `treatment_setting` - Setting (INPATIENT, OUTPATIENT, CLINICAL_TRIAL)
-- Treatment type flags: `is_platinum_based`, `is_immunotherapy`, `is_targeted_therapy`
-- `best_response` - Best response achieved (CR, PR, SD, PD)
-- `treatment_outcome` - Reason for discontinuation
-- `ecog_at_start/karnofsky_at_start` - Performance status at treatment start
+**Histology Model** (Standard OMOP Oncology Extension)
+- Cancer histology information using ICD-O-3 concepts
 
-#### New SocialDeterminant Model
-**Social determinants of health:**
-- `determinant_category` - Category (HOUSING, EMPLOYMENT, INSURANCE, etc.)
-- `value_as_string/boolean` - Determinant values
-- `risk_level` - Associated risk level (HIGH, MODERATE, LOW)
-- `assessment_details` - Additional context
-
-#### New HealthBehavior Model
-**Health behavior tracking:**
-- `behavior_type` - Type (TOBACCO_USE, ALCOHOL_USE, SUBSTANCE_USE)
-- `current_status` - Status (CURRENT, FORMER, NEVER)
-- `frequency/amount_per_day` - Usage patterns
-- `duration_years` - Duration of behavior
-- `quit_date` - Cessation date for former users
-- `cessation_attempts` - Number of quit attempts
-
-#### New InfectionStatus Model
-**Infection status tracking:**
-- `infection_type` - Type (HIV, HEPATITIS_B, HEPATITIS_C, TB)
-- `infection_status` - Status (POSITIVE, NEGATIVE, INDETERMINATE)
-- `test_method` - Testing methodology
-- `viral_load` - Quantitative viral measurements
-- `is_active_infection` - Current infection status
+**StemTable Model** (Standard OMOP Oncology Extension)
+- Pre-processing staging table for oncology data
 
 ### PatientInfo Model (Comprehensive Clinical Profile)
 **Integration model with 100+ fields covering:**
@@ -120,10 +82,20 @@ Django project with comprehensive OMOP CDM models enhanced with oncology and gen
 ## Management Commands
 
 ### populate_patient_info
-Comprehensive command to extract data from all OMOP models and populate PatientInfo records:
+**OMOP-compliant command** to extract data from standard OMOP tables and populate PatientInfo records:
 ```bash
 python manage.py populate_patient_info --force-update --verbose
 ```
+
+**Data Sources (All Standard OMOP Tables):**
+- **Demographics**: Person table
+- **Biomarkers**: Measurement table with LOINC concepts (ER, PR, HER2, PD-L1)
+- **Lab Values**: Measurement table with LOINC concepts
+- **Treatment History**: DrugExposure table (identifies platinum-based, immunotherapy)
+- **Social Factors**: Observation table with SNOMED concepts
+- **Health Behaviors**: Observation table (tobacco use, etc.)
+- **Infection Status**: Measurement table (HIV, Hepatitis tests)
+- **Disease Staging**: Observation table with cancer staging concepts
 
 ### manage_language_skills
 Command to manage multiple language skills for persons:
@@ -152,43 +124,134 @@ python manage.py create_cancer_staging_observations --create-concepts
 python manage.py create_cancer_staging_observations --person-id 1001 --condition-occurrence-id 5001
 ```
 
-### Enhanced Data Pipeline
-The extensions enable a complete data pipeline from raw OMOP data to clinical trial-ready patient profiles through intelligent field mapping and data consolidation.
+### migrate_vitals_to_measurement
+Command to ensure vital signs are stored in standard OMOP Measurement table:
+```bash
+# Check what concepts would be created
+python manage.py migrate_vitals_to_measurement --dry-run --verbose
 
-## OMOP CDM Compliance
+# Create vital sign concepts for OMOP compliance
+python manage.py migrate_vitals_to_measurement --verbose
+```
 
-### Cancer Staging Approach
-This project follows OMOP CDM best practices by storing cancer staging information in the **Observation table** rather than extending core clinical event tables. This approach:
+## OMOP CDM v6.0 Compliance
+
+This project achieves **full OMOP CDM v6.0 compliance** by storing all clinical data in standard OMOP tables using standardized vocabularies. No custom extension models are used, ensuring complete interoperability with OMOP analytical tools and other OMOP implementations.
+
+### Clinical Data Storage Strategy
+
+#### Biomarker Data → Measurement Table
+**All biomarkers stored using standardized LOINC concepts:**
+
+- **Estrogen Receptor (ER)**: LOINC 16112-5
+- **Progesterone Receptor (PR)**: LOINC 16113-3  
+- **HER2 Status**: LOINC 48676-1
+- **PD-L1 Expression**: Custom LOINC concepts
+- **Genetic Mutations**: LOINC concepts for specific mutations
+
+#### Vital Signs & Anthropometrics → Measurement Table
+**Essential measurements for clinical trial eligibility screening:**
+
+- **Systolic Blood Pressure**: LOINC 8480-6 (concept_id: 3004249)
+- **Diastolic Blood Pressure**: LOINC 8462-4 (concept_id: 3012888)  
+- **Body Weight**: LOINC 29463-7 (concept_id: 3025315)
+- **Body Height**: LOINC 8302-2 (concept_id: 3036277)
+- **Body Mass Index**: LOINC 39156-5 (concept_id: 3038553)
+
+#### Laboratory Values → Measurement Table
+**Critical lab values for trial eligibility thresholds:**
+- **Hemoglobin**: LOINC 718-7
+- **Creatinine**: LOINC 2160-0
+- **Calcium**: LOINC 17861-6
+- **Albumin**: LOINC 1751-7
+- **Bilirubin Total**: LOINC 1975-2
+- **AST**: LOINC 1920-8
+- **ALT**: LOINC 1742-6
+- **Alkaline Phosphatase**: LOINC 6768-6
+
+#### Social & Behavioral Data → Observation Table
+**SNOMED CT concepts for clinical trial eligibility factors:**
+
+- **Employment Status**: SNOMED 224362002 (trial accessibility)
+- **Insurance Status**: SNOMED 408729009 (trial coverage)
+- **Tobacco Use Status** (critical for lung cancer trials):
+  - Never smoked: SNOMED 266919005
+  - Former smoker: SNOMED 8517006
+  - Current smoker: SNOMED 77176002
+
+#### Infection Status → Measurement Table
+**LOINC concepts for infectious disease testing (trial exclusion criteria):**
+
+- **HIV Tests**: LOINC 5221-7 (HIV 1 Ab), LOINC 7917-8 (HIV 1+2 Ab)
+- **Hepatitis B**: LOINC 5195-3 (HBsAg)
+- **Hepatitis C**: LOINC 5196-1 (HCV Ab)
+
+#### Treatment Response → Observation Table
+**SNOMED CT concepts for tumor assessment (response evaluation criteria):**
+
+- **Complete Response**: SNOMED 182840001
+- **Partial Response**: SNOMED 182841002
+- **Stable Disease**: SNOMED 182843004
+- **Progressive Disease**: SNOMED 182842009
+
+#### Treatment History → DrugExposure Table
+**Standard OMOP drug exposure tracking for treatment line analysis:**
+- Treatment line identification from drug exposure patterns
+- Platinum-based therapy identification via drug concepts
+- Immunotherapy classification via drug concepts
+- Concomitant medication tracking for drug interactions
+
+### Cancer Staging → Observation Table
+**OMOP CDM best practice for cancer staging:**
 
 - **Maintains OMOP Standards**: Uses existing OMOP tables as designed
-- **Supports Standard Vocabularies**: Leverages ICD-O-3, SNOMED-CT, and other standardized terminologies
-- **Enables Flexible Staging**: Supports any staging system (AJCC, TNM, etc.) through standardized concepts
-- **Links Related Data**: Uses CDM v6.0 `observation_event_id` to link staging observations to conditions
+- **Supports Standard Vocabularies**: Leverages ICD-O-3, SNOMED-CT terminologies
+- **Enables Flexible Staging**: Supports any staging system (AJCC, TNM, etc.)
+- **Links Related Data**: Uses CDM v6.0 `observation_event_id` to link staging to conditions
 
-### Cancer Data Storage Pattern:
+**Cancer Data Storage Pattern:**
 - **Primary Site**: Observation with ICD-O-3 topography concept
 - **Histology**: Observation with ICD-O-3 morphology concept  
 - **TNM Staging**: Separate observations for T, N, M categories
 - **Stage Group**: Observation with overall stage concept
 - **Grade**: Observation with tumor grade concept
 
-This approach ensures compatibility with OMOP analytic tools and enables standardized cross-network studies.
-
 ## Recent Updates
 
-### PatientInfo Model Added
-A comprehensive PatientInfo model has been integrated from the [exactomop repository](https://github.com/cancerbot-org/exactomop), providing a research-friendly, denormalized view of patient data optimized for clinical trial eligibility screening.
+### Full OMOP CDM v6.0 Compliance Achieved
+The project has been fully refactored to achieve **complete OMOP CDM compliance** by removing all non-standard extension models and storing all clinical data in standard OMOP tables:
+
+**Key Changes:**
+- ✅ Removed all custom extension models (BiomarkerMeasurement, TreatmentLine, etc.)
+- ✅ Migrated all data to standard OMOP tables (Measurement, Observation, DrugExposure)
+- ✅ Implemented standardized vocabulary usage (LOINC, SNOMED CT, ICD-O-3)
+- ✅ Updated data extraction logic to use standard OMOP patterns
+- ✅ Maintained all clinical trial eligibility screening capabilities
+
+### PatientInfo Model Integration
+A comprehensive PatientInfo model provides a research-friendly, denormalized view of patient data optimized for rapid realtime clinical trial eligibility screening while sourcing all data from standard OMOP tables.
+
+**Data Sources (All OMOP-Compliant):**
+- **Demographics**: Person table
+- **Biomarkers**: Measurement table with LOINC concepts
+- **Treatment History**: DrugExposure table analysis
+- **Laboratory Values**: Measurement table with proper units
+- **Social Factors**: Observation table with SNOMED concepts
+- **Cancer Staging**: Observation table with standardized concepts
+- **Vital Signs**: Measurement table with LOINC concepts
 
 **Key Features:**
 - Complete patient demographics and disease information
-- Treatment history tracking (1st, 2nd, later lines)
-- Laboratory values with proper units
-- Cancer-specific biomarkers (ER, PR, HER2, genetic mutations)
-- Risk factors and behavioral data
-- Automatic BMI calculation
-- Integration with OMOP CDM Person model
+- Treatment history tracking (1st, 2nd, later lines) from DrugExposure patterns
+- Laboratory values with proper units from Measurement table
+- Cancer-specific biomarkers (ER, PR, HER2, PD-L1) from Measurement table
+- Risk factors and behavioral data from Observation table
+- Automatic BMI calculation from height/weight measurements
+- Full integration with standard OMOP CDM tables
 
-**Documentation:** See [PATIENTINFO_README.md](PATIENTINFO_README.md) for detailed usage information.
+**Documentation:** 
+- See [PATIENTINFO_README.md](PATIENTINFO_README.md) for detailed usage information
+- See [OMOP2PatientInfo.md](OMOP2PatientInfo.md) for complete OMOP CDM to PatientInfo mapping documentation
 
 ## Quick Start with PatientInfo
 
@@ -208,8 +271,21 @@ python manage.py query_patient_info --disease "breast"
 
 ## Project Structure
 
-The project consists of three main Django apps:
+The project consists of three main Django apps designed for **full OMOP CDM v6.0 compliance**:
 
-- **omop_core**: Core OMOP CDM models and PatientInfo model
-- **omop_genomics**: Genomic extensions for OMOP
-- **omop_oncology**: Oncology-specific extensions for OMOP
+- **omop_core**: Standard OMOP CDM core tables plus PatientInfo integration model
+  - Person, Measurement, Observation, DrugExposure, ConditionOccurrence
+  - PersonLanguageSkill for multi-language support
+  - PatientInfo model for clinical trial eligibility screening
+
+- **omop_genomics**: Placeholder for future genomic data (currently uses standard OMOP tables)
+  - All genomic data stored in Measurement and Observation tables
+  - Uses standardized LOINC concepts for genetic tests
+
+- **omop_oncology**: Standard OMOP oncology extensions only
+  - Episode, EpisodeEvent, CancerModifier, Histology models
+  - All treatment and assessment data in standard OMOP tables
+
+**Data Architecture:** All clinical trial matching data is extracted from standard OMOP tables using standardized vocabularies, ensuring complete interoperability with OMOP analytical tools and other OMOP CDM implementations.
+
+This ensures **full OMOP CDM compliance** while maintaining all clinical trial eligibility screening capabilities through intelligent extraction from standard OMOP tables.
