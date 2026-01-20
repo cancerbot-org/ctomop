@@ -60,7 +60,7 @@ ROOT_URLCONF = 'ctomop.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'frontend' / 'dist'],
+        'DIRS': [BASE_DIR / 'frontend' / 'build'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -118,9 +118,12 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-STATICFILES_DIRS = [
-    BASE_DIR / 'frontend' / 'dist' / 'assets',
-]
+# Only include frontend static files if they exist
+frontend_static = BASE_DIR / 'frontend' / 'build' / 'static'
+if frontend_static.exists():
+    STATICFILES_DIRS = [frontend_static]
+else:
+    STATICFILES_DIRS = []
 
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
@@ -162,4 +165,15 @@ if not DEBUG:
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = 'DENY'
-    CSRF_TRUSTED_ORIGINS = [os.environ.get('PRODUCTION_URL', '')]
+    
+    # Add Railway domain to trusted origins
+    production_url = os.environ.get('PRODUCTION_URL', '')
+    railway_domain = os.environ.get('RAILWAY_PUBLIC_DOMAIN', '')
+    
+    csrf_origins = []
+    if production_url:
+        csrf_origins.append(production_url)
+    if railway_domain:
+        csrf_origins.append(f'https://{railway_domain}')
+    
+    CSRF_TRUSTED_ORIGINS = csrf_origins
