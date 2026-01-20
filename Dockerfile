@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy frontend package files and install Node dependencies
 COPY frontend/package*.json ./frontend/
 WORKDIR /app/frontend
-RUN npm ci
+RUN npm install --legacy-peer-deps
 WORKDIR /app
 
 # Copy the rest of the application
