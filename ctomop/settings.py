@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
+    'omop_core',  # Add the OMOP core models
     'patient_portal.api',
 ]
 
