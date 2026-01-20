@@ -62,4 +62,7 @@ Thumbs.db
 
 # Migrations (optional - uncomment if you want to exclude)
 # */migrations/*.py
-# !*/migrations/__init__.py
+# !*/migrations/__init__.pydb.sqlite3
+db.sqlite3.backup
+*.sqlite3
+*.db
