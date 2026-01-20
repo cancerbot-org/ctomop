@@ -8,7 +8,7 @@ cmds = [
     'npm --version',
     'pip install --upgrade pip',
     'pip install -r requirements.txt',
-    'cd frontend && npm ci && cd ..'
+    'cd frontend && npm install --legacy-peer-deps && cd ..'
 ]
 
 [phases.build]
