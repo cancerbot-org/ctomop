@@ -29,8 +29,11 @@ WORKDIR /app/frontend
 RUN npm install --legacy-peer-deps
 WORKDIR /app
 
-# Copy the rest of the application
+# Copy ALL application files
 COPY . .
+
+# Verify ctomop_app directory exists
+RUN ls -la /app/ctomop_app/
 
 # Build frontend
 RUN cd frontend && npm run build && cd ..
@@ -43,7 +46,7 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD curl -f http://localhost:$PORT/api/health/ || exit 1
+  CMD curl -f http://localhost:${PORT:-8000}/api/health/ || exit 1
 
 # Run migrations and start gunicorn
 CMD python manage.py migrate && \
