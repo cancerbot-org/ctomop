@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ['...', 'python311', 'nodejs-18_x']
+
+[phases.install]
+cmds = [
+    'pip install -r requirements.txt',
+    'cd frontend && npm install && npm run build && cd ..'
+]
+
+[phases.build]
+cmds = ['python manage.py collectstatic --noinput']
+
+[start]
+cmd = 'python manage.py migrate && gunicorn ctomop.wsgi:application --bind 0.0.0.0:$PORT'
