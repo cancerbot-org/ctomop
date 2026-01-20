@@ -1,14 +1,21 @@
 [phases.setup]
-nixPkgs = ['...', 'python311', 'nodejs-18_x']
+nixPkgs = ['python311', 'nodejs-18_x', 'postgresql', 'gcc', 'libpq']
 
 [phases.install]
 cmds = [
+    'python --version',
+    'node --version',
+    'npm --version',
+    'pip install --upgrade pip',
     'pip install -r requirements.txt',
-    'cd frontend && npm install && npm run build && cd ..'
+    'cd frontend && npm ci && cd ..'
 ]
 
 [phases.build]
-cmds = ['python manage.py collectstatic --noinput']
+cmds = [
+    'cd frontend && npm run build && cd ..',
+    'python manage.py collectstatic --noinput --clear'
+]
 
 [start]
-cmd = 'python manage.py migrate && gunicorn ctomop.wsgi:application --bind 0.0.0.0:$PORT'
+cmd = 'python manage.py migrate && gunicorn ctomop.wsgi:application --bind 0.0.0.0:$PORT --workers 4 --timeout 120'
