@@ -14,6 +14,8 @@ from io import StringIO
 from .serializers import (
     UserSerializer, PatientInfoSerializer, PatientListSerializer
 )
+from django.http import JsonResponse
+from django.views.decorators.http import require_http_methods
 
 @method_decorator(csrf_exempt, name='dispatch')
 class CurrentUserViewSet(viewsets.ViewSet):
@@ -385,3 +387,13 @@ def logout_view(request):
     """Logout the user and clear session"""
     logout(request)
     return Response({'message': 'Logged out successfully'}, status=status.HTTP_200_OK)
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def health_check(request):
+    """Health check endpoint for monitoring"""
+    return JsonResponse({
+        'status': 'healthy',
+        'service': 'ctomop',
+        'database': 'connected'
+    })

@@ -39,7 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
-    'ctomop_app',
+    'patient_portal.api',  # This is the correct app name
 ]
 
 MIDDLEWARE = [
