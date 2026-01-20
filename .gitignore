@@ -66,3 +66,9 @@ Thumbs.db
 db.sqlite3.backup
 *.sqlite3
 *.db
+
+# Database files
+db.sqlite3
+db.sqlite3.backup
+*.sqlite3
+*.db
