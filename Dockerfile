@@ -32,8 +32,8 @@ WORKDIR /app
 # Copy ALL application files
 COPY . .
 
-# Verify ctomop_app directory exists
-RUN ls -la /app/ctomop_app/
+# Verify patient_portal directory exists
+RUN ls -la /app/patient_portal/
 
 # Build frontend
 RUN cd frontend && npm run build && cd ..
