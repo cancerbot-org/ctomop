@@ -1,6 +1,5 @@
 from django.db import models
 
-
 class Vocabulary(models.Model):
     """OMOP CDM Vocabulary table - standardized vocabularies."""
     vocabulary_id = models.CharField(max_length=20, primary_key=True)
@@ -84,32 +83,36 @@ class Location(models.Model):
 
 
 class Person(models.Model):
-    """OMOP CDM Person table - demographic information about individuals."""
-    person_id = models.BigIntegerField(primary_key=True)
-    gender_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='person_gender', db_column='gender_concept_id')
+    person_id = models.IntegerField(primary_key=True)
+    gender_concept = models.ForeignKey(
+        Concept, 
+        on_delete=models.PROTECT, 
+        related_name='person_gender', 
+        null=True, 
+        blank=True,
+        db_column='gender_concept_id'
+    )
     year_of_birth = models.IntegerField()
-    month_of_birth = models.IntegerField(null=True, blank=True)
-    day_of_birth = models.IntegerField(null=True, blank=True)
-    birth_datetime = models.DateTimeField(null=True, blank=True)
-    race_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='person_race', db_column='race_concept_id')
-    ethnicity_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='person_ethnicity', db_column='ethnicity_concept_id')
-    location = models.ForeignKey(Location, on_delete=models.SET_NULL, null=True, blank=True, db_column='location_id')
-    provider_id = models.IntegerField(null=True, blank=True)
-    care_site_id = models.IntegerField(null=True, blank=True)
+    race_concept = models.ForeignKey(
+        Concept, 
+        on_delete=models.PROTECT, 
+        related_name='person_race', 
+        null=True, 
+        blank=True,
+        db_column='race_concept_id'
+    )
+    ethnicity_concept = models.ForeignKey(
+        Concept, 
+        on_delete=models.PROTECT, 
+        related_name='person_ethnicity', 
+        null=True, 
+        blank=True,
+        db_column='ethnicity_concept_id'
+    )
     
-    # Language support for PatientInfo - moved to PersonLanguageSkill model
-    
-    person_source_value = models.CharField(max_length=50, null=True, blank=True)
-    gender_source_value = models.CharField(max_length=50, null=True, blank=True)
-    gender_source_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='person_gender_source', db_column='gender_source_concept_id', null=True, blank=True)
-    race_source_value = models.CharField(max_length=50, null=True, blank=True)
-    race_source_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='person_race_source', db_column='race_source_concept_id', null=True, blank=True)
-    ethnicity_source_value = models.CharField(max_length=50, null=True, blank=True)
-    ethnicity_source_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='person_ethnicity_source', db_column='ethnicity_source_concept_id', null=True, blank=True)
-
     class Meta:
         db_table = 'person'
-
+    
     def __str__(self):
         return f"Person {self.person_id}"
     
@@ -373,8 +376,14 @@ class PatientInfo(models.Model):
     # Link to OMOP Person
     person = models.OneToOneField(Person, on_delete=models.CASCADE, related_name='patient_info')
     
-    # Language information - now handled via PersonLanguageSkill model
-
+    # General Information
+    phone_number = models.CharField(max_length=20, null=True, blank=True)
+    email = models.EmailField(max_length=255, null=True, blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    
+    # Disease Information
+    disease = models.CharField(max_length=100, null=True, blank=True)
+    
     # Demographics
     patient_age = models.IntegerField(help_text="What is the patient's age?", blank=True, null=True)
     gender = models.CharField(
@@ -638,6 +647,10 @@ class PatientInfo(models.Model):
     pd_l1_combined_positive_score = models.IntegerField(blank=True, null=True)
     ki67_proliferation_index = models.IntegerField(blank=True, null=True)
 
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
     class Meta:
         db_table = "patient_info"
         indexes = [
@@ -687,17 +700,3 @@ class PatientInfo(models.Model):
             self.bmi = round(weight_kg / (height_m ** 2), 2)
         
         super().save(*args, **kwargs)
-
-
-
-# VitalSignMeasurement model removed - Use standard OMOP Measurement table
-# Vital signs should be stored in the Measurement table using standardized LOINC concepts:
-# - Systolic BP: LOINC 8480-6
-# - Diastolic BP: LOINC 8462-4  
-# - Heart Rate: LOINC 8867-4
-# - Weight: LOINC 29463-7
-# - Height: LOINC 8302-2
-# - BMI: LOINC 39156-5
-# - Temperature: LOINC 8310-5
-# - Oxygen Saturation: LOINC 2708-6
-# Blood pressure measurements are split into separate records as per OMOP CDM standards

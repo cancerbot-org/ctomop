@@ -1,0 +1,113 @@
+{% extends 'patient_portal/base.html' %}
+
+{% block title %}Dashboard - Patient Portal{% endblock %}
+
+{% block content %}
+<h1 style="color: #2c3e50; margin-bottom: 2rem;">Welcome, {{ user.first_name|default:user.username }}! 👋</h1>
+
+<div style="margin-bottom: 2rem;">
+    <div class="stat-card">
+        <h3>{{ recent_measurements|length }}</h3>
+        <p>Recent Tests</p>
+    </div>
+    <div class="stat-card" style="background: #e74c3c;">
+        <h3>{{ conditions|length }}</h3>
+        <p>Conditions</p>
+    </div>
+    <div class="stat-card" style="background: #f39c12;">
+        <h3>{{ unread_messages }}</h3>
+        <p>Unread Messages</p>
+    </div>
+</div>
+
+<div class="card">
+    <h2>📋 Health Summary</h2>
+    {% if patient_info %}
+    <table style="margin-top: 1rem;">
+        <tr>
+            <td style="font-weight: 600; width: 30%;">Age</td>
+            <td>{{ patient_info.patient_age|default:"Not recorded" }}</td>
+        </tr>
+        <tr>
+            <td style="font-weight: 600;">Disease</td>
+            <td>{{ patient_info.disease|default:"Not recorded" }}</td>
+        </tr>
+        <tr>
+            <td style="font-weight: 600;">Stage</td>
+            <td>{{ patient_info.stage|default:"Not recorded" }}</td>
+        </tr>
+        <tr>
+            <td style="font-weight: 600;">ECOG Status</td>
+            <td>{{ patient_info.ecog_performance_status|default:"Not recorded" }}</td>
+        </tr>
+    </table>
+    {% else %}
+    <p style="color: #7f8c8d;">No patient information available.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>🔬 Recent Measurements</h2>
+    {% if recent_measurements %}
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Test</th>
+                <th>Value</th>
+                <th>Unit</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for measurement in recent_measurements %}
+            <tr>
+                <td>{{ measurement.measurement_date|date:"Y-m-d" }}</td>
+                <td>{{ measurement.measurement_concept.concept_name }}</td>
+                <td>{{ measurement.value_as_number|floatformat:2 }}</td>
+                <td>{{ measurement.unit_concept.concept_name|default:"" }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <div style="margin-top: 1rem;">
+        <a href="{% url 'patient_portal:health_records' %}" class="btn">View All Records →</a>
+    </div>
+    {% else %}
+    <p style="color: #7f8c8d;">No measurements recorded.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>🩺 Active Conditions</h2>
+    {% if conditions %}
+    <table>
+        <thead>
+            <tr>
+                <th>Condition</th>
+                <th>Start Date</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for condition in conditions %}
+            <tr>
+                <td>{{ condition.condition_concept.concept_name }}</td>
+                <td>{{ condition.condition_start_date|date:"Y-m-d" }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: #7f8c8d;">No conditions recorded.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>⚡ Quick Actions</h2>
+    <a href="{% url 'patient_portal:messages' %}" class="btn">
+        📧 View Messages {% if unread_messages %}({{ unread_messages }} unread){% endif %}
+    </a>
+    <a href="{% url 'patient_portal:consents' %}" class="btn btn-secondary">
+        📝 Manage Consents
+    </a>
+</div>
+{% endblock %}

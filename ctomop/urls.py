@@ -15,8 +15,16 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, include
+from django.http import HttpResponseRedirect
+
+def redirect_to_react(request):
+    """Redirect root URL to React app"""
+    return HttpResponseRedirect('http://localhost:3000')
 
 urlpatterns = [
+    path('', redirect_to_react, name='index'),
     path('admin/', admin.site.urls),
+    path('api/', include('patient_portal.api.urls')),
+    path('auth/', include('social_django.urls', namespace='social')),  # ADD THIS
 ]

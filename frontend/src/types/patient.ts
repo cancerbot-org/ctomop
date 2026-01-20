@@ -1,0 +1,134 @@
+export interface User {
+  id: number;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+}
+
+export interface PatientInfo {
+  id?: number;
+  person?: number;
+  
+  // General
+  patient_age?: number;
+  gender?: string;
+  weight_kg?: number;
+  height_cm?: number;
+  bmi?: number;
+  ethnicity?: string;
+  systolic_bp?: number;
+  diastolic_bp?: number;
+  location?: string;
+  postal_code?: string;
+  disease?: string;
+  stage?: string;
+  karnofsky_performance_status?: number;
+  ecog_performance_status?: number;
+  active_malignancies?: string;
+  active_infection?: boolean;
+  preexisting_conditions?: string;
+  peripheral_neuropathy_grade?: number;
+  
+  // Follicular Lymphoma specific
+  gelf_criteria?: string;
+  flipi_score?: number;
+  tumor_grade?: string;
+  
+  // Multiple Myeloma specific
+  cytogenic_markers?: string;
+  molecular_markers?: string;
+  plasma_cell_leukemia?: boolean;
+  progression?: string;
+  toxicity_grade_maximum?: number;
+  measurable_disease_imwg?: string;
+  
+  // Treatment
+  prior_lines_of_therapy?: number;
+  prior_treatments?: string;
+  prior_chemotherapy?: boolean;
+  prior_radiation?: boolean;
+  prior_surgery?: boolean;
+  prior_immunotherapy?: boolean;
+  prior_targeted_therapy?: boolean;
+  current_medications?: string;
+  allergies?: string;
+  
+  // Blood Markers
+  hemoglobin_g_dl?: number;
+  wbc_count_thousand_per_ul?: number;
+  platelet_count_thousand_per_ul?: number;
+  anc_thousand_per_ul?: number;
+  alc_thousand_per_ul?: number;
+  creatinine_mg_dl?: number;
+  egfr_ml_min_173m2?: number;
+  bun_mg_dl?: number;
+  sodium_meq_l?: number;
+  potassium_meq_l?: number;
+  calcium_mg_dl?: number;
+  magnesium_mg_dl?: number;
+  
+  // Labs
+  m_protein_serum?: number;
+  m_protein_urine?: number;
+  ldh_u_l?: number;
+  pulmonary_function_test?: boolean;
+  bone_imaging_result?: boolean;
+  num_lesions?: number;
+  clonal_plasma_percent?: number;
+  lvef_percent?: number;
+  hiv_status?: string;
+  hepatitis_b_status?: string;
+  hepatitis_c_status?: string;
+  
+  bilirubin_total_mg_dl?: number;
+  alt_u_l?: number;
+  ast_u_l?: number;
+  alkaline_phosphatase_u_l?: number;
+  albumin_g_dl?: number;
+  troponin_ng_ml?: number;
+  bnp_pg_ml?: number;
+  glucose_mg_dl?: number;
+  hba1c_percent?: number;
+  inr?: number;
+  pt_seconds?: number;
+  ptt_seconds?: number;
+  cea_ng_ml?: number;
+  ca19_9_u_ml?: number;
+  psa_ng_ml?: number;
+  
+  // Behavior
+  able_to_consent?: boolean;
+  has_caregiver?: boolean;
+  using_contraceptive?: boolean;
+  is_pregnant?: boolean;
+  pregnancy_test_result?: string;
+  is_lactating?: boolean;
+  tobacco_use_status?: string;
+  recreational_drug_use?: string;
+  mental_health_disorders?: string;
+  geographic_risk_factors?: string;
+  occupational_risk_factors?: string;
+  english_speak_understand?: boolean;
+  english_read_write?: boolean;
+  spanish_speak_understand?: boolean;
+  spanish_read_write?: boolean;
+}
+
+export interface PatientMessage {
+  id: number;
+  patient_user: number;
+  subject: string;
+  message: string;
+  sender_is_patient: boolean;
+  created_at: string;
+  read_at?: string;
+}
+
+export interface PatientConsent {
+  id: number;
+  patient_user: number;
+  consent_type: 'data_sharing' | 'clinical_trial' | 'research';
+  consent_granted: boolean;
+  consent_date?: string;
+}

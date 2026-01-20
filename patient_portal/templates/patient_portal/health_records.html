@@ -1,0 +1,667 @@
+{% extends 'patient_portal/base.html' %}
+
+{% block title %}Health Records - Patient Portal{% endblock %}
+
+{% block content %}
+<h1 style="color: #2c3e50; margin-bottom: 2rem;">📊 Your Health Records</h1>
+
+<!-- Tab Navigation -->
+<div style="border-bottom: 2px solid #ddd; margin-bottom: 2rem;">
+    <nav style="display: flex; gap: 0.5rem;">
+        <a href="#general" class="tab-link active" onclick="showTab('general', event)" style="padding: 1rem 1.5rem; text-decoration: none; color: #2c3e50; border-bottom: 3px solid #3498db; font-weight: 600;">
+            👤 General
+        </a>
+        <a href="#treatment" class="tab-link" onclick="showTab('treatment', event)" style="padding: 1rem 1.5rem; text-decoration: none; color: #7f8c8d; border-bottom: 3px solid transparent;">
+            💊 Treatment
+        </a>
+        <a href="#blood" class="tab-link" onclick="showTab('blood', event)" style="padding: 1rem 1.5rem; text-decoration: none; color: #7f8c8d; border-bottom: 3px solid transparent;">
+            🩸 Blood Markers
+        </a>
+        <a href="#labs" class="tab-link" onclick="showTab('labs', event)" style="padding: 1rem 1.5rem; text-decoration: none; color: #7f8c8d; border-bottom: 3px solid transparent;">
+            🔬 Other Labs
+        </a>
+        <a href="#behavior" class="tab-link" onclick="showTab('behavior', event)" style="padding: 1rem 1.5rem; text-decoration: none; color: #7f8c8d; border-bottom: 3px solid transparent;">
+            ❤️ Behavior & Lifestyle
+        </a>
+    </nav>
+</div>
+
+<!-- General Tab -->
+<div id="general-tab" class="tab-content">
+    <div class="card">
+        <h2>👤 General Information</h2>
+        <form method="post" action="{% url 'patient_portal:update_health_records' %}">
+            {% csrf_token %}
+            <input type="hidden" name="tab" value="general">
+            
+            <div class="form-group">
+                <label for="first_name">First Name</label>
+                <input type="text" id="first_name" name="first_name" value="{{ user.first_name|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="last_name">Last Name</label>
+                <input type="text" id="last_name" name="last_name" value="{{ user.last_name|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="patient_age">Patient Age</label>
+                <input type="number" id="patient_age" name="patient_age" value="{{ patient_info.patient_age|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="gender">Gender</label>
+                <select id="gender" name="gender">
+                    <option value="">Select...</option>
+                    <option value="Male" {% if patient_info.gender == "Male" %}selected{% endif %}>Male</option>
+                    <option value="Female" {% if patient_info.gender == "Female" %}selected{% endif %}>Female</option>
+                    <option value="Other" {% if patient_info.gender == "Other" %}selected{% endif %}>Other</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="weight_kg">Weight (Kilograms)</label>
+                <input type="number" step="0.1" id="weight_kg" name="weight_kg" value="{{ patient_info.weight_kg|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="height_cm">Height (Centimeters)</label>
+                <input type="number" step="0.1" id="height_cm" name="height_cm" value="{{ patient_info.height_cm|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="ethnicity">Ethnicity</label>
+                <select id="ethnicity" name="ethnicity">
+                    <option value="">Select...</option>
+                    <option value="Caucasian/European" {% if patient_info.ethnicity == "Caucasian/European" %}selected{% endif %}>Caucasian/European</option>
+                    <option value="African/Black" {% if patient_info.ethnicity == "African/Black" %}selected{% endif %}>African/Black</option>
+                    <option value="Asian" {% if patient_info.ethnicity == "Asian" %}selected{% endif %}>Asian</option>
+                    <option value="Native American" {% if patient_info.ethnicity == "Native American" %}selected{% endif %}>Native American</option>
+                    <option value="Other/Won't Say" {% if patient_info.ethnicity == "Other/Won't Say" %}selected{% endif %}>Other/Won't Say</option>
+                </select>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="form-group">
+                    <label for="systolic_bp">Blood Pressure - SBP (mmHg)</label>
+                    <input type="number" id="systolic_bp" name="systolic_bp" value="{{ patient_info.systolic_bp|default:'' }}">
+                </div>
+                
+                <div class="form-group">
+                    <label for="diastolic_bp">Blood Pressure - DBP (mmHg)</label>
+                    <input type="number" id="diastolic_bp" name="diastolic_bp" value="{{ patient_info.diastolic_bp|default:'' }}">
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="location">Location</label>
+                <input type="text" id="location" name="location" value="{{ patient_info.location|default:'' }}" placeholder="e.g., United Kingdom">
+            </div>
+            
+            <div class="form-group">
+                <label for="postal_code">Zip/Postal Code</label>
+                <input type="text" id="postal_code" name="postal_code" value="{{ patient_info.postal_code|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="disease">Disease</label>
+                <input type="text" id="disease" name="disease" value="{{ patient_info.disease|default:'' }}" placeholder="e.g., Multiple Myeloma">
+            </div>
+            
+            <div class="form-group">
+                <label for="stage">Stage</label>
+                <input type="text" id="stage" name="stage" value="{{ patient_info.stage|default:'' }}" placeholder="e.g., Unknown">
+            </div>
+            
+            <div class="form-group">
+                <label for="karnofsky_performance_status">Karnofsky Performance Score</label>
+                <select id="karnofsky_performance_status" name="karnofsky_performance_status">
+                    <option value="">Select...</option>
+                    <option value="100" {% if patient_info.karnofsky_performance_status == 100 %}selected{% endif %}>100 - Normal, no complaints</option>
+                    <option value="90" {% if patient_info.karnofsky_performance_status == 90 %}selected{% endif %}>90 - Normal activity, minor symptoms</option>
+                    <option value="80" {% if patient_info.karnofsky_performance_status == 80 %}selected{% endif %}>80 - Normal activity with effort</option>
+                    <option value="70" {% if patient_info.karnofsky_performance_status == 70 %}selected{% endif %}>70 - Cares for self, unable to work</option>
+                    <option value="60" {% if patient_info.karnofsky_performance_status == 60 %}selected{% endif %}>60 - Requires occasional assistance</option>
+                    <option value="50" {% if patient_info.karnofsky_performance_status == 50 %}selected{% endif %}>50 - Requires considerable assistance</option>
+                    <option value="40" {% if patient_info.karnofsky_performance_status == 40 %}selected{% endif %}>40 - Disabled, special care needed</option>
+                    <option value="30" {% if patient_info.karnofsky_performance_status == 30 %}selected{% endif %}>30 - Severely disabled</option>
+                    <option value="20" {% if patient_info.karnofsky_performance_status == 20 %}selected{% endif %}>20 - Very sick, hospitalization needed</option>
+                    <option value="10" {% if patient_info.karnofsky_performance_status == 10 %}selected{% endif %}>10 - Moribund</option>
+                    <option value="0" {% if patient_info.karnofsky_performance_status == 0 %}selected{% endif %}>0 - Dead</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="ecog_performance_status">ECOG Performance Status</label>
+                <select id="ecog_performance_status" name="ecog_performance_status">
+                    <option value="">Select...</option>
+                    <option value="0" {% if patient_info.ecog_performance_status == 0 %}selected{% endif %}>0 - Fully active</option>
+                    <option value="1" {% if patient_info.ecog_performance_status == 1 %}selected{% endif %}>1 - Restricted in physically strenuous activity</option>
+                    <option value="2" {% if patient_info.ecog_performance_status == 2 %}selected{% endif %}>2 - Ambulatory and capable of self-care</option>
+                    <option value="3" {% if patient_info.ecog_performance_status == 3 %}selected{% endif %}>3 - Capable of only limited self-care</option>
+                    <option value="4" {% if patient_info.ecog_performance_status == 4 %}selected{% endif %}>4 - Completely disabled</option>
+                    <option value="5" {% if patient_info.ecog_performance_status == 5 %}selected{% endif %}>5 - Dead</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="active_malignancies">Active Malignancies</label>
+                <select id="active_malignancies" name="active_malignancies" multiple size="10" style="height: auto;">
+                    <option value="None" {% if "None" in patient_info.active_malignancies|default:"" %}selected{% endif %}>None</option>
+                    <option value="Breast Cancer" {% if "Breast Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Breast Cancer</option>
+                    <option value="Lung Cancer" {% if "Lung Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Lung Cancer</option>
+                    <option value="Colorectal Cancer" {% if "Colorectal Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Colorectal Cancer</option>
+                    <option value="Prostate Cancer" {% if "Prostate Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Prostate Cancer</option>
+                    <option value="Melanoma" {% if "Melanoma" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Melanoma</option>
+                    <option value="Leukemia" {% if "Leukemia" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Leukemia</option>
+                    <option value="Lymphoma" {% if "Lymphoma" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Lymphoma</option>
+                    <option value="Multiple Myeloma" {% if "Multiple Myeloma" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Multiple Myeloma</option>
+                    <option value="Pancreatic Cancer" {% if "Pancreatic Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Pancreatic Cancer</option>
+                    <option value="Ovarian Cancer" {% if "Ovarian Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Ovarian Cancer</option>
+                    <option value="Bladder Cancer" {% if "Bladder Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Bladder Cancer</option>
+                    <option value="Kidney Cancer" {% if "Kidney Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Kidney Cancer</option>
+                    <option value="Liver Cancer" {% if "Liver Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Liver Cancer</option>
+                    <option value="Thyroid Cancer" {% if "Thyroid Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Thyroid Cancer</option>
+                    <option value="Brain Cancer" {% if "Brain Cancer" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Brain Cancer</option>
+                    <option value="Other" {% if "Other" in patient_info.active_malignancies|default:"" %}selected{% endif %}>Other</option>
+                </select>
+                <small style="color: #7f8c8d;">Hold Ctrl/Cmd to select multiple</small>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="active_infection" {% if patient_info.active_infection %}checked{% endif %}>
+                    Active Infection
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label for="preexisting_conditions">Preexisting Conditions</label>
+                <select id="preexisting_conditions" name="preexisting_conditions" multiple size="12" style="height: auto;">
+                    <option value="None" {% if "None" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>None</option>
+                    <option value="Active Non-Cancer CNS Disorders" {% if "Active Non-Cancer CNS Disorders" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>Active Non-Cancer CNS Disorders</option>
+                    <option value="Autoimmune Disorders" {% if "Autoimmune Disorders" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>Autoimmune Disorders</option>
+                    <option value="Bone Only Metastasis" {% if "Bone Only Metastasis" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>Bone Only Metastasis</option>
+                    <option value="Carcinoma in situ" {% if "Carcinoma in situ" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>Carcinoma in situ</option>
+                    <option value="Cardiac Issues" {% if "Cardiac Issues" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>Cardiac Issues</option>
+                    <option value="CNS Involvement by the disease" {% if "CNS Involvement by the disease" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>CNS Involvement by the disease</option>
+                    <option value="Connective Tissue Disorders / Collagen Vascular Disease" {% if "Connective Tissue Disorders / Collagen Vascular Disease" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>Connective Tissue Disorders / Collagen Vascular Disease</option>
+                    <option value="Corneal Disorders/Ocular Conditions" {% if "Corneal Disorders/Ocular Conditions" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>Corneal Disorders/Ocular Conditions</option>
+                    <option value="Diabetes" {% if "Diabetes" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>Diabetes</option>
+                    <option value="Hypertension" {% if "Hypertension" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>Hypertension</option>
+                    <option value="Other" {% if "Other" in patient_info.preexisting_conditions|default:"" %}selected{% endif %}>Other</option>
+                </select>
+                <small style="color: #7f8c8d;">Hold Ctrl/Cmd to select multiple</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="peripheral_neuropathy_grade">Peripheral Neuropathy Grade</label>
+                <select id="peripheral_neuropathy_grade" name="peripheral_neuropathy_grade">
+                    <option value="">Select...</option>
+                    <option value="0" {% if patient_info.peripheral_neuropathy_grade == 0 %}selected{% endif %}>Grade 0 - None</option>
+                    <option value="1" {% if patient_info.peripheral_neuropathy_grade == 1 %}selected{% endif %}>Grade 1 - Mild</option>
+                    <option value="2" {% if patient_info.peripheral_neuropathy_grade == 2 %}selected{% endif %}>Grade 2 - Moderate</option>
+                    <option value="3" {% if patient_info.peripheral_neuropathy_grade == 3 %}selected{% endif %}>Grade 3 - Severe</option>
+                    <option value="4" {% if patient_info.peripheral_neuropathy_grade == 4 %}selected{% endif %}>Grade 4 - Life-threatening</option>
+                </select>
+            </div>
+            
+            <button type="submit" class="btn">💾 Save Changes</button>
+        </form>
+    </div>
+</div>
+
+<!-- Treatment Tab -->
+<div id="treatment-tab" class="tab-content" style="display: none;">
+    <div class="card">
+        <h2>💊 Treatment History</h2>
+        <form method="post" action="{% url 'patient_portal:update_health_records' %}">
+            {% csrf_token %}
+            <input type="hidden" name="tab" value="treatment">
+            
+            <div class="form-group">
+                <label for="prior_lines_of_therapy">Prior Lines of Therapy</label>
+                <input type="number" id="prior_lines_of_therapy" name="prior_lines_of_therapy" value="{{ patient_info.prior_lines_of_therapy|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="prior_treatments">Prior Treatments</label>
+                <textarea id="prior_treatments" name="prior_treatments">{{ patient_info.prior_treatments|default:'' }}</textarea>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="prior_chemotherapy" {% if patient_info.prior_chemotherapy %}checked{% endif %}>
+                    Prior Chemotherapy
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="prior_radiation" {% if patient_info.prior_radiation %}checked{% endif %}>
+                    Prior Radiation
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="prior_surgery" {% if patient_info.prior_surgery %}checked{% endif %}>
+                    Prior Surgery
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="prior_immunotherapy" {% if patient_info.prior_immunotherapy %}checked{% endif %}>
+                    Prior Immunotherapy
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="prior_targeted_therapy" {% if patient_info.prior_targeted_therapy %}checked{% endif %}>
+                    Prior Targeted Therapy
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label for="current_medications">Current Medications</label>
+                <textarea id="current_medications" name="current_medications">{{ patient_info.current_medications|default:'' }}</textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="allergies">Allergies</label>
+                <textarea id="allergies" name="allergies">{{ patient_info.allergies|default:'' }}</textarea>
+            </div>
+            
+            <button type="submit" class="btn">💾 Save Changes</button>
+        </form>
+    </div>
+</div>
+
+<!-- Blood Markers Tab -->
+<div id="blood-tab" class="tab-content" style="display: none;">
+    <div class="card">
+        <h2>🩸 Blood Markers</h2>
+        <form method="post" action="{% url 'patient_portal:update_health_records' %}">
+            {% csrf_token %}
+            <input type="hidden" name="tab" value="blood">
+            
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Complete Blood Count (CBC)</h3>
+            
+            <div class="form-group">
+                <label for="hemoglobin_g_dl">Hemoglobin (g/dL)</label>
+                <input type="number" step="0.1" id="hemoglobin_g_dl" name="hemoglobin_g_dl" value="{{ patient_info.hemoglobin_g_dl|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="wbc_count_thousand_per_ul">White Blood Cell Count (x10³/µL)</label>
+                <input type="number" step="0.1" id="wbc_count_thousand_per_ul" name="wbc_count_thousand_per_ul" value="{{ patient_info.wbc_count_thousand_per_ul|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="platelet_count_thousand_per_ul">Platelet Count (x10³/µL)</label>
+                <input type="number" step="0.1" id="platelet_count_thousand_per_ul" name="platelet_count_thousand_per_ul" value="{{ patient_info.platelet_count_thousand_per_ul|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="anc_thousand_per_ul">Absolute Neutrophil Count (x10³/µL)</label>
+                <input type="number" step="0.1" id="anc_thousand_per_ul" name="anc_thousand_per_ul" value="{{ patient_info.anc_thousand_per_ul|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="alc_thousand_per_ul">Absolute Lymphocyte Count (x10³/µL)</label>
+                <input type="number" step="0.1" id="alc_thousand_per_ul" name="alc_thousand_per_ul" value="{{ patient_info.alc_thousand_per_ul|default:'' }}">
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Kidney Function</h3>
+            
+            <div class="form-group">
+                <label for="creatinine_mg_dl">Creatinine (mg/dL)</label>
+                <input type="number" step="0.01" id="creatinine_mg_dl" name="creatinine_mg_dl" value="{{ patient_info.creatinine_mg_dl|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="egfr_ml_min_173m2">eGFR (mL/min/1.73m²)</label>
+                <input type="number" step="0.1" id="egfr_ml_min_173m2" name="egfr_ml_min_173m2" value="{{ patient_info.egfr_ml_min_173m2|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="bun_mg_dl">Blood Urea Nitrogen (mg/dL)</label>
+                <input type="number" step="0.1" id="bun_mg_dl" name="bun_mg_dl" value="{{ patient_info.bun_mg_dl|default:'' }}">
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Electrolytes</h3>
+            
+            <div class="form-group">
+                <label for="sodium_meq_l">Sodium (mEq/L)</label>
+                <input type="number" step="0.1" id="sodium_meq_l" name="sodium_meq_l" value="{{ patient_info.sodium_meq_l|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="potassium_meq_l">Potassium (mEq/L)</label>
+                <input type="number" step="0.1" id="potassium_meq_l" name="potassium_meq_l" value="{{ patient_info.potassium_meq_l|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="calcium_mg_dl">Calcium (mg/dL)</label>
+                <input type="number" step="0.1" id="calcium_mg_dl" name="calcium_mg_dl" value="{{ patient_info.calcium_mg_dl|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="magnesium_mg_dl">Magnesium (mg/dL)</label>
+                <input type="number" step="0.1" id="magnesium_mg_dl" name="magnesium_mg_dl" value="{{ patient_info.magnesium_mg_dl|default:'' }}">
+            </div>
+            
+            <button type="submit" class="btn">💾 Save Changes</button>
+        </form>
+    </div>
+</div>
+
+<!-- Other Labs Tab -->
+<div id="labs-tab" class="tab-content" style="display: none;">
+    <div class="card">
+        <h2>🔬 Other Laboratory Tests</h2>
+        <form method="post" action="{% url 'patient_portal:update_health_records' %}">
+            {% csrf_token %}
+            <input type="hidden" name="tab" value="labs">
+            
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Liver Function</h3>
+            
+            <div class="form-group">
+                <label for="bilirubin_total_mg_dl">Total Bilirubin (mg/dL)</label>
+                <input type="number" step="0.01" id="bilirubin_total_mg_dl" name="bilirubin_total_mg_dl" value="{{ patient_info.bilirubin_total_mg_dl|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="alt_u_l">ALT (U/L)</label>
+                <input type="number" step="0.1" id="alt_u_l" name="alt_u_l" value="{{ patient_info.alt_u_l|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="ast_u_l">AST (U/L)</label>
+                <input type="number" step="0.1" id="ast_u_l" name="ast_u_l" value="{{ patient_info.ast_u_l|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="alkaline_phosphatase_u_l">Alkaline Phosphatase (U/L)</label>
+                <input type="number" step="0.1" id="alkaline_phosphatase_u_l" name="alkaline_phosphatase_u_l" value="{{ patient_info.alkaline_phosphatase_u_l|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="albumin_g_dl">Albumin (g/dL)</label>
+                <input type="number" step="0.1" id="albumin_g_dl" name="albumin_g_dl" value="{{ patient_info.albumin_g_dl|default:'' }}">
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Cardiac Markers</h3>
+            
+            <div class="form-group">
+                <label for="troponin_ng_ml">Troponin (ng/mL)</label>
+                <input type="number" step="0.001" id="troponin_ng_ml" name="troponin_ng_ml" value="{{ patient_info.troponin_ng_ml|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="bnp_pg_ml">BNP (pg/mL)</label>
+                <input type="number" step="0.1" id="bnp_pg_ml" name="bnp_pg_ml" value="{{ patient_info.bnp_pg_ml|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="lvef_percent">LVEF (%)</label>
+                <input type="number" step="0.1" id="lvef_percent" name="lvef_percent" value="{{ patient_info.lvef_percent|default:'' }}">
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Metabolic</h3>
+            
+            <div class="form-group">
+                <label for="glucose_mg_dl">Glucose (mg/dL)</label>
+                <input type="number" step="0.1" id="glucose_mg_dl" name="glucose_mg_dl" value="{{ patient_info.glucose_mg_dl|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="hba1c_percent">HbA1c (%)</label>
+                <input type="number" step="0.1" id="hba1c_percent" name="hba1c_percent" value="{{ patient_info.hba1c_percent|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="ldh_u_l">LDH (U/L)</label>
+                <input type="number" step="0.1" id="ldh_u_l" name="ldh_u_l" value="{{ patient_info.ldh_u_l|default:'' }}">
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Coagulation</h3>
+            
+            <div class="form-group">
+                <label for="inr">INR</label>
+                <input type="number" step="0.01" id="inr" name="inr" value="{{ patient_info.inr|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="pt_seconds">PT (seconds)</label>
+                <input type="number" step="0.1" id="pt_seconds" name="pt_seconds" value="{{ patient_info.pt_seconds|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="ptt_seconds">PTT (seconds)</label>
+                <input type="number" step="0.1" id="ptt_seconds" name="ptt_seconds" value="{{ patient_info.ptt_seconds|default:'' }}">
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Tumor Markers</h3>
+            
+            <div class="form-group">
+                <label for="cea_ng_ml">CEA (ng/mL)</label>
+                <input type="number" step="0.1" id="cea_ng_ml" name="cea_ng_ml" value="{{ patient_info.cea_ng_ml|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="ca19_9_u_ml">CA 19-9 (U/mL)</label>
+                <input type="number" step="0.1" id="ca19_9_u_ml" name="ca19_9_u_ml" value="{{ patient_info.ca19_9_u_ml|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="psa_ng_ml">PSA (ng/mL)</label>
+                <input type="number" step="0.01" id="psa_ng_ml" name="psa_ng_ml" value="{{ patient_info.psa_ng_ml|default:'' }}">
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Infectious Disease</h3>
+            
+            <div class="form-group">
+                <label for="hiv_status">HIV Status</label>
+                <select id="hiv_status" name="hiv_status">
+                    <option value="">Select...</option>
+                    <option value="Negative" {% if patient_info.hiv_status == "Negative" %}selected{% endif %}>Negative</option>
+                    <option value="Positive" {% if patient_info.hiv_status == "Positive" %}selected{% endif %}>Positive</option>
+                    <option value="Unknown" {% if patient_info.hiv_status == "Unknown" %}selected{% endif %}>Unknown</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="hepatitis_b_status">Hepatitis B Status</label>
+                <select id="hepatitis_b_status" name="hepatitis_b_status">
+                    <option value="">Select...</option>
+                    <option value="Negative" {% if patient_info.hepatitis_b_status == "Negative" %}selected{% endif %}>Negative</option>
+                    <option value="Positive" {% if patient_info.hepatitis_b_status == "Positive" %}selected{% endif %}>Positive</option>
+                    <option value="Unknown" {% if patient_info.hepatitis_b_status == "Unknown" %}selected{% endif %}>Unknown</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="hepatitis_c_status">Hepatitis C Status</label>
+                <select id="hepatitis_c_status" name="hepatitis_c_status">
+                    <option value="">Select...</option>
+                    <option value="Negative" {% if patient_info.hepatitis_c_status == "Negative" %}selected{% endif %}>Negative</option>
+                    <option value="Positive" {% if patient_info.hepatitis_c_status == "Positive" %}selected{% endif %}>Positive</option>
+                    <option value="Unknown" {% if patient_info.hepatitis_c_status == "Unknown" %}selected{% endif %}>Unknown</option>
+                </select>
+            </div>
+            
+            <button type="submit" class="btn">💾 Save Changes</button>
+        </form>
+    </div>
+</div>
+
+<!-- Behavior & Lifestyle Tab -->
+<div id="behavior-tab" class="tab-content" style="display: none;">
+    <div class="card">
+        <h2>❤️ Behavior & Lifestyle</h2>
+        <form method="post" action="{% url 'patient_portal:update_health_records' %}">
+            {% csrf_token %}
+            <input type="hidden" name="tab" value="behavior">
+            
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Consent & Care</h3>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="able_to_consent" {% if patient_info.able_to_consent %}checked{% endif %}>
+                    Able to Consent
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="has_caregiver" {% if patient_info.has_caregiver %}checked{% endif %}>
+                    Has Caregiver
+                </label>
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Reproductive Health</h3>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="using_contraceptive" {% if patient_info.using_contraceptive %}checked{% endif %}>
+                    Using Contraceptive
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="is_pregnant" {% if patient_info.is_pregnant %}checked{% endif %}>
+                    Pregnant
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label for="pregnancy_test_result">Pregnancy Test Result</label>
+                <select id="pregnancy_test_result" name="pregnancy_test_result">
+                    <option value="">Select...</option>
+                    <option value="Negative" {% if patient_info.pregnancy_test_result == "Negative" %}selected{% endif %}>Negative</option>
+                    <option value="Positive" {% if patient_info.pregnancy_test_result == "Positive" %}selected{% endif %}>Positive</option>
+                    <option value="Not Applicable" {% if patient_info.pregnancy_test_result == "Not Applicable" %}selected{% endif %}>Not Applicable</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="is_lactating" {% if patient_info.is_lactating %}checked{% endif %}>
+                    Lactating
+                </label>
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Substance Use</h3>
+            
+            <div class="form-group">
+                <label for="tobacco_use_status">Tobacco Use</label>
+                <select id="tobacco_use_status" name="tobacco_use_status">
+                    <option value="">Select...</option>
+                    <option value="Never" {% if patient_info.tobacco_use_status == "Never" %}selected{% endif %}>Never</option>
+                    <option value="Former" {% if patient_info.tobacco_use_status == "Former" %}selected{% endif %}>Former</option>
+                    <option value="Current" {% if patient_info.tobacco_use_status == "Current" %}selected{% endif %}>Current</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="recreational_drug_use">Recreational Drug Use</label>
+                <textarea id="recreational_drug_use" name="recreational_drug_use">{{ patient_info.recreational_drug_use|default:'' }}</textarea>
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Mental Health</h3>
+            
+            <div class="form-group">
+                <label for="mental_health_disorders">Mental Health Disorders</label>
+                <textarea id="mental_health_disorders" name="mental_health_disorders">{{ patient_info.mental_health_disorders|default:'' }}</textarea>
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Risk Factors</h3>
+            
+            <div class="form-group">
+                <label for="geographic_risk_factors">Geographic Risk Factors</label>
+                <textarea id="geographic_risk_factors" name="geographic_risk_factors">{{ patient_info.geographic_risk_factors|default:'' }}</textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="occupational_risk_factors">Occupational Risk Factors</label>
+                <textarea id="occupational_risk_factors" name="occupational_risk_factors">{{ patient_info.occupational_risk_factors|default:'' }}</textarea>
+            </div>
+
+            <h3 style="color: #2c3e50; margin-top: 1.5rem;">Language Skills</h3>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="english_speak_understand" {% if patient_info.english_speak_understand %}checked{% endif %}>
+                    English - Speak/Understand
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="english_read_write" {% if patient_info.english_read_write %}checked{% endif %}>
+                    English - Read/Write
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="spanish_speak_understand" {% if patient_info.spanish_speak_understand %}checked{% endif %}>
+                    Spanish - Speak/Understand
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="spanish_read_write" {% if patient_info.spanish_read_write %}checked{% endif %}>
+                    Spanish - Read/Write
+                </label>
+            </div>
+            
+            <button type="submit" class="btn">💾 Save Changes</button>
+        </form>
+    </div>
+</div>
+
+<div style="margin-top: 2rem;">
+    <a href="{% url 'patient_portal:dashboard' %}" class="btn btn-secondary">← Back to Dashboard</a>
+</div>
+
+<script>
+function showTab(tabName, event) {
+    // Hide all tab content
+    const tabContents = document.querySelectorAll('.tab-content');
+    tabContents.forEach(content => {
+        content.style.display = 'none';
+    });
+    
+    // Remove active class from all tabs
+    const tabLinks = document.querySelectorAll('.tab-link');
+    tabLinks.forEach(link => {
+        link.style.color = '#7f8c8d';
+        link.style.borderBottom = '3px solid transparent';
+        link.style.fontWeight = 'normal';
+    });
+    
+    // Show selected tab content
+    document.getElementById(tabName + '-tab').style.display = 'block';
+    
+    // Add active class to clicked tab
+    event.target.style.color = '#2c3e50';
+    event.target.style.borderBottom = '3px solid #3498db';
+    event.target.style.fontWeight = '600';
+    
+    // Prevent default anchor behavior
+    event.preventDefault();
+}
+</script>
+
+<style>
+.tab-link:hover {
+    background-color: #f8f9fa;
+}
+</style>
+{% endblock %}
