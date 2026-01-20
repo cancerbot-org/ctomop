@@ -16,15 +16,12 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from django.http import HttpResponseRedirect
-
-def redirect_to_react(request):
-    """Redirect root URL to React app"""
-    return HttpResponseRedirect('http://localhost:3000')
+from django.views.generic import TemplateView
+from ctomop_app import views
 
 urlpatterns = [
-    path('', redirect_to_react, name='index'),
     path('admin/', admin.site.urls),
-    path('api/', include('patient_portal.api.urls')),
-    path('auth/', include('social_django.urls', namespace='social')),  # ADD THIS
+    path('api/', include('ctomop_app.urls')),
+    path('api/health/', views.health_check, name='health_check'),
+    path('', TemplateView.as_view(template_name='index.html'), name='home'),
 ]
