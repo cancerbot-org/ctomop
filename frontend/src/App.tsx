@@ -1,14 +1,16 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   BrowserRouter as Router,
   Routes,
   Route,
   Navigate,
+  useLocation,
 } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { Box, CircularProgress } from '@mui/material';
 import { Login } from './components/Auth/Login';
+import { AuthCallback } from './components/Auth/AuthCallback';
 import PatientList from './components/Patient/PatientList';
 import PatientDetail from './components/Patient/PatientDetail';
 import UploadFHIR from './components/Patient/UploadFHIR';
@@ -27,7 +29,18 @@ const theme = createTheme({
 });
 
 const AppRoutes: React.FC = () => {
-  const { currentUser, loading: authLoading } = useAuth();
+  const { currentUser, loading: authLoading, refresh } = useAuth();
+  const location = useLocation();
+
+  // Refresh auth when returning from OAuth
+  useEffect(() => {
+    if (location.pathname === '/auth/callback') {
+      // Give the backend a moment to set up the session
+      setTimeout(() => {
+        refresh();
+      }, 500);
+    }
+  }, [location.pathname, refresh]);
 
   if (authLoading) {
     return (
@@ -40,6 +53,7 @@ const AppRoutes: React.FC = () => {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/auth/callback" element={<AuthCallback />} />
       
       {/* Protected routes */}
       <Route
