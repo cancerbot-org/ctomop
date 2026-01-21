@@ -136,6 +136,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                             'gender_concept': gender_concept,
                             'race_concept': None,
                             'ethnicity_concept': None,
+                            'person_source_value': f"CSV-{person_id}",
                         }
                     )
                     
@@ -252,6 +253,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         gender_concept=gender_concept,
                         race_concept=None,
                         ethnicity_concept=None,
+                        person_source_value=f"FHIR-{fhir_patient_id}",
                     )
                     
                     # Create User for the name
