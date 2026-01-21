@@ -62,11 +62,6 @@ const UploadFHIR: React.FC = () => {
       if (fileInput) {
         fileInput.value = '';
       }
-
-      // Navigate to patient list after 2 seconds
-      setTimeout(() => {
-        navigate('/');
-      }, 2000);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to upload file');
     } finally {
@@ -146,9 +141,11 @@ const UploadFHIR: React.FC = () => {
                 </List>
               </Box>
             )}
-            <Typography variant="body2" mt={1}>
-              Redirecting to patient list...
-            </Typography>
+            <Box mt={2}>
+              <Button variant="contained" onClick={() => navigate('/')}>
+                Go to Patient List
+              </Button>
+            </Box>
           </Alert>
         )}
 
