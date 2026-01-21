@@ -243,13 +243,6 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         birth_date = datetime.strptime(patient_resource['birthDate'], '%Y-%m-%d').date()
                         year_of_birth = birth_date.year
                     
-                    # Extract phone
-                    phone_number = ''
-                    for telecom in patient_resource.get('telecom', []):
-                        if telecom.get('system') == 'phone':
-                            phone_number = telecom.get('value', '')
-                            break
-                    
                     # Get gender concept from FHIR
                     gender_concept = get_gender_concept(patient_resource.get('gender', ''))
                     
@@ -328,7 +321,6 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     # Create PatientInfo
                     patient_info = PatientInfo.objects.create(
                         person=person,
-                        phone_number=phone_number,
                         date_of_birth=birth_date,
                         disease=disease,
                         stage=stage,
