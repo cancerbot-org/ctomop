@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python manage.py migrate && python manage.py setup_admin && python manage.py collectstatic --noinput && gunicorn ctomop.wsgi:application",
+    "startCommand": "python manage.py migrate && python manage.py create_gender_concepts && python manage.py setup_admin && python manage.py collectstatic --noinput && gunicorn ctomop.wsgi:application",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }

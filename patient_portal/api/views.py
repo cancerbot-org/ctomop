@@ -6,7 +6,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth import logout, login, authenticate
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from omop_core.models import Person, PatientInfo
+from omop_core.models import Person, PatientInfo, Concept
 from datetime import datetime
 import csv
 import json
@@ -16,6 +16,32 @@ from .serializers import (
 )
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
+
+
+def get_gender_concept(gender_str):
+    """Map gender string to OMOP gender concept"""
+    if not gender_str:
+        return None
+    
+    gender_map = {
+        'male': 8507,
+        'm': 8507,
+        'female': 8532,
+        'f': 8532,
+        'unknown': 8551,
+        'other': 8551,
+        'ambiguous': 8570,
+    }
+    
+    gender_lower = gender_str.lower().strip()
+    concept_id = gender_map.get(gender_lower)
+    
+    if concept_id:
+        try:
+            return Concept.objects.get(concept_id=concept_id)
+        except Concept.DoesNotExist:
+            return None
+    return None
 
 @method_decorator(csrf_exempt, name='dispatch')
 class CurrentUserViewSet(viewsets.ViewSet):
@@ -100,11 +126,14 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         last_person = Person.objects.all().order_by('-person_id').first()
                         person_id = last_person.person_id + 1 if last_person else 1000
                     
+                    # Get gender concept
+                    gender_concept = get_gender_concept(row.get('gender', ''))
+                    
                     person, created = Person.objects.get_or_create(
                         person_id=person_id,
                         defaults={
                             'year_of_birth': int(row.get('year_of_birth', datetime.now().year - 50)),
-                            'gender_concept': None,
+                            'gender_concept': gender_concept,
                             'race_concept': None,
                             'ethnicity_concept': None,
                         }
@@ -218,11 +247,14 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     phone_number = ''
                     for telecom in patient_resource.get('telecom', []):
                         if telecom.get('system') == 'phone':
-                            phone_number = telecom.get('value', '')
-                            break
+                      Get gender concept from FHIR
+                    gender_concept = get_gender_concept(patient_resource.get('gender', ''))
                     
                     # Create Person
                     person = Person.objects.create(
+                        person_id=person_id,
+                        year_of_birth=year_of_birth,
+                        gender_concept=gender_concept.create(
                         person_id=person_id,
                         year_of_birth=year_of_birth,
                         gender_concept=None,
