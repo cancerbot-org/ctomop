@@ -247,17 +247,17 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     phone_number = ''
                     for telecom in patient_resource.get('telecom', []):
                         if telecom.get('system') == 'phone':
-                      Get gender concept from FHIR
+                            phone_number = telecom.get('value', '')
+                            break
+                    
+                    # Get gender concept from FHIR
                     gender_concept = get_gender_concept(patient_resource.get('gender', ''))
                     
                     # Create Person
                     person = Person.objects.create(
                         person_id=person_id,
                         year_of_birth=year_of_birth,
-                        gender_concept=gender_concept.create(
-                        person_id=person_id,
-                        year_of_birth=year_of_birth,
-                        gender_concept=None,
+                        gender_concept=gender_concept,
                         race_concept=None,
                         ethnicity_concept=None,
                     )
