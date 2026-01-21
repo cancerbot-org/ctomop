@@ -152,7 +152,6 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     patient_info, pi_created = PatientInfo.objects.update_or_create(
                         person=person,
                         defaults={
-                            'phone_number': row.get('phone_number', ''),
                             'date_of_birth': date_of_birth,
                             'disease': row.get('disease', ''),
                         }
