@@ -96,12 +96,6 @@ export const Login: React.FC = () => {
             </button>
           </div>
         </form>
-
-        <div className="mt-6">
-          <p className="text-xs text-center text-gray-500">
-            Default credentials: admin / 1database
-          </p>
-        </div>
       </div>
     </div>
   );
