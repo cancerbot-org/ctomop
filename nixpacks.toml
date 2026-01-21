@@ -4,18 +4,14 @@ nixPkgs = ['python311', 'nodejs-18_x', 'postgresql', 'gcc', 'libpq']
 [phases.install]
 cmds = [
     'python --version',
-    'node --version',
-    'npm --version',
     'pip install --upgrade pip',
-    'pip install -r requirements.txt',
-    'cd frontend && npm install --legacy-peer-deps && cd ..'
+    'pip install -r requirements.txt'
 ]
 
 [phases.build]
 cmds = [
-    'cd frontend && npm run build && cd ..',
     'python manage.py collectstatic --noinput --clear'
 ]
 
 [start]
-cmd = 'python manage.py migrate && python manage.py setup_admin && gunicorn ctomop.wsgi:application --bind 0.0.0.0:$PORT --workers 4 --timeout 120'
+cmd = 'python manage.py migrate && gunicorn ctomop.wsgi:application --bind 0.0.0.0:$PORT --workers 4 --timeout 120'
