@@ -109,6 +109,7 @@ class Person(models.Model):
         blank=True,
         db_column='ethnicity_concept_id'
     )
+    person_source_value = models.CharField(max_length=50, null=True, blank=True)
     
     class Meta:
         db_table = 'person'
