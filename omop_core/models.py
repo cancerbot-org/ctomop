@@ -92,7 +92,11 @@ class Person(models.Model):
         blank=True,
         db_column='gender_concept_id'
     )
-    year_of_birth = models.IntegerField()
+    year_of_birth = models.IntegerField(null=True, blank=True)
+    month_of_birth = models.IntegerField(null=True, blank=True)
+    day_of_birth = models.IntegerField(null=True, blank=True)
+    birth_datetime = models.DateTimeField(null=True, blank=True)
+    death_datetime = models.DateTimeField(null=True, blank=True)
     race_concept = models.ForeignKey(
         Concept, 
         on_delete=models.PROTECT, 
@@ -109,7 +113,47 @@ class Person(models.Model):
         blank=True,
         db_column='ethnicity_concept_id'
     )
+    provider_id = models.IntegerField(null=True, blank=True)
+    care_site_id = models.IntegerField(null=True, blank=True)
     person_source_value = models.CharField(max_length=50, null=True, blank=True)
+    gender_source_value = models.CharField(max_length=50, null=True, blank=True)
+    gender_source_concept = models.ForeignKey(
+        Concept,
+        on_delete=models.PROTECT,
+        related_name='person_gender_source',
+        null=True,
+        blank=True,
+        db_column='gender_source_concept_id'
+    )
+    race_source_value = models.CharField(max_length=50, null=True, blank=True)
+    race_source_concept = models.ForeignKey(
+        Concept,
+        on_delete=models.PROTECT,
+        related_name='person_race_source',
+        null=True,
+        blank=True,
+        db_column='race_source_concept_id'
+    )
+    ethnicity_source_value = models.CharField(max_length=50, null=True, blank=True)
+    ethnicity_source_concept = models.ForeignKey(
+        Concept,
+        on_delete=models.PROTECT,
+        related_name='person_ethnicity_source',
+        null=True,
+        blank=True,
+        db_column='ethnicity_source_concept_id'
+    )
+    primary_language_concept = models.ForeignKey(
+        Concept,
+        on_delete=models.PROTECT,
+        related_name='person_primary_language',
+        null=True,
+        blank=True,
+        db_column='primary_language_concept_id'
+    )
+    secondary_languages = models.TextField(null=True, blank=True)
+    language_skill_level = models.CharField(max_length=50, null=True, blank=True)
+    location_id = models.IntegerField(null=True, blank=True)
     
     class Meta:
         db_table = 'person'
