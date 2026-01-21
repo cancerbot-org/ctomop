@@ -35,6 +35,24 @@ export const useAuth = () => {
     fetchCurrentUser();
   }, []);
 
+  const login = async (username: string, password: string) => {
+    try {
+      const response = await api.post('/auth/login/', {
+        username,
+        password,
+      });
+      const userData = response.data.user;
+      setCurrentUser(userData);
+      return { success: true, user: userData };
+    } catch (error: any) {
+      console.error('Login failed:', error);
+      return { 
+        success: false, 
+        error: error.response?.data?.error || 'Login failed' 
+      };
+    }
+  };
+
   const logout = async () => {
     try {
       await api.post('/auth/logout/');
@@ -50,5 +68,5 @@ export const useAuth = () => {
     return fetchCurrentUser();
   };
 
-  return { currentUser, loading, logout, refresh };
+  return { currentUser, loading, login, logout, refresh };
 };
