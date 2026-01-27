@@ -22,7 +22,8 @@ export const Login: React.FC = () => {
 
       if (response.data.user) {
         // Login successful, redirect to home
-        navigate('/');
+        // Force a page reload to ensure auth state is updated
+        window.location.href = '/';
       }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Login failed. Please try again.');
