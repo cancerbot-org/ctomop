@@ -4,6 +4,13 @@ from django.db import migrations, models
 import django.db.models.deletion
 
 
+def make_gender_concept_nullable(apps, schema_editor):
+    """Make gender_concept_id nullable - works with both SQLite and PostgreSQL"""
+    if schema_editor.connection.vendor == 'postgresql':
+        schema_editor.execute('ALTER TABLE person ALTER COLUMN gender_concept_id DROP NOT NULL;')
+    # SQLite doesn't need this - it's already nullable by default
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -11,8 +18,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunSQL(
-            sql='ALTER TABLE person ALTER COLUMN gender_concept_id DROP NOT NULL;',
-            reverse_sql='ALTER TABLE person ALTER COLUMN gender_concept_id SET NOT NULL;',
-        ),
+        migrations.RunPython(make_gender_concept_nullable, migrations.RunPython.noop),
     ]
