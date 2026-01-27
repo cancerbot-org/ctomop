@@ -101,6 +101,26 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
         except PatientInfo.DoesNotExist:
             return Response({'error': 'Patient information not found'}, status=status.HTTP_404_NOT_FOUND)
     
+    def update(self, request, pk=None, partial=False):
+        """Update patient info for a specific person"""
+        try:
+            person = Person.objects.get(person_id=pk)
+            patient_info = PatientInfo.objects.get(person=person)
+            
+            serializer = self.get_serializer(patient_info, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            
+            return Response(serializer.data)
+        except Person.DoesNotExist:
+            return Response({'error': 'Person not found'}, status=status.HTTP_404_NOT_FOUND)
+        except PatientInfo.DoesNotExist:
+            return Response({'error': 'Patient info not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    def partial_update(self, request, pk=None):
+        """Partial update (PATCH) for patient info"""
+        return self.update(request, pk, partial=True)
+    
     @action(detail=False, methods=['post'])
     def upload_csv(self, request):
         """Upload patients from CSV file"""

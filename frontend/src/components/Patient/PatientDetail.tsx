@@ -44,7 +44,17 @@ function TabPanel(props: TabPanelProps) {
 // Dropdown options
 const GENDER_OPTIONS = ['Male', 'Female', 'Other', 'Unknown'];
 const COUNTRY_OPTIONS = ['United States', 'Canada', 'United Kingdom', 'Germany', 'France', 'Spain', 'Italy', 'Other'];
-const ETHNICITY_OPTIONS = ['Hispanic or Latino', 'Not Hispanic or Latino', 'Unknown'];
+const US_STATES = [
+  'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware',
+  'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky',
+  'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi',
+  'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico',
+  'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania',
+  'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont',
+  'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming',
+  'District of Columbia', 'Puerto Rico', 'Guam', 'U.S. Virgin Islands'
+];
+const ETHNICITY_OPTIONS = ['Caucasian/White', 'Hispanic/Latino', 'Black/African-American', 'Asian', 'Native American'];
 const DISEASE_OPTIONS = ['Breast Cancer', 'Follicular Lymphoma', 'Multiple Myeloma', 'Lung Cancer', 'Colon Cancer', 'Other'];
 const STAGE_OPTIONS = ['Stage I', 'Stage II', 'Stage III', 'Stage IV', 'Unknown'];
 const ECOG_OPTIONS = ['0', '1', '2', '3', '4', '5'];
@@ -210,6 +220,33 @@ const PatientDetail: React.FC = () => {
   const handleFieldChange = (field: string, value: any) => {
     setEditedInfo({ ...editedInfo, [field]: value });
     setSuccessMessage(null);
+  };
+
+  const handleZipcodeChange = async (zipcode: string) => {
+    handleFieldChange('postal_code', zipcode);
+    
+    // Only lookup for 5-digit US zipcodes
+    if (zipcode && zipcode.length === 5 && /^\d{5}$/.test(zipcode)) {
+      try {
+        const response = await fetch(`https://api.zippopotam.us/us/${zipcode}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.places && data.places.length > 0) {
+            const place = data.places[0];
+            // Auto-populate city and state
+            setEditedInfo({
+              ...editedInfo,
+              postal_code: zipcode,
+              city: place['place name'],
+              region: place['state']
+            });
+          }
+        }
+      } catch (error) {
+        // Silently fail - user can still enter manually
+        console.log('Zipcode lookup failed:', error);
+      }
+    }
   };
 
   const handleSave = async () => {
@@ -600,9 +637,21 @@ const PatientDetail: React.FC = () => {
             </Grid>
             
             {renderSelectField('Country', 'country', COUNTRY_OPTIONS)}
-            {renderTextField('Region/State', 'region')}
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Postal Code / Zip Code"
+                value={editedInfo.postal_code || ''}
+                onChange={(e) => handleZipcodeChange(e.target.value)}
+                variant="outlined"
+                helperText="Enter 5-digit US zip code to auto-fill city and state"
+              />
+            </Grid>
             {renderTextField('City', 'city')}
-            {renderTextField('Postal Code', 'postal_code')}
+            {editedInfo.country === 'United States' 
+              ? renderSelectField('State', 'region', US_STATES)
+              : renderTextField('Region/State', 'region')
+            }
             
             <Grid item xs={12}>
               <Divider sx={{ my: 2 }} />
