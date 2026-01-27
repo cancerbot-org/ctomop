@@ -3,6 +3,48 @@
 from django.db import migrations, models
 
 
+def add_columns_if_not_exist(apps, schema_editor):
+    """Add columns only if they don't already exist"""
+    from django.db import connection
+    
+    with connection.cursor() as cursor:
+        # Get existing columns
+        cursor.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='patient_info'
+        """)
+        existing_columns = [row[0] for row in cursor.fetchall()]
+        
+        # Add email if it doesn't exist
+        if 'email' not in existing_columns:
+            cursor.execute("""
+                ALTER TABLE patient_info 
+                ADD COLUMN email VARCHAR(255) NULL
+            """)
+        
+        # Add date_of_birth if it doesn't exist
+        if 'date_of_birth' not in existing_columns:
+            cursor.execute("""
+                ALTER TABLE patient_info 
+                ADD COLUMN date_of_birth DATE NULL
+            """)
+        
+        # Add created_at if it doesn't exist
+        if 'created_at' not in existing_columns:
+            cursor.execute("""
+                ALTER TABLE patient_info 
+                ADD COLUMN created_at TIMESTAMP NULL
+            """)
+        
+        # Add updated_at if it doesn't exist
+        if 'updated_at' not in existing_columns:
+            cursor.execute("""
+                ALTER TABLE patient_info 
+                ADD COLUMN updated_at TIMESTAMP NULL
+            """)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,24 +52,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='patientinfo',
-            name='email',
-            field=models.EmailField(blank=True, max_length=255, null=True),
-        ),
-        migrations.AddField(
-            model_name='patientinfo',
-            name='date_of_birth',
-            field=models.DateField(blank=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='patientinfo',
-            name='created_at',
-            field=models.DateTimeField(auto_now_add=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='patientinfo',
-            name='updated_at',
-            field=models.DateTimeField(auto_now=True, null=True),
-        ),
+        migrations.RunPython(add_columns_if_not_exist, migrations.RunPython.noop),
     ]
