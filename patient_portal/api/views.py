@@ -270,19 +270,14 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     
                     # Get gender concept from FHIR
                     gender_concept = get_gender_concept(patient_resource.get('gender', ''))
-                    gender_source = patient_resource.get('gender', 'unknown')
                     
                     # Create Person
                     person = Person.objects.create(
                         person_id=person_id,
                         year_of_birth=year_of_birth,
                         gender_concept=gender_concept,
-                        gender_source_value=gender_source,
                         race_concept=None,
-                        race_source_value='unknown',
                         ethnicity_concept=None,
-                        ethnicity_source_value='unknown',
-                        person_source_value=f"FHIR-{fhir_patient_id}",
                     )
                     
                     # Create User for the name
