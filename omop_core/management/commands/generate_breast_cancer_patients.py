@@ -328,11 +328,8 @@ class Command(BaseCommand):
             person_id=person_id,
             gender_concept=female_concept,
             year_of_birth=birth_year,
-            month_of_birth=random.randint(1, 12),
-            day_of_birth=random.randint(1, 28),
             race_concept=race_concept,
-            ethnicity_concept=ethnicity_concept,
-            location=location
+            ethnicity_concept=ethnicity_concept
         )
         
         return person
