@@ -109,36 +109,6 @@ class Person(models.Model):
         blank=True,
         db_column='ethnicity_concept_id'
     )
-    provider_id = models.IntegerField(null=True, blank=True)
-    care_site_id = models.IntegerField(null=True, blank=True)
-    person_source_value = models.CharField(max_length=50, null=True, blank=True)
-    gender_source_value = models.CharField(max_length=50, null=True, blank=True)
-    gender_source_concept = models.ForeignKey(
-        Concept,
-        on_delete=models.PROTECT,
-        related_name='person_gender_source',
-        null=True,
-        blank=True,
-        db_column='gender_source_concept_id'
-    )
-    race_source_value = models.CharField(max_length=50, null=True, blank=True)
-    race_source_concept = models.ForeignKey(
-        Concept,
-        on_delete=models.PROTECT,
-        related_name='person_race_source',
-        null=True,
-        blank=True,
-        db_column='race_source_concept_id'
-    )
-    ethnicity_source_value = models.CharField(max_length=50, null=True, blank=True)
-    ethnicity_source_concept = models.ForeignKey(
-        Concept,
-        on_delete=models.PROTECT,
-        related_name='person_ethnicity_source',
-        null=True,
-        blank=True,
-        db_column='ethnicity_source_concept_id'
-    )
     primary_language_concept = models.ForeignKey(
         Concept,
         on_delete=models.PROTECT,
