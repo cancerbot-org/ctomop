@@ -151,21 +151,26 @@ SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.environ.get('SOCIAL_AUTH_GOOGLE_OAUTH2_SEC
 
 # Security settings for production
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
+    # Don't force SSL redirect - Render handles SSL at load balancer
+    SECURE_SSL_REDIRECT = False
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = 'DENY'
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     
-    # Add Railway domain to trusted origins
+    # Add trusted origins for CSRF
     production_url = os.environ.get('PRODUCTION_URL', '')
     railway_domain = os.environ.get('RAILWAY_PUBLIC_DOMAIN', '')
+    render_url = os.environ.get('RENDER_EXTERNAL_URL', '')
     
     csrf_origins = []
     if production_url:
         csrf_origins.append(production_url)
     if railway_domain:
         csrf_origins.append(f'https://{railway_domain}')
+    if render_url:
+        csrf_origins.append(render_url)
     
     CSRF_TRUSTED_ORIGINS = csrf_origins
