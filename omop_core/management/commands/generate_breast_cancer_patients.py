@@ -23,7 +23,8 @@ from django.utils import timezone
 
 from omop_core.models import (
     Person, Location, Concept, Vocabulary, Domain, ConceptClass,
-    Measurement, Observation, ConditionOccurrence, DrugExposure, VisitOccurrence
+    Measurement, Observation, ConditionOccurrence, DrugExposure, VisitOccurrence,
+    PatientInfo
 )
 
 
@@ -247,11 +248,8 @@ class Command(BaseCommand):
         age = random.randint(35, 75)
         birth_year = date.today().year - age
         
-        # Create location
-        location = self.create_location(patient_num)
-        
-        # Create person
-        person = self.create_person(person_id, birth_year, location)
+        # Create person (location not needed for demo)
+        person = self.create_person(person_id, birth_year)
         
         # Create visit
         visit = self.create_visit(person)
@@ -330,6 +328,29 @@ class Command(BaseCommand):
             year_of_birth=birth_year,
             race_concept=race_concept,
             ethnicity_concept=ethnicity_concept
+        )
+        
+        # Create PatientInfo with US location data
+        us_states = ['NY', 'CA', 'IL', 'TX', 'MA', 'FL', 'PA', 'OH', 'GA', 'NC']
+        cities = {
+            'NY': 'New York', 'CA': 'Los Angeles', 'IL': 'Chicago',
+            'TX': 'Houston', 'MA': 'Boston', 'FL': 'Miami',
+            'PA': 'Philadelphia', 'OH': 'Columbus', 'GA': 'Atlanta', 'NC': 'Charlotte'
+        }
+        
+        state = random.choice(us_states)
+        city = cities[state]
+        # Generate random 5-digit US zip code
+        zip_code = f"{random.randint(10000, 99999)}"
+        
+        PatientInfo.objects.create(
+            person=person,
+            country='United States',
+            region=state,
+            city=city,
+            postal_code=zip_code,
+            gender='Female',
+            date_of_birth=date(birth_year, random.randint(1, 12), random.randint(1, 28))
         )
         
         return person

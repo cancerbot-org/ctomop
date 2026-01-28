@@ -37,12 +37,24 @@ def generate_diagnosis_date(birth_date):
     return min_diagnosis + timedelta(days=random_days)
 
 def generate_patient_resource(patient_id, first_name, last_name):
-    """Generate a FHIR Patient resource"""
+    """Generate a FHIR Patient resource with US address"""
     birth_date = generate_random_date()
     gender = "female"  # Breast cancer primarily affects women
     
     # Generate phone number
     phone = f"+1-555-{random.randint(100, 999)}-{random.randint(1000, 9999)}"
+    
+    # US states and cities
+    us_locations = [
+        ('New York', 'NY'), ('Los Angeles', 'CA'), ('Chicago', 'IL'),
+        ('Houston', 'TX'), ('Boston', 'MA'), ('Miami', 'FL'),
+        ('Philadelphia', 'PA'), ('Columbus', 'OH'), ('Atlanta', 'GA'),
+        ('Charlotte', 'NC'), ('Seattle', 'WA'), ('Denver', 'CO'),
+        ('Phoenix', 'AZ'), ('San Francisco', 'CA'), ('Dallas', 'TX')
+    ]
+    
+    city, state = random.choice(us_locations)
+    zip_code = f"{random.randint(10000, 99999)}"
     
     patient = {
         "resourceType": "Patient",
@@ -69,7 +81,18 @@ def generate_patient_resource(patient_id, first_name, last_name):
             }
         ],
         "gender": gender,
-        "birthDate": birth_date.strftime("%Y-%m-%d")
+        "birthDate": birth_date.strftime("%Y-%m-%d"),
+        "address": [
+            {
+                "use": "home",
+                "type": "both",
+                "line": [f"{random.randint(100, 9999)} {random.choice(['Main', 'Oak', 'Maple', 'Elm', 'Park'])} St"],
+                "city": city,
+                "state": state,
+                "postalCode": zip_code,
+                "country": "United States"
+            }
+        ]
     }
     
     return patient, birth_date
@@ -431,8 +454,8 @@ def generate_fhir_bundle():
         "entry": []
     }
     
-    # Generate 50 patients
-    num_patients = 50
+    # Generate 200 patients
+    num_patients = 200
     
     for i in range(1, num_patients + 1):
         first_name = random.choice(first_names)
