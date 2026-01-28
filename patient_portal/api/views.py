@@ -251,21 +251,6 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     last_person = Person.objects.all().order_by('-person_id').first()
                     person_id = last_person.person_id + 1 if last_person else 1000
                     
-                    # Extract name
-                    first_name = ''
-                    last_name = ''
-                    if patient_resource.get('name'):
-                        name = patient_resource['name'][0]
-                        if name.get('given'):
-                            first_name = name['given'][0]
-                        if name.get('family'):
-                            last_name = name['family']
-                    
-                    # Parse birth date for PatientInfo
-                    birth_date = None
-                    if patient_resource.get('birthDate'):
-                        birth_date = datetime.strptime(patient_resource['birthDate'], '%Y-%m-%d').date()
-                    
                     # Get gender concept from FHIR
                     gender_concept = get_gender_concept(patient_resource.get('gender', ''))
                     
@@ -276,84 +261,10 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         ethnicity_concept=None,
                     )
                     
-                    # Create User for the name
-                    try:
-                        User.objects.create(
-                            id=person_id,
-                            username=f"patient_{person_id}",
-                            first_name=first_name,
-                            last_name=last_name,
-                        )
-                    except Exception as e:
-                        # If User creation fails (duplicate id), continue anyway
-                        pass
-                    
-                    # Extract disease, stage, and histologic type from Condition
-                    disease = 'Breast Cancer'
-                    stage = ''
-                    histologic_type = ''
-                    condition_date = None
-                    
-                    for condition in data['conditions']:
-                        # Get histologic type from code
-                        code = condition.get('code', {})
-                        if code.get('text'):
-                            histologic_type = code['text']
-                        elif code.get('coding') and len(code['coding']) > 0:
-                            histologic_type = code['coding'][0].get('display', '')
-                        
-                        # Get stage
-                        stages = condition.get('stage', [])
-                        if stages and len(stages) > 0:
-                            stage_summary = stages[0].get('summary', {})
-                            if stage_summary.get('text'):
-                                # Extract just the stage part (e.g., "Breast Cancer Stage II" -> "II")
-                                stage_text = stage_summary['text']
-                                if 'Stage' in stage_text:
-                                    stage = stage_text.split('Stage')[-1].strip()
-                            elif stage_summary.get('coding') and len(stage_summary['coding']) > 0:
-                                stage = stage_summary['coding'][0].get('code', '')
-                        
-                        # Get condition onset date
-                        if condition.get('onsetDateTime'):
-                            try:
-                                condition_date = datetime.strptime(condition['onsetDateTime'], '%Y-%m-%d')
-                            except ValueError:
-                                pass
-                        
-                        # Try to get histologic type from note if not in code
-                        if not histologic_type and condition.get('note'):
-                            for note in condition['note']:
-                                note_text = note.get('text', '')
-                                if 'Histologic type:' in note_text:
-                                    histologic_type = note_text.split('Histologic type:')[-1].strip()
-                    
-                    # Find the most recent observation date
-                    most_recent_date = condition_date
-                    for observation in data['observations']:
-                        if observation.get('effectiveDateTime'):
-                            try:
-                                obs_date = datetime.strptime(observation['effectiveDateTime'], '%Y-%m-%d')
-                                if most_recent_date is None or obs_date > most_recent_date:
-                                    most_recent_date = obs_date
-                            except ValueError:
-                                pass
-                    
-                    # Create PatientInfo
+                    # Create minimal PatientInfo
                     patient_info = PatientInfo.objects.create(
                         person=person,
-                        date_of_birth=birth_date,
-                        disease=disease,
-                        stage=stage,
-                        histologic_type=histologic_type,
                     )
-                    
-                    # Update timestamps if we have a date
-                    if most_recent_date:
-                        PatientInfo.objects.filter(id=patient_info.id).update(
-                            created_at=most_recent_date,
-                            updated_at=most_recent_date
-                        )
                     
                     created_count += 1
                     
