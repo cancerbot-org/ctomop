@@ -263,6 +263,19 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         month_of_birth = birth_date.month
                         day_of_birth = birth_date.day
                     
+                    # Extract address information from FHIR
+                    country = None
+                    region = None
+                    city = None
+                    postal_code = None
+                    
+                    if patient_resource.get('address') and len(patient_resource['address']) > 0:
+                        address = patient_resource['address'][0]
+                        country = address.get('country')
+                        region = address.get('state')
+                        city = address.get('city')
+                        postal_code = address.get('postalCode')
+                    
                     # Get gender concept from FHIR
                     gender_concept = get_gender_concept(patient_resource.get('gender', ''))
                     
@@ -397,13 +410,17 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                                 type_concept = measurement_concept
                             
                             Measurement.objects.create(
-                                measurement_id=measurement_id,
-                                person=person,
-                                measurement_concept=measurement_concept,
-                                measurement_date=obs_date.date(),
-                                measurement_datetime=obs_date,
-                                measurement_type_concept=type_concept,
-                                value_as_number=value_number,
+                                measurem with address information
+                    patient_info = PatientInfo.objects.create(
+                        person=person,
+                        date_of_birth=birth_date,
+                        disease=disease,
+                        stage=stage,
+                        histologic_type=histologic_type,
+                        country=country,
+                        region=region,
+                        city=city,
+                        postal_code=postal_codnumber,
                                 value_as_string=value_string,
                                 measurement_source_value=obs_name[:50],
                                 unit_source_value=unit[:50] if unit else None
