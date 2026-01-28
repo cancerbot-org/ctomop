@@ -5,8 +5,9 @@ from .models import (
 
 @admin.register(Person)
 class PersonAdmin(admin.ModelAdmin):
-    list_display = ['person_id', 'gender_concept', 'ethnicity_concept']
+    list_display = ['person_id', 'year_of_birth', 'month_of_birth', 'day_of_birth', 'gender_concept', 'ethnicity_concept']
     search_fields = ['person_id']
+    list_filter = ['year_of_birth']
 
 
 @admin.register(PatientInfo)
