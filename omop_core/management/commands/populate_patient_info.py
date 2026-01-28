@@ -188,15 +188,10 @@ class Command(BaseCommand):
         """Extract demographic information from Person model"""
         data = {}
         
-        # Age calculation
+        # Age calculation from year_of_birth
         if person.year_of_birth:
             today = date.today()
             age = today.year - person.year_of_birth
-            if today.month < person.month_of_birth or (
-                today.month == person.month_of_birth and 
-                today.day < (person.day_of_birth or 1)
-            ):
-                age -= 1
             data['patient_age'] = age
 
         # Gender mapping

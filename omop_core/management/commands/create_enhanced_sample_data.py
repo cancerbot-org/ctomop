@@ -88,11 +88,8 @@ class Command(BaseCommand):
             defaults={
                 'gender_concept': gender_concept,
                 'year_of_birth': 1975,
-                'month_of_birth': 6,
-                'day_of_birth': 15,
                 'race_concept': race_concept,
-                'ethnicity_concept': ethnicity_concept,
-                'person_source_value': 'PATIENT001'
+                'ethnicity_concept': ethnicity_concept
             }
         )
         
