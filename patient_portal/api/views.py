@@ -261,12 +261,10 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         if name.get('family'):
                             last_name = name['family']
                     
-                    # Parse birth date
+                    # Parse birth date for PatientInfo
                     birth_date = None
-                    year_of_birth = datetime.now().year - 50
                     if patient_resource.get('birthDate'):
                         birth_date = datetime.strptime(patient_resource['birthDate'], '%Y-%m-%d').date()
-                        year_of_birth = birth_date.year
                     
                     # Get gender concept from FHIR
                     gender_concept = get_gender_concept(patient_resource.get('gender', ''))
@@ -274,9 +272,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     # Create Person
                     person = Person.objects.create(
                         person_id=person_id,
-                        year_of_birth=year_of_birth,
                         gender_concept=gender_concept,
-                        race_concept=None,
                         ethnicity_concept=None,
                     )
                     
