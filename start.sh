@@ -4,8 +4,8 @@ set -e
 echo "Running migrations..."
 python manage.py migrate
 
-echo "Creating admin user..."
-python manage.py setup_admin
+echo "Creating/resetting admin user..."
+python reset_admin.py
 
 echo "Starting gunicorn..."
 exec gunicorn ctomop.wsgi:application
