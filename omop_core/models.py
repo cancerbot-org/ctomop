@@ -100,35 +100,12 @@ class Person(models.Model):
         blank=True,
         db_column='ethnicity_concept_id'
     )
-    primary_language_concept = models.ForeignKey(
-        Concept,
-        on_delete=models.PROTECT,
-        related_name='person_primary_language',
-        null=True,
-        blank=True,
-        db_column='primary_language_concept_id'
-    )
-    secondary_languages = models.TextField(null=True, blank=True)
-    language_skill_level = models.CharField(max_length=50, null=True, blank=True)
-    location_id = models.IntegerField(null=True, blank=True)
     
     class Meta:
         db_table = 'person'
     
     def __str__(self):
         return f"Person {self.person_id}"
-    
-    def get_language_skills_summary(self):
-        """Return a dictionary of language skills in format {language_name: skill_level}"""
-        skills = {}
-        for lang_skill in self.language_skills.all():
-            skills[lang_skill.language_concept.concept_name] = lang_skill.skill_level
-        return skills
-    
-    def get_primary_language(self):
-        """Return the primary language or None if not set"""
-        primary_lang = self.language_skills.filter(is_primary=True).first()
-        return primary_lang.language_concept.concept_name if primary_lang else None
 
 
 class PersonLanguageSkill(models.Model):
