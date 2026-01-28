@@ -276,6 +276,30 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         city = address.get('city')
                         postal_code = address.get('postalCode')
                     
+                    # Extract ethnicity and vital signs from extensions
+                    ethnicity = None
+                    weight = None
+                    height = None
+                    systolic_bp = None
+                    diastolic_bp = None
+                    heart_rate = None
+                    
+                    if patient_resource.get('extension'):
+                        for ext in patient_resource['extension']:
+                            url = ext.get('url', '')
+                            if 'ethnicity' in url:
+                                ethnicity = ext.get('valueString')
+                            elif 'bodyWeight' in url:
+                                weight = ext.get('valueQuantity', {}).get('value')
+                            elif 'bodyHeight' in url:
+                                height = ext.get('valueQuantity', {}).get('value')
+                            elif 'systolic-bp' in url:
+                                systolic_bp = ext.get('valueQuantity', {}).get('value')
+                            elif 'diastolic-bp' in url:
+                                diastolic_bp = ext.get('valueQuantity', {}).get('value')
+                            elif 'heartRate' in url:
+                                heart_rate = ext.get('valueQuantity', {}).get('value')
+                    
                     # Get gender concept from FHIR
                     gender_concept = get_gender_concept(patient_resource.get('gender', ''))
                     
@@ -423,7 +447,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                             )
                             measurement_id += 1
                     
-                    # Create PatientInfo with address information
+                    # Create PatientInfo with address, ethnicity, and vital signs
                     patient_info = PatientInfo.objects.create(
                         person=person,
                         date_of_birth=birth_date,
@@ -434,6 +458,14 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         region=region,
                         city=city,
                         postal_code=postal_code,
+                        ethnicity=ethnicity,
+                        weight=weight,
+                        weight_units='kg' if weight else None,
+                        height=height,
+                        height_units='cm' if height else None,
+                        systolic_blood_pressure=systolic_bp,
+                        diastolic_blood_pressure=diastolic_bp,
+                        heartrate=heart_rate,
                     )
                     
                     created_count += 1

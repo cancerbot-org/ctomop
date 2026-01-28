@@ -139,6 +139,23 @@ class Command(BaseCommand):
         zip_code = f"{random.randint(10000, 99999)}"
         phone = f"+1-555-{random.randint(100, 999)}-{random.randint(1000, 9999)}"
         
+        # Generate ethnicity
+        ethnicities = [
+            "Caucasian/White",
+            "Hispanic/Latino",
+            "Black/African-American",
+            "Asian",
+            "Native American"
+        ]
+        ethnicity = random.choice(ethnicities)
+        
+        # Generate vital signs
+        weight_kg = round(random.uniform(50, 100), 1)
+        height_cm = round(random.uniform(150, 180), 1)
+        systolic = random.randint(110, 140)
+        diastolic = random.randint(70, 90)
+        heart_rate = random.randint(60, 100)
+        
         return {
             "resourceType": "Patient",
             "id": str(patient_id),
@@ -149,6 +166,32 @@ class Command(BaseCommand):
             }],
             "gender": "female",
             "birthDate": birth_date.strftime('%Y-%m-%d'),
+            "extension": [
+                {
+                    "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity",
+                    "valueString": ethnicity
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/patient-bodyWeight",
+                    "valueQuantity": {"value": weight_kg, "unit": "kg"}
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/patient-bodyHeight",
+                    "valueQuantity": {"value": height_cm, "unit": "cm"}
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/patient-systolic-bp",
+                    "valueQuantity": {"value": systolic, "unit": "mmHg"}
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/patient-diastolic-bp",
+                    "valueQuantity": {"value": diastolic, "unit": "mmHg"}
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/patient-heartRate",
+                    "valueQuantity": {"value": heart_rate, "unit": "beats/min"}
+                }
+            ],
             "telecom": [{
                 "system": "phone",
                 "value": phone,
