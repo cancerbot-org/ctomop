@@ -410,7 +410,20 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                                 type_concept = measurement_concept
                             
                             Measurement.objects.create(
-                                measurem with address information
+                                measurement_id=measurement_id,
+                                person=person,
+                                measurement_concept=measurement_concept,
+                                measurement_date=obs_date.date(),
+                                measurement_datetime=obs_date,
+                                measurement_type_concept=type_concept,
+                                value_as_number=value_number,
+                                value_as_string=value_string,
+                                measurement_source_value=obs_name[:50],
+                                unit_source_value=unit[:50] if unit else None
+                            )
+                            measurement_id += 1
+                    
+                    # Create PatientInfo with address information
                     patient_info = PatientInfo.objects.create(
                         person=person,
                         date_of_birth=birth_date,
@@ -420,20 +433,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         country=country,
                         region=region,
                         city=city,
-                        postal_code=postal_codnumber,
-                                value_as_string=value_string,
-                                measurement_source_value=obs_name[:50],
-                                unit_source_value=unit[:50] if unit else None
-                            )
-                            measurement_id += 1
-                    
-                    # Create PatientInfo
-                    patient_info = PatientInfo.objects.create(
-                        person=person,
-                        date_of_birth=birth_date,
-                        disease=disease,
-                        stage=stage,
-                        histologic_type=histologic_type,
+                        postal_code=postal_code,
                     )
                     
                     created_count += 1
