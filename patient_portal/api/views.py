@@ -251,6 +251,11 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     last_person = Person.objects.all().order_by('-person_id').first()
                     person_id = last_person.person_id + 1 if last_person else 1000
                     
+                    # Parse birth date
+                    birth_date = None
+                    if patient_resource.get('birthDate'):
+                        birth_date = datetime.strptime(patient_resource['birthDate'], '%Y-%m-%d').date()
+                    
                     # Get gender concept from FHIR
                     gender_concept = get_gender_concept(patient_resource.get('gender', ''))
                     
@@ -261,9 +266,147 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         ethnicity_concept=None,
                     )
                     
-                    # Create minimal PatientInfo
+                    # Extract disease, stage, and histologic type from Condition
+                    disease = 'Breast Cancer'
+                    stage = ''
+                    histologic_type = ''
+                    condition_date = None
+                    
+                    for condition in data['conditions']:
+                        # Get histologic type from code
+                        code = condition.get('code', {})
+                        if code.get('text'):
+                            histologic_type = code['text']
+                        elif code.get('coding') and len(code['coding']) > 0:
+                            histologic_type = code['coding'][0].get('display', '')
+                        
+                        # Get stage
+                        stages = condition.get('stage', [])
+                        if stages and len(stages) > 0:
+                            stage_summary = stages[0].get('summary', {})
+                            if stage_summary.get('text'):
+                                stage_text = stage_summary['text']
+                                if 'Stage' in stage_text:
+                                    stage = stage_text.split('Stage')[-1].strip()
+                            elif stage_summary.get('coding') and len(stage_summary['coding']) > 0:
+                                stage = stage_summary['coding'][0].get('code', '')
+                        
+                        # Get condition onset date
+                        if condition.get('onsetDateTime'):
+                            try:
+                                condition_date = datetime.strptime(condition['onsetDateTime'], '%Y-%m-%d')
+                            except ValueError:
+                                pass
+                    
+                    # Create ConditionOccurrence for the diagnosis
+                    if condition_date:
+                        from omop_core.models import ConditionOccurrence
+                        last_condition = ConditionOccurrence.objects.all().order_by('-condition_occurrence_id').first()
+                        condition_id = last_condition.condition_occurrence_id + 1 if last_condition else 1
+                        
+                        # Get breast cancer concept (using a standard concept ID)
+                        breast_cancer_concept = None
+                        try:
+                            breast_cancer_concept = Concept.objects.filter(
+                                concept_name__icontains='breast cancer'
+                            ).first()
+                        except:
+                            pass
+                        
+                        if breast_cancer_concept:
+                            # Get EHR type concept (32817 = EHR)
+                            type_concept = Concept.objects.filter(concept_id=32817).first()
+                            if not type_concept:
+                                type_concept = breast_cancer_concept
+                            
+                            ConditionOccurrence.objects.create(
+                                condition_occurrence_id=condition_id,
+                                person=person,
+                                condition_concept=breast_cancer_concept,
+                                condition_start_date=condition_date.date(),
+                                condition_start_datetime=condition_date,
+                                condition_type_concept=type_concept,
+                                condition_source_value=disease
+                            )
+                    
+                    # Process observations and create Measurement records
+                    from omop_core.models import Measurement
+                    last_measurement = Measurement.objects.all().order_by('-measurement_id').first()
+                    measurement_id = last_measurement.measurement_id + 1 if last_measurement else 1
+                    
+                    for observation in data['observations']:
+                        obs_date = None
+                        if observation.get('effectiveDateTime'):
+                            try:
+                                obs_date = datetime.strptime(observation['effectiveDateTime'], '%Y-%m-%d')
+                            except ValueError:
+                                continue
+                        
+                        if not obs_date:
+                            continue
+                        
+                        # Get observation name and value
+                        obs_code = observation.get('code', {})
+                        obs_name = obs_code.get('text', '')
+                        if not obs_name and obs_code.get('coding'):
+                            obs_name = obs_code['coding'][0].get('display', '')
+                        
+                        # Get value
+                        value_number = None
+                        value_string = None
+                        unit = None
+                        
+                        if observation.get('valueQuantity'):
+                            value_qty = observation['valueQuantity']
+                            value_number = value_qty.get('value')
+                            unit = value_qty.get('unit')
+                        elif observation.get('valueCodeableConcept'):
+                            value_concept = observation['valueCodeableConcept']
+                            if value_concept.get('text'):
+                                value_string = value_concept['text']
+                            elif value_concept.get('coding'):
+                                value_string = value_concept['coding'][0].get('display')
+                        
+                        # Find or create measurement concept
+                        measurement_concept = None
+                        try:
+                            measurement_concept = Concept.objects.filter(
+                                concept_name__icontains=obs_name[:50]
+                            ).first()
+                        except:
+                            pass
+                        
+                        if not measurement_concept:
+                            # Use a generic lab test concept if not found
+                            measurement_concept = Concept.objects.filter(concept_id=3000963).first()
+                        
+                        if measurement_concept:
+                            # Get Lab type concept (32856 = Lab)
+                            type_concept = Concept.objects.filter(concept_id=32856).first()
+                            if not type_concept:
+                                type_concept = measurement_concept
+                            
+                            Measurement.objects.create(
+                                measurement_id=measurement_id,
+                                person=person,
+                                measurement_concept=measurement_concept,
+                                measurement_date=obs_date.date(),
+                                measurement_datetime=obs_date,
+                                measurement_type_concept=type_concept,
+                                value_as_number=value_number,
+                                value_as_string=value_string,
+                                measurement_source_value=obs_name[:50],
+                                unit_source_value=unit[:50] if unit else None
+                            )
+                            measurement_id += 1
+                    
+                    # Create PatientInfo
                     patient_info = PatientInfo.objects.create(
                         person=person,
+                        date_of_birth=birth_date,
+                        disease=disease,
+                        stage=stage,
+                        histologic_type=histologic_type,
                     )
                     
                     created_count += 1
