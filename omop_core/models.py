@@ -92,6 +92,9 @@ class Person(models.Model):
         blank=True,
         db_column='gender_concept_id'
     )
+    year_of_birth = models.IntegerField()
+    month_of_birth = models.IntegerField(null=True, blank=True)
+    day_of_birth = models.IntegerField(null=True, blank=True)
     ethnicity_concept = models.ForeignKey(
         Concept, 
         on_delete=models.PROTECT, 

@@ -253,16 +253,26 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     
                     # Parse birth date
                     birth_date = None
+                    year_of_birth = None
+                    month_of_birth = None
+                    day_of_birth = None
+                    
                     if patient_resource.get('birthDate'):
                         birth_date = datetime.strptime(patient_resource['birthDate'], '%Y-%m-%d').date()
+                        year_of_birth = birth_date.year
+                        month_of_birth = birth_date.month
+                        day_of_birth = birth_date.day
                     
                     # Get gender concept from FHIR
                     gender_concept = get_gender_concept(patient_resource.get('gender', ''))
                     
-                    # Create Person
+                    # Create Person with OMOP-compliant birth date fields
                     person = Person.objects.create(
                         person_id=person_id,
                         gender_concept=gender_concept,
+                        year_of_birth=year_of_birth or datetime.now().year - 50,
+                        month_of_birth=month_of_birth,
+                        day_of_birth=day_of_birth,
                         ethnicity_concept=None,
                     )
                     
