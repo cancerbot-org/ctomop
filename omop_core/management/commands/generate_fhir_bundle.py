@@ -80,6 +80,14 @@ class Command(BaseCommand):
             "entry": []
         }
         
+        # For exactly 10 patients, guarantee exact distribution: 4/3/2/1 for 1/2/3/4 lines
+        if num_patients == 10:
+            therapy_lines = [1, 1, 1, 1, 2, 2, 2, 3, 3, 4]
+            random.shuffle(therapy_lines)
+        else:
+            # For other counts, use probabilistic distribution (all with at least 1 line)
+            therapy_lines = None
+        
         for i in range(1, num_patients + 1):
             first_name = random.choice(self.get_first_names())
             last_name = random.choice(self.get_last_names())
@@ -101,6 +109,10 @@ class Command(BaseCommand):
                 "resource": condition
             })
             
+            # Generate tumor characteristics (size, lymph nodes, metastasis)
+            for obs in self.generate_tumor_characteristics(i, diagnosis_date):
+                bundle["entry"].append(obs)
+            
             # Generate lab observations
             lab_date = datetime.now() - timedelta(days=random.randint(1, 30))
             for obs in self.generate_lab_observations(i, lab_date):
@@ -115,7 +127,8 @@ class Command(BaseCommand):
                 bundle["entry"].append(obs)
             
             # Generate prior therapy (medication statements)
-            for med in self.generate_prior_therapy(i, diagnosis_date):
+            assigned_lines = therapy_lines[i-1] if therapy_lines else None
+            for med in self.generate_prior_therapy(i, diagnosis_date, assigned_lines):
                 bundle["entry"].append(med)
         
         return bundle
@@ -156,6 +169,12 @@ class Command(BaseCommand):
         diastolic = random.randint(70, 90)
         heart_rate = random.randint(60, 100)
         
+        # Generate ECOG Performance Status (0-4, where 0 = fully active, 4 = bedridden)
+        # Weight toward better performance status (0-2 more common than 3-4)
+        ecog_choices = [0, 1, 2, 3, 4]
+        ecog_weights = [30, 40, 20, 8, 2]  # Most patients have ECOG 0-2
+        ecog = random.choices(ecog_choices, weights=ecog_weights)[0]
+        
         return {
             "resourceType": "Patient",
             "id": str(patient_id),
@@ -190,6 +209,10 @@ class Command(BaseCommand):
                 {
                     "url": "http://hl7.org/fhir/StructureDefinition/patient-heartRate",
                     "valueQuantity": {"value": heart_rate, "unit": "beats/min"}
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/patient-ecog-performance-status",
+                    "valueInteger": ecog
                 }
             ],
             "telecom": [{
@@ -279,6 +302,134 @@ class Command(BaseCommand):
             }]
         }
 
+    def generate_tumor_characteristics(self, patient_id, diagnosis_date):
+        """Generate tumor characteristics (size, lymph nodes, metastasis)"""
+        observations = []
+        
+        # Tumor size (0.5 to 10 cm, weighted toward smaller sizes)
+        tumor_size = round(random.triangular(0.5, 10.0, 2.5), 1)
+        
+        # Lymph node status (Positive/Negative/Unknown)
+        lymph_node_choices = ["Positive", "Negative", "Unknown"]
+        lymph_node_weights = [40, 55, 5]  # 40% positive, 55% negative, 5% unknown
+        lymph_node_status = random.choices(lymph_node_choices, weights=lymph_node_weights)[0]
+        
+        # Metastasis status (Positive/Negative/Unknown)
+        metastasis_choices = ["Positive", "Negative", "Unknown"]
+        metastasis_weights = [25, 70, 5]  # 25% metastatic, 70% non-metastatic, 5% unknown
+        metastasis_status = random.choices(metastasis_choices, weights=metastasis_weights)[0]
+        
+        # Tumor size observation
+        tumor_obs = {
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-tumor-size",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-tumor-size",
+                "status": "final",
+                "category": [{
+                    "coding": [{
+                        "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                        "code": "imaging"
+                    }]
+                }],
+                "code": {
+                    "coding": [{
+                        "system": "http://loinc.org",
+                        "code": "21889-1",
+                        "display": "Size Tumor"
+                    }],
+                    "text": "Tumor size"
+                },
+                "subject": {
+                    "reference": f"Patient/{patient_id}"
+                },
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueQuantity": {
+                    "value": tumor_size,
+                    "unit": "cm",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "cm"
+                }
+            }
+        }
+        observations.append(tumor_obs)
+        
+        # Lymph node status observation
+        lymph_obs = {
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-lymph-nodes",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-lymph-nodes",
+                "status": "final",
+                "category": [{
+                    "coding": [{
+                        "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                        "code": "laboratory"
+                    }]
+                }],
+                "code": {
+                    "coding": [{
+                        "system": "http://loinc.org",
+                        "code": "92837-4",
+                        "display": "Lymph nodes involvement"
+                    }],
+                    "text": "Lymph node status"
+                },
+                "subject": {
+                    "reference": f"Patient/{patient_id}"
+                },
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueCodeableConcept": {
+                    "coding": [{
+                        "system": "http://snomed.info/sct",
+                        "code": "10828004" if lymph_node_status == "Positive" else "260385009",
+                        "display": lymph_node_status
+                    }],
+                    "text": lymph_node_status
+                }
+            }
+        }
+        observations.append(lymph_obs)
+        
+        # Metastasis status observation
+        met_obs = {
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-metastasis",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-metastasis",
+                "status": "final",
+                "category": [{
+                    "coding": [{
+                        "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                        "code": "imaging"
+                    }]
+                }],
+                "code": {
+                    "coding": [{
+                        "system": "http://loinc.org",
+                        "code": "21907-1",
+                        "display": "Distant metastases status"
+                    }],
+                    "text": "Metastasis status"
+                },
+                "subject": {
+                    "reference": f"Patient/{patient_id}"
+                },
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueCodeableConcept": {
+                    "coding": [{
+                        "system": "http://snomed.info/sct",
+                        "code": "10828004" if metastasis_status == "Positive" else "260385009",
+                        "display": metastasis_status
+                    }],
+                    "text": metastasis_status
+                }
+            }
+        }
+        observations.append(met_obs)
+        
+        return observations
+
     def generate_lab_observations(self, patient_id, lab_date):
         """Generate lab observations (CBC, liver, kidney function)"""
         observations = []
@@ -337,7 +488,7 @@ class Command(BaseCommand):
         return observations
 
     def generate_biomarker_observations(self, patient_id, diagnosis_date):
-        """Generate biomarker observations (HER2, ER, PR)"""
+        """Generate biomarker observations (HER2, ER, PR, Ki67, PD-L1)"""
         observations = []
         
         # 15% chance of TNBC (all negative)
@@ -395,57 +546,200 @@ class Command(BaseCommand):
             }
             observations.append(obs)
         
+        # Ki67 Proliferation Index (percentage 5-95%, weighted toward lower values)
+        ki67_index = round(random.triangular(5, 95, 20))
+        
+        ki67_obs = {
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-ki67",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-ki67",
+                "status": "final",
+                "category": [{
+                    "coding": [{
+                        "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                        "code": "laboratory"
+                    }]
+                }],
+                "code": {
+                    "coding": [{
+                        "system": "http://loinc.org",
+                        "code": "85337-4",
+                        "display": "Ki-67 [Interpretation] in Tissue"
+                    }],
+                    "text": "Ki67 Proliferation Index"
+                },
+                "subject": {
+                    "reference": f"Patient/{patient_id}"
+                },
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueQuantity": {
+                    "value": ki67_index,
+                    "unit": "%",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "%"
+                }
+            }
+        }
+        observations.append(ki67_obs)
+        
+        # PD-L1 Status (percentage 0-100%, or Positive/Negative)
+        pd_l1_percentage = random.randint(0, 100)
+        pd_l1_status = "Positive" if pd_l1_percentage >= 1 else "Negative"
+        
+        pdl1_obs = {
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-pdl1",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-pdl1",
+                "status": "final",
+                "category": [{
+                    "coding": [{
+                        "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                        "code": "laboratory"
+                    }]
+                }],
+                "code": {
+                    "coding": [{
+                        "system": "http://loinc.org",
+                        "code": "85147-7",
+                        "display": "PD-L1 by clone 22C3 [Interpretation] in Tissue"
+                    }],
+                    "text": "PD-L1 Status"
+                },
+                "subject": {
+                    "reference": f"Patient/{patient_id}"
+                },
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueCodeableConcept": {
+                    "coding": [{
+                        "system": "http://snomed.info/sct",
+                        "code": "10828004" if pd_l1_status == "Positive" else "260385009",
+                        "display": pd_l1_status
+                    }],
+                    "text": pd_l1_status
+                },
+                "component": [{
+                    "code": {
+                        "coding": [{
+                            "system": "http://loinc.org",
+                            "code": "85147-7",
+                            "display": "PD-L1 percentage"
+                        }],
+                        "text": "PD-L1 tumor cells percentage"
+                    },
+                    "valueQuantity": {
+                        "value": pd_l1_percentage,
+                        "unit": "%",
+                        "system": "http://unitsofmeasure.org",
+                        "code": "%"
+                    }
+                }]
+            }
+        }
+        observations.append(pdl1_obs)
+        
         return observations
 
     def generate_genetic_mutations(self, patient_id, diagnosis_date):
-        """Generate genetic mutation observations"""
+        """Generate genetic mutation observations with detailed variant information"""
         observations = []
         
-        # 10-15% have BRCA mutations
-        has_brca = random.random() < 0.12
-        
-        mutations = []
-        if has_brca:
-            # BRCA1 or BRCA2
-            mutations.append(("BRCA1" if random.random() < 0.5 else "BRCA2", "Detected"))
-        
-        # Other common mutations (30-40% have one or more)
-        if random.random() < 0.35:
-            mutations.append(("TP53", "Detected"))
-        if random.random() < 0.30:
-            mutations.append(("PIK3CA", "Detected"))
-        if random.random() < 0.15:
-            mutations.append(("PTEN", "Detected"))
-        if random.random() < 0.10:
-            mutations.append(("ATM", "Detected"))
-        if random.random() < 0.08:
-            mutations.append(("CHEK2", "Detected"))
-        if random.random() < 0.05:
-            mutations.append(("PALB2", "Detected"))
-        
-        # If no mutations, add "No significant mutations detected"
-        if not mutations:
-            mutations.append(("Genomic", "No significant mutations detected"))
-        
-        gene_loinc_codes = {
-            "BRCA1": "21636-6",
-            "BRCA2": "21637-4",
-            "TP53": "47423-8",
-            "PIK3CA": "55233-1",
-            "PTEN": "48676-1",
-            "ATM": "48675-3",
-            "CHEK2": "48004-6",
-            "PALB2": "88039-1",
-            "Genomic": "81247-9"
+        # Common breast cancer genes with typical mutations
+        bc_genes = {
+            "BRCA1": {
+                "mutations": ["c.68_69delAG", "c.5266dupC", "c.181T>G", "c.3756_3759del", "185delAG"],
+                "weight": 0.06
+            },
+            "BRCA2": {
+                "mutations": ["c.5946delT", "c.9097dupA", "c.7617+1G>A", "6174delT", "c.8537_8538del"],
+                "weight": 0.06
+            },
+            "TP53": {
+                "mutations": ["R175H", "R248Q", "R273H", "R248W", "R282W"],
+                "weight": 0.35
+            },
+            "PIK3CA": {
+                "mutations": ["E542K", "E545K", "H1047R", "H1047L", "E726K"],
+                "weight": 0.30
+            },
+            "PTEN": {
+                "mutations": ["R130*", "R173C", "R233*", "R335*", "c.209+1G>T"],
+                "weight": 0.15
+            },
+            "ATM": {
+                "mutations": ["c.5932G>T", "c.6095G>A", "c.8122G>A", "c.7271T>G"],
+                "weight": 0.10
+            },
+            "CHEK2": {
+                "mutations": ["1100delC", "I157T", "R117G", "IVS2+1G>A"],
+                "weight": 0.08
+            },
+            "PALB2": {
+                "mutations": ["c.3113G>A", "c.1676del", "c.509_510delGA", "c.172_175delTTGT"],
+                "weight": 0.05
+            },
+            "CDH1": {
+                "mutations": ["c.1018A>G", "c.1137G>A", "c.283C>T", "c.1901C>T"],
+                "weight": 0.03
+            },
+            "ERBB2": {
+                "mutations": ["L755S", "V777L", "G776delinsVC", "D769H"],
+                "weight": 0.05
+            }
         }
         
-        for gene, status in mutations:
+        interpretations = ["Pathogenic", "Likely pathogenic", "VUS", "Likely benign", "Benign"]
+        interpretation_weights = [0.30, 0.25, 0.30, 0.10, 0.05]
+        
+        # Generate 0-4 mutations per patient
+        num_mutations = random.choices([0, 1, 2, 3, 4], weights=[0.30, 0.35, 0.20, 0.10, 0.05])[0]
+        
+        selected_genes = []
+        if num_mutations > 0:
+            # Weight genes by their frequency
+            gene_names = list(bc_genes.keys())
+            gene_weights = [bc_genes[g]["weight"] for g in gene_names]
+            selected_genes = random.sample(
+                random.choices(gene_names, weights=gene_weights, k=num_mutations*2),
+                k=min(num_mutations, len(gene_names))
+            )
+        
+        for gene in selected_genes:
+            mutation = random.choice(bc_genes[gene]["mutations"])
+            
+            # BRCA and PALB2 are more likely germline, others more likely somatic
+            if gene in ["BRCA1", "BRCA2", "PALB2", "CHEK2", "ATM"]:
+                origin = random.choices(["Germline", "Somatic"], weights=[0.70, 0.30])[0]
+            else:
+                origin = random.choices(["Germline", "Somatic"], weights=[0.20, 0.80])[0]
+            
+            # Pathogenic/Likely pathogenic more common for BRCA
+            if gene in ["BRCA1", "BRCA2"]:
+                interpretation = random.choices(interpretations, weights=[0.50, 0.30, 0.15, 0.03, 0.02])[0]
+            else:
+                interpretation = random.choices(interpretations, weights=interpretation_weights)[0]
+            
+            gene_loinc_codes = {
+                "BRCA1": "21636-6",
+                "BRCA2": "21637-4",
+                "TP53": "47423-8",
+                "PIK3CA": "55233-1",
+                "PTEN": "48676-1",
+                "ATM": "48675-3",
+                "CHEK2": "48004-6",
+                "PALB2": "88039-1",
+                "CDH1": "81295-8",
+                "ERBB2": "48676-1"
+            }
+            
             loinc_code = gene_loinc_codes.get(gene, "81247-9")
+            
             obs = {
-                "fullUrl": f"http://example.org/Observation/obs-{patient_id}-{gene}",
+                "fullUrl": f"http://example.org/Observation/obs-{patient_id}-{gene}-{mutation[:20]}",
                 "resource": {
                     "resourceType": "Observation",
-                    "id": f"obs-{patient_id}-{gene}",
+                    "id": f"obs-{patient_id}-{gene}-mutation",
                     "status": "final",
                     "category": [{
                         "coding": [{
@@ -457,58 +751,220 @@ class Command(BaseCommand):
                         "coding": [{
                             "system": "http://loinc.org",
                             "code": loinc_code,
-                            "display": f"{gene} gene mutation"
+                            "display": f"{gene} gene variant"
                         }],
-                        "text": f"{gene} mutation analysis"
+                        "text": f"{gene} gene mutation analysis"
                     },
                     "subject": {
                         "reference": f"Patient/{patient_id}"
                     },
                     "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
-                    "valueString": status
+                    "valueCodeableConcept": {
+                        "coding": [{
+                            "system": "http://loinc.org",
+                            "code": "LA9633-4" if interpretation in ["Pathogenic", "Likely pathogenic"] else "LA6668-3",
+                            "display": interpretation
+                        }],
+                        "text": interpretation
+                    },
+                    "component": [
+                        {
+                            "code": {
+                                "coding": [{
+                                    "system": "http://loinc.org",
+                                    "code": "48018-6",
+                                    "display": "Gene studied"
+                                }],
+                                "text": "Gene"
+                            },
+                            "valueCodeableConcept": {
+                                "text": gene
+                            }
+                        },
+                        {
+                            "code": {
+                                "coding": [{
+                                    "system": "http://loinc.org",
+                                    "code": "81290-9",
+                                    "display": "Genomic DNA change"
+                                }],
+                                "text": "Mutation"
+                            },
+                            "valueCodeableConcept": {
+                                "text": mutation
+                            }
+                        },
+                        {
+                            "code": {
+                                "coding": [{
+                                    "system": "http://loinc.org",
+                                    "code": "48002-0",
+                                    "display": "Genomic source class"
+                                }],
+                                "text": "Origin"
+                            },
+                            "valueCodeableConcept": {
+                                "coding": [{
+                                    "system": "http://loinc.org",
+                                    "code": "LA6683-2" if origin == "Germline" else "LA6684-0",
+                                    "display": origin
+                                }],
+                                "text": origin
+                            }
+                        }
+                    ]
                 }
             }
             observations.append(obs)
         
         return observations
 
-    def generate_prior_therapy(self, patient_id, diagnosis_date):
-        """Generate prior lines of therapy (MedicationStatement resources)"""
+    def generate_prior_therapy(self, patient_id, diagnosis_date, assigned_lines=None):
+        """Generate prior lines of therapy with named regimens"""
         medications = []
         
-        # Number of prior lines (0-3)
-        num_lines = random.choices([0, 1, 2, 3], weights=[0.2, 0.4, 0.3, 0.1])[0]
+        # Distribution: 40% treatment-naive, 30% one line, 20% two lines, 10% three lines
+        if assigned_lines is not None:
+            num_lines = assigned_lines
+        else:
+            num_lines = random.choices([0, 1, 2, 3], weights=[0.4, 0.3, 0.2, 0.1])[0]
         
-        therapy_options = [
-            ("Doxorubicin", "3002", "Anthracycline"),
-            ("Cyclophosphamide", "3007", "Alkylating agent"),
-            ("Paclitaxel", "1716024", "Taxane"),
-            ("Docetaxel", "72962", "Taxane"),
-            ("Trastuzumab", "224905", "HER2 targeted therapy"),
-            ("Pertuzumab", "1298944", "HER2 targeted therapy"),
-            ("Bevacizumab", "351859", "Anti-angiogenic"),
-            ("Capecitabine", "194000", "Oral chemotherapy"),
-            ("Carboplatin", "40223", "Platinum agent"),
-            ("Tamoxifen", "10324", "Hormonal therapy"),
-            ("Letrozole", "73274", "Aromatase inhibitor"),
-        ]
+        # Breast cancer treatment regimens
+        first_line_regimens = {
+            'AC-T': [
+                ('Doxorubicin', '3002'),
+                ('Cyclophosphamide', '3007'),
+                ('Paclitaxel', '1716024')
+            ],
+            'TC': [
+                ('Docetaxel', '72962'),
+                ('Cyclophosphamide', '3007')
+            ],
+            'Paclitaxel/Trastuzumab/Pertuzumab': [
+                ('Paclitaxel', '1716024'),
+                ('Trastuzumab', '224905'),
+                ('Pertuzumab', '1298944')
+            ],
+            'Tamoxifen': [
+                ('Tamoxifen', '10324')
+            ],
+            'CDK4/6 Inhibitor + Letrozole': [
+                ('Palbociclib', '1873985'),
+                ('Letrozole', '73274')
+            ]
+        }
         
+        second_line_regimens = {
+            'Capecitabine': [
+                ('Capecitabine', '194000')
+            ],
+            'T-DM1': [
+                ('Ado-trastuzumab emtansine', '1371352')
+            ],
+            'Eribulin': [
+                ('Eribulin', '1045453')
+            ],
+            'Gemcitabine/Carboplatin': [
+                ('Gemcitabine', '1736854'),
+                ('Carboplatin', '40223')
+            ],
+            'Olaparib': [
+                ('Olaparib', '1597582')
+            ]
+        }
+        
+        later_line_regimens = {
+            'T-DXd': [
+                ('Trastuzumab deruxtecan', '2360840')
+            ],
+            'Sacituzumab govitecan': [
+                ('Sacituzumab govitecan', '2359306')
+            ],
+            'Vinorelbine': [
+                ('Vinorelbine', '72956')
+            ],
+            'Pembrolizumab': [
+                ('Pembrolizumab', '1547545')
+            ]
+        }
+        
+        # Generate therapies for each line
+        selected_regimens = []
         for line_num in range(1, num_lines + 1):
-            # 2-3 drugs per line
-            num_drugs = random.randint(2, 3)
-            line_drugs = random.sample(therapy_options, num_drugs)
+            if line_num == 1:
+                regimen_name = random.choice(list(first_line_regimens.keys()))
+                regimen_drugs = first_line_regimens[regimen_name]
+            elif line_num == 2:
+                regimen_name = random.choice(list(second_line_regimens.keys()))
+                regimen_drugs = second_line_regimens[regimen_name]
+            else:
+                regimen_name = random.choice(list(later_line_regimens.keys()))
+                regimen_drugs = later_line_regimens[regimen_name]
             
-            # Start therapy 6-18 months ago, each line 3-6 months apart
-            therapy_start = diagnosis_date + timedelta(days=random.randint(30, 90) + (line_num - 1) * 120)
+            # Determine outcome for this line
+            # Earlier lines and completed lines tend to have better outcomes
+            if line_num < num_lines:  # Not the last line, so it led to progression
+                outcome = random.choices(
+                    ['Progressive Disease', 'Partial Response', 'Stable Disease'],
+                    weights=[0.6, 0.3, 0.1]
+                )[0]
+            else:  # Current/last line
+                outcome = random.choices(
+                    ['Partial Response', 'Complete Response', 'Stable Disease', 'Progressive Disease'],
+                    weights=[0.4, 0.3, 0.2, 0.1]
+                )[0]
+            
+            selected_regimens.append({
+                'line': line_num,
+                'regimen_name': regimen_name,
+                'drugs': regimen_drugs,
+                'outcome': outcome
+            })
+            
+            # Start therapy after diagnosis, each line 3-6 months apart
+            months_after_diagnosis = (line_num - 1) * random.randint(4, 7)
+            therapy_start = diagnosis_date + timedelta(days=30 + months_after_diagnosis * 30)
             therapy_end = therapy_start + timedelta(days=random.randint(90, 180))
             
-            for drug_name, rxnorm_code, drug_class in line_drugs:
-                med = {
-                    "fullUrl": f"http://example.org/MedicationStatement/med-{patient_id}-line{line_num}-{drug_name}",
+            # Create MedicationStatement for the regimen
+            regimen_resource = {
+                "fullUrl": f"http://example.org/MedicationStatement/regimen-{patient_id}-line{line_num}",
+                "resource": {
+                    "resourceType": "MedicationStatement",
+                    "id": f"regimen-{patient_id}-line{line_num}",
+                    "status": "completed" if line_num < num_lines else "active",
+                    "medicationCodeableConcept": {
+                        "text": regimen_name
+                    },
+                    "subject": {
+                        "reference": f"Patient/{patient_id}"
+                    },
+                    "effectivePeriod": {
+                        "start": therapy_start.strftime('%Y-%m-%d'),
+                        "end": therapy_end.strftime('%Y-%m-%d') if line_num < num_lines else None
+                    },
+                    "extension": [{
+                        "url": "http://example.org/fhir/StructureDefinition/therapy-line",
+                        "valueInteger": line_num
+                    }, {
+                        "url": "http://example.org/fhir/StructureDefinition/therapy-outcome",
+                        "valueString": outcome
+                    }],
+                    "note": [{
+                        "text": f"Line {line_num} therapy - Outcome: {outcome}"
+                    }]
+                }
+            }
+            medications.append(regimen_resource)
+            
+            # Create individual drug exposures
+            for drug_name, rxnorm_code in regimen_drugs:
+                drug_resource = {
+                    "fullUrl": f"http://example.org/MedicationStatement/drug-{patient_id}-line{line_num}-{drug_name.replace(' ', '-')}",
                     "resource": {
                         "resourceType": "MedicationStatement",
-                        "id": f"med-{patient_id}-line{line_num}-{drug_name}",
-                        "status": "completed",
+                        "id": f"drug-{patient_id}-line{line_num}-{drug_name.replace(' ', '-')}",
+                        "status": "completed" if line_num < num_lines else "active",
                         "medicationCodeableConcept": {
                             "coding": [{
                                 "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
@@ -522,14 +978,18 @@ class Command(BaseCommand):
                         },
                         "effectivePeriod": {
                             "start": therapy_start.strftime('%Y-%m-%d'),
-                            "end": therapy_end.strftime('%Y-%m-%d')
+                            "end": therapy_end.strftime('%Y-%m-%d') if line_num < num_lines else None
                         },
-                        "note": [{
-                            "text": f"Line {line_num} therapy - {drug_class}"
+                        "partOf": [{
+                            "reference": f"MedicationStatement/regimen-{patient_id}-line{line_num}"
+                        }],
+                        "extension": [{
+                            "url": "http://example.org/fhir/StructureDefinition/therapy-line",
+                            "valueInteger": line_num
                         }]
                     }
                 }
-                medications.append(med)
+                medications.append(drug_resource)
         
         return medications
 

@@ -661,7 +661,16 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                                 pass
                         second_line_outcome = therapy_lines[2]['outcome']
                     
-                    if 3 in therapy_lines:
+                    # Map line 3 and 4 to "later" field (prioritize most recent)
+                    if 4 in therapy_lines:
+                        later_therapy = therapy_lines[4]['regimen']
+                        if therapy_lines[4]['date']:
+                            try:
+                                later_date = datetime.strptime(therapy_lines[4]['date'], '%Y-%m-%d').date()
+                            except:
+                                pass
+                        later_outcome = therapy_lines[4]['outcome']
+                    elif 3 in therapy_lines:
                         later_therapy = therapy_lines[3]['regimen']
                         if therapy_lines[3]['date']:
                             try:
