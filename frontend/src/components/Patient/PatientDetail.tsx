@@ -523,12 +523,20 @@ const PatientDetail: React.FC = () => {
   };
 
   const renderSelectField = (label: string, field: string, options: string[], fullWidth: boolean = false, disabled: boolean = false) => {
+    const currentValue = editedInfo?.[field] || '';
+    
+    // Add current value to options if it exists but is not in the list
+    const displayOptions = [...options];
+    if (currentValue && !options.includes(currentValue)) {
+      displayOptions.unshift(currentValue);
+    }
+    
     return (
       <Grid item xs={12} md={fullWidth ? 12 : 6}>
         <FormControl fullWidth size="small">
           <InputLabel>{label}</InputLabel>
           <Select
-            value={editedInfo?.[field] || ''}
+            value={currentValue}
             label={label}
             onChange={(e) => handleFieldChange(field, e.target.value)}
             disabled={disabled}
@@ -536,7 +544,7 @@ const PatientDetail: React.FC = () => {
             <MenuItem value="">
               <em>None</em>
             </MenuItem>
-            {options.map((option) => (
+            {displayOptions.map((option) => (
               <MenuItem key={option} value={option}>
                 {option}
               </MenuItem>
