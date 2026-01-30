@@ -45,18 +45,14 @@ function TabPanel(props: TabPanelProps) {
 const GENDER_OPTIONS = ['Male', 'Female', 'Other', 'Unknown'];
 const COUNTRY_OPTIONS = ['United States', 'Canada', 'United Kingdom', 'Germany', 'France', 'Spain', 'Italy', 'Other'];
 const US_STATES = [
-  'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware',
-  'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky',
-  'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi',
-  'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico',
-  'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania',
-  'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont',
-  'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming',
-  'District of Columbia', 'Puerto Rico', 'Guam', 'U.S. Virgin Islands'
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS',
+  'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY',
+  'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV',
+  'WI', 'WY', 'DC', 'PR', 'GU', 'VI'
 ];
 const ETHNICITY_OPTIONS = ['Caucasian/White', 'Hispanic/Latino', 'Black/African-American', 'Asian', 'Native American'];
 const DISEASE_OPTIONS = ['Breast Cancer', 'Follicular Lymphoma', 'Multiple Myeloma', 'Lung Cancer', 'Colon Cancer', 'Other'];
-const STAGE_OPTIONS = ['Stage I', 'Stage II', 'Stage III', 'Stage IV', 'Unknown'];
+const STAGE_OPTIONS = ['0', 'I', 'IA', 'IB', 'II', 'IIA', 'IIB', 'III', 'IIIA', 'IIIB', 'IIIC', 'IV', 'Unknown'];
 const ECOG_OPTIONS = ['0', '1', '2', '3', '4', '5'];
 const KARNOFSKY_OPTIONS = ['100', '90', '80', '70', '60', '50', '40', '30', '20', '10', '0'];
 const YES_NO_OPTIONS = ['Yes', 'No', 'Unknown'];
@@ -70,7 +66,7 @@ const THERAPY_OUTCOME_OPTIONS = ['Complete Response', 'Partial Response', 'Stabl
 const SMOKING_STATUS_OPTIONS = ['Never Smoker', 'Former Smoker', 'Current Smoker', 'Unknown'];
 const ALCOHOL_USE_OPTIONS = ['None', 'Occasional', 'Moderate', 'Heavy', 'Unknown'];
 const EXERCISE_FREQUENCY_OPTIONS = ['None', 'Rarely', '1-2 times/week', '3-4 times/week', '5+ times/week', 'Daily', 'Unknown'];
-const REFRACTORY_STATUS_OPTIONS = ['Not Refractory', 'Refractory to PI', 'Refractory to IMiD', 'Refractory to Anti-CD38', 'Triple-class Refractory', 'Penta-refractory'];
+const REFRACTORY_STATUS_OPTIONS = ['Responsive', 'Stable', 'Refractory', 'Unknown'];
 const DIET_TYPE_OPTIONS = ['Regular', 'Vegetarian', 'Vegan', 'Mediterranean', 'Low-carb', 'Ketogenic', 'Other'];
 const SLEEP_QUALITY_OPTIONS = ['Excellent', 'Good', 'Fair', 'Poor', 'Very Poor'];
 const STRESS_LEVEL_OPTIONS = ['None', 'Low', 'Moderate', 'High', 'Very High'];
@@ -80,35 +76,99 @@ const EDUCATION_LEVEL_OPTIONS = ['Less than High School', 'High School Graduate'
 const MARITAL_STATUS_OPTIONS = ['Single', 'Married', 'Divorced', 'Widowed', 'Separated', 'Domestic Partnership'];
 const INSURANCE_TYPE_OPTIONS = ['Private Insurance', 'Medicare', 'Medicaid', 'Veterans Affairs', 'Other Government', 'Self-pay', 'None'];
 
+// Genetic mutation options
+const GENE_OPTIONS = ['BRCA1', 'BRCA2', 'TP53', 'PIK3CA', 'PTEN', 'ATM', 'CHEK2', 'PALB2', 'CDH1', 'ERBB2'];
+const MUTATION_OPTIONS: { [key: string]: string[] } = {
+  'BRCA1': ['c.68_69delAG', 'c.5266dupC', 'c.181T>G', 'c.3756_3759del', '185delAG'],
+  'BRCA2': ['c.5946delT', 'c.9097dupA', 'c.7617+1G>A', '6174delT', 'c.8537_8538del'],
+  'TP53': ['R175H', 'R248Q', 'R273H', 'R248W', 'R282W'],
+  'PIK3CA': ['E542K', 'E545K', 'H1047R', 'H1047L', 'E726K'],
+  'PTEN': ['R130*', 'R173C', 'R233*', 'R335*', 'c.209+1G>T'],
+  'ATM': ['c.5932G>T', 'c.6095G>A', 'c.8122G>A', 'c.7271T>G'],
+  'CHEK2': ['1100delC', 'I157T', 'R117G', 'IVS2+1G>A'],
+  'PALB2': ['c.3113G>A', 'c.1676del', 'c.509_510delGA', 'c.172_175delTTGT'],
+  'CDH1': ['c.1018A>G', 'c.1137G>A', 'c.283C>T', 'c.1901C>T'],
+  'ERBB2': ['L755S', 'V777L', 'G776delinsVC', 'D769H']
+};
+const ORIGIN_OPTIONS = ['Germline', 'Somatic', 'Unknown'];
+const INTERPRETATION_OPTIONS = ['Pathogenic', 'Likely pathogenic', 'VUS', 'Likely benign', 'Benign'];
+
 // Disease-specific therapy options
 const BREAST_CANCER_FIRST_LINE = [
+  'AC-T',
   'AC-T (Doxorubicin/Cyclophosphamide followed by Paclitaxel)',
+  'TC',
   'TC (Docetaxel/Cyclophosphamide)',
+  'TAC (Docetaxel/Doxorubicin/Cyclophosphamide)',
+  'Paclitaxel/Trastuzumab/Pertuzumab',
   'Paclitaxel/Trastuzumab/Pertuzumab (HER2+)',
+  'Docetaxel/Trastuzumab/Pertuzumab',
+  'TCH (Docetaxel/Carboplatin/Trastuzumab)',
+  'Tamoxifen',
+  'Letrozole',
+  'Anastrozole',
+  'Exemestane',
+  'CDK4/6 Inhibitor + Letrozole',
+  'CDK4/6 Inhibitor + Anastrozole',
+  'CDK4/6 Inhibitor + Fulvestrant',
+  'Palbociclib + Letrozole',
+  'Ribociclib + Letrozole',
+  'Abemaciclib + Letrozole',
+  'Fulvestrant',
   'Hormone Therapy (Tamoxifen/Aromatase Inhibitor)',
-  'CDK4/6 Inhibitor + Hormone Therapy',
+  'FEC (5-FU/Epirubicin/Cyclophosphamide)',
+  'CMF (Cyclophosphamide/Methotrexate/5-FU)',
+  'Paclitaxel',
+  'Docetaxel',
   'Capecitabine',
+  'Doxorubicin',
   'Other'
 ];
 
 const BREAST_CANCER_SECOND_LINE = [
   'Capecitabine',
-  'T-DM1 (Trastuzumab emtansine) (HER2+)',
-  'T-DXd (Trastuzumab deruxtecan) (HER2+)',
+  'T-DM1',
+  'T-DM1 (Trastuzumab emtansine)',
+  'T-DXd (Trastuzumab deruxtecan)',
   'Eribulin',
   'Gemcitabine/Carboplatin',
+  'Paclitaxel/Bevacizumab',
+  'Olaparib',
+  'Talazoparib',
   'PARP Inhibitor (BRCA+)',
   'Sacituzumab govitecan',
+  'Vinorelbine',
+  'Ixabepilone',
+  'Lapatinib + Capecitabine',
+  'Neratinib + Capecitabine',
+  'Fulvestrant',
+  'Everolimus + Exemestane',
+  'Alpelisib + Fulvestrant',
+  'Tucatinib/Trastuzumab/Capecitabine',
+  'Pertuzumab + Trastuzumab',
   'Other'
 ];
 
 const BREAST_CANCER_LATER_LINE = [
+  'T-DXd',
   'T-DXd (Trastuzumab deruxtecan)',
   'Sacituzumab govitecan',
-  'Eribulin',
   'Vinorelbine',
+  'Eribulin',
   'Ixabepilone',
+  'Pembrolizumab',
+  'Atezolizumab + Nab-paclitaxel',
   'PARP Inhibitor',
+  'Olaparib',
+  'Talazoparib',
+  'Margetuximab',
+  'Lapatinib',
+  'Neratinib',
+  'Gemcitabine',
+  'Carboplatin',
+  'Cisplatin',
+  'Methotrexate',
+  'Mitomycin',
   'Clinical Trial',
   'Other'
 ];
@@ -189,8 +249,24 @@ const PatientDetail: React.FC = () => {
       try {
         setLoading(true);
         const response = await api.get(`/patient-info/${personId}/`);
-        setPatientInfo(response.data.patient_info);
-        setEditedInfo(response.data.patient_info);
+        const patientData = response.data.patient_info;
+        
+        // Convert ECOG from integer to string for dropdown
+        if (patientData.ecog_performance_status !== null && patientData.ecog_performance_status !== undefined) {
+          patientData.ecog_performance_status = String(patientData.ecog_performance_status);
+        }
+        
+        // Auto-compute Triple Negative status if not already set
+        if (patientData.estrogen_receptor_status && patientData.progesterone_receptor_status && patientData.her2_status) {
+          const isTripleNegative = 
+            patientData.estrogen_receptor_status === 'Negative' &&
+            patientData.progesterone_receptor_status === 'Negative' &&
+            patientData.her2_status === 'Negative';
+          patientData.tnbc_status = isTripleNegative;
+        }
+        
+        setPatientInfo(patientData);
+        setEditedInfo(patientData);
         
         if (response.data.user) {
           const user = response.data.user;
@@ -218,8 +294,54 @@ const PatientDetail: React.FC = () => {
   };
 
   const handleFieldChange = (field: string, value: any) => {
-    setEditedInfo({ ...editedInfo, [field]: value });
+    const updatedInfo = { ...editedInfo, [field]: value };
+    
+    // Auto-compute Triple Negative status based on ER, PR, and HER2 statuses
+    if (field === 'estrogen_receptor_status' || field === 'progesterone_receptor_status' || field === 'her2_status') {
+      const er = field === 'estrogen_receptor_status' ? value : updatedInfo.estrogen_receptor_status;
+      const pr = field === 'progesterone_receptor_status' ? value : updatedInfo.progesterone_receptor_status;
+      const her2 = field === 'her2_status' ? value : updatedInfo.her2_status;
+      
+      // Triple negative if all three are Negative
+      if (er === 'Negative' && pr === 'Negative' && her2 === 'Negative') {
+        updatedInfo.tnbc_status = true;
+      } else if (er || pr || her2) {
+        // Only set to false if at least one status is defined and not all are negative
+        updatedInfo.tnbc_status = false;
+      }
+    }
+    
+    setEditedInfo(updatedInfo);
     setSuccessMessage(null);
+  };
+
+  const handleMutationAdd = () => {
+    const mutations = editedInfo.genetic_mutations || [];
+    mutations.push({
+      gene: '',
+      mutation: '',
+      origin: '',
+      interpretation: ''
+    });
+    handleFieldChange('genetic_mutations', mutations);
+  };
+
+  const handleMutationRemove = (index: number) => {
+    const mutations = [...(editedInfo.genetic_mutations || [])];
+    mutations.splice(index, 1);
+    handleFieldChange('genetic_mutations', mutations);
+  };
+
+  const handleMutationChange = (index: number, field: string, value: string) => {
+    const mutations = [...(editedInfo.genetic_mutations || [])];
+    mutations[index] = { ...mutations[index], [field]: value };
+    
+    // Reset mutation when gene changes
+    if (field === 'gene') {
+      mutations[index].mutation = '';
+    }
+    
+    handleFieldChange('genetic_mutations', mutations);
   };
 
   const handleZipcodeChange = async (zipcode: string) => {
@@ -366,7 +488,7 @@ const PatientDetail: React.FC = () => {
     );
   }
 
-  const renderTextField = (label: string, field: string, fullWidth: boolean = false, type: string = 'text') => {
+  const renderTextField = (label: string, field: string, fullWidth: boolean = false, type: string = 'text', disabled: boolean = false) => {
     return (
       <Grid item xs={12} md={fullWidth ? 12 : 6}>
         <TextField
@@ -377,6 +499,7 @@ const PatientDetail: React.FC = () => {
           onChange={(e) => handleFieldChange(field, e.target.value)}
           variant="outlined"
           size="small"
+          disabled={disabled}
         />
       </Grid>
     );
@@ -399,7 +522,7 @@ const PatientDetail: React.FC = () => {
     );
   };
 
-  const renderSelectField = (label: string, field: string, options: string[], fullWidth: boolean = false) => {
+  const renderSelectField = (label: string, field: string, options: string[], fullWidth: boolean = false, disabled: boolean = false) => {
     return (
       <Grid item xs={12} md={fullWidth ? 12 : 6}>
         <FormControl fullWidth size="small">
@@ -408,6 +531,7 @@ const PatientDetail: React.FC = () => {
             value={editedInfo?.[field] || ''}
             label={label}
             onChange={(e) => handleFieldChange(field, e.target.value)}
+            disabled={disabled}
           >
             <MenuItem value="">
               <em>None</em>
@@ -443,7 +567,20 @@ const PatientDetail: React.FC = () => {
       {renderSelectField('Estrogen Receptor (ER) Status', 'estrogen_receptor_status', ER_PR_OPTIONS)}
       {renderSelectField('Progesterone Receptor (PR) Status', 'progesterone_receptor_status', ER_PR_OPTIONS)}
       {renderSelectField('HER2 Status', 'her2_status', HER2_OPTIONS)}
-      {renderSelectField('Triple Negative Status', 'tnbc_status', YES_NO_OPTIONS)}
+      
+      <Grid item xs={12} sm={6}>
+        <TextField
+          fullWidth
+          label="Triple Negative Status (Computed)"
+          value={editedInfo.tnbc_status ? 'Yes' : 'No'}
+          variant="outlined"
+          disabled
+          InputProps={{
+            readOnly: true,
+          }}
+          helperText="Automatically computed from ER, PR, and HER2 status"
+        />
+      </Grid>
       
       <Grid item xs={12}>
         <Divider sx={{ my: 2 }} />
@@ -453,7 +590,107 @@ const PatientDetail: React.FC = () => {
       </Grid>
       {renderTextField('Ki-67 Proliferation Index (%)', 'ki67_proliferation_index', false, 'number')}
       {renderTextField('PD-L1 Status (%)', 'pd_l1_tumor_cels', false, 'number')}
-      {renderTextField('Genetic Mutations', 'genetic_mutations', true)}
+      
+      <Grid item xs={12}>
+        <Divider sx={{ my: 2 }} />
+        <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+          Genetic Mutations
+        </Typography>
+      </Grid>
+      
+      <Grid item xs={12}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            {(editedInfo.genetic_mutations || []).length} mutation(s) identified
+          </Typography>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={handleMutationAdd}
+          >
+            Add Mutation
+          </Button>
+        </Box>
+        
+        {(editedInfo.genetic_mutations || []).map((mutation: any, index: number) => (
+          <Box key={index} sx={{ mb: 3, p: 2, border: '1px solid #e0e0e0', borderRadius: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+              <Typography variant="subtitle2">Mutation {index + 1}</Typography>
+              <Button
+                size="small"
+                color="error"
+                onClick={() => handleMutationRemove(index)}
+              >
+                Remove
+              </Button>
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6} md={3}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Gene</InputLabel>
+                  <Select
+                    value={mutation.gene || ''}
+                    label="Gene"
+                    onChange={(e) => handleMutationChange(index, 'gene', e.target.value)}
+                  >
+                    {GENE_OPTIONS.map((gene) => (
+                      <MenuItem key={gene} value={gene}>{gene}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <FormControl fullWidth size="small" disabled={!mutation.gene}>
+                  <InputLabel>Mutation</InputLabel>
+                  <Select
+                    value={mutation.mutation || ''}
+                    label="Mutation"
+                    onChange={(e) => handleMutationChange(index, 'mutation', e.target.value)}
+                  >
+                    {mutation.gene && MUTATION_OPTIONS[mutation.gene]?.map((mut: string) => (
+                      <MenuItem key={mut} value={mut}>{mut}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Origin</InputLabel>
+                  <Select
+                    value={mutation.origin || ''}
+                    label="Origin"
+                    onChange={(e) => handleMutationChange(index, 'origin', e.target.value)}
+                  >
+                    {ORIGIN_OPTIONS.map((origin) => (
+                      <MenuItem key={origin} value={origin}>{origin}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Interpretation</InputLabel>
+                  <Select
+                    value={mutation.interpretation || ''}
+                    label="Interpretation"
+                    onChange={(e) => handleMutationChange(index, 'interpretation', e.target.value)}
+                  >
+                    {INTERPRETATION_OPTIONS.map((interp) => (
+                      <MenuItem key={interp} value={interp}>{interp}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+            </Grid>
+          </Box>
+        ))}
+        
+        {(!editedInfo.genetic_mutations || editedInfo.genetic_mutations.length === 0) && (
+          <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', textAlign: 'center', py: 2 }}>
+            No genetic mutations identified. Click "Add Mutation" to add one.
+          </Typography>
+        )}
+      </Grid>
     </Grid>
   );
 
@@ -698,10 +935,10 @@ const PatientDetail: React.FC = () => {
         <TabPanel value={activeTab} index={2}>
           <Typography variant="h6" gutterBottom>Treatment History</Typography>
           <Grid container spacing={3}>
-            {renderSelectField('Prior Therapy', 'prior_therapy', YES_NO_OPTIONS)}
-            {renderTextField('Number of Prior Lines', 'therapy_lines_count', false, 'number')}
-            {renderTextField('Relapse Count', 'relapse_count', false, 'number')}
-            {renderSelectField('Refractory Status', 'refractory_status', REFRACTORY_STATUS_OPTIONS, true)}
+            {renderSelectField('Prior Therapy', 'prior_therapy', YES_NO_OPTIONS, false, true)}
+            {renderTextField('Number of Prior Lines', 'therapy_lines_count', false, 'number', true)}
+            {renderTextField('Relapse Count', 'relapse_count', false, 'number', true)}
+            {renderSelectField('Refractory Status', 'refractory_status', REFRACTORY_STATUS_OPTIONS, true, true)}
             
             <Grid item xs={12}>
               <Divider sx={{ my: 2 }} />
@@ -729,9 +966,9 @@ const PatientDetail: React.FC = () => {
                 Later Line Therapy
               </Typography>
             </Grid>
-            {renderSelectField('Later Line Therapy', 'later_line_therapy', getTherapyOptions('later'), true)}
-            {renderDateField('Later Line Date', 'later_line_date')}
-            {renderSelectField('Later Line Outcome', 'later_line_outcome', THERAPY_OUTCOME_OPTIONS)}
+            {renderSelectField('Later Line Therapy', 'later_therapy', getTherapyOptions('later'), true)}
+            {renderDateField('Later Line Date', 'later_date')}
+            {renderSelectField('Later Line Outcome', 'later_outcome', THERAPY_OUTCOME_OPTIONS)}
             
             <Grid item xs={12}>
               <Divider sx={{ my: 2 }} />
