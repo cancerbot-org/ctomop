@@ -229,7 +229,8 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     patients_data[patient_id] = {
                         'patient': resource,
                         'conditions': [],
-                        'observations': []
+                        'observations': [],
+                        'medications': []
                     }
                 elif resource_type == 'Condition':
                     patient_ref = resource.get('subject', {}).get('reference', '')
@@ -241,6 +242,11 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     patient_id = patient_ref.split('/')[-1] if '/' in patient_ref else ''
                     if patient_id in patients_data:
                         patients_data[patient_id]['observations'].append(resource)
+                elif resource_type == 'MedicationStatement':
+                    patient_ref = resource.get('subject', {}).get('reference', '')
+                    patient_id = patient_ref.split('/')[-1] if '/' in patient_ref else ''
+                    if patient_id in patients_data:
+                        patients_data[patient_id]['medications'].append(resource)
             
             # Process each patient
             for fhir_patient_id, data in patients_data.items():
@@ -283,6 +289,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     systolic_bp = None
                     diastolic_bp = None
                     heart_rate = None
+                    ecog = None
                     
                     if patient_resource.get('extension'):
                         for ext in patient_resource['extension']:
@@ -299,11 +306,18 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                                 diastolic_bp = ext.get('valueQuantity', {}).get('value')
                             elif 'heartRate' in url:
                                 heart_rate = ext.get('valueQuantity', {}).get('value')
+                            elif 'ecog-performance-status' in url:
+                                ecog = ext.get('valueInteger')
                     
                     # Get gender concept from FHIR
                     gender_concept = get_gender_concept(patient_resource.get('gender', ''))
                     
-                    # Create Person with OMOP-compliant birth date fields
+                    # Extract name from FHIR
+                    name = patient_resource.get('name', [{}])[0] if patient_resource.get('name') else {}
+                    given_name = ' '.join(name.get('given', [])) if name.get('given') else ''
+                    family_name = name.get('family', '')
+                    
+                    # Create Person with OMOP-compliant birth date fields and names
                     person = Person.objects.create(
                         person_id=person_id,
                         gender_concept=gender_concept,
@@ -311,6 +325,16 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         month_of_birth=month_of_birth,
                         day_of_birth=day_of_birth,
                         ethnicity_concept=None,
+                        given_name=given_name,
+                        family_name=family_name,
+                    )
+                    
+                    # Create User for authentication (optional, not used for display)
+                    User.objects.create(
+                        id=person.person_id,
+                        username=f'patient{person.person_id}',
+                        first_name=given_name,
+                        last_name=family_name,
                     )
                     
                     # Extract disease, stage, and histologic type from Condition
@@ -381,6 +405,134 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     last_measurement = Measurement.objects.all().order_by('-measurement_id').first()
                     measurement_id = last_measurement.measurement_id + 1 if last_measurement else 1
                     
+                    # Extract tumor characteristics from observations
+                    tumor_size = None
+                    lymph_node_status = None
+                    metastasis_status = None
+                    er_status = None
+                    pr_status = None
+                    her2_status = None
+                    ki67_index = None
+                    pdl1_status = None
+                    pdl1_percentage = None
+                    genetic_mutations = []
+                    
+                    for observation in data['observations']:
+                        obs_code = observation.get('code', {})
+                        obs_text = obs_code.get('text', '').lower()
+                        
+                        # Check for tumor size
+                        if 'tumor size' in obs_text or 'size tumor' in obs_text:
+                            if observation.get('valueQuantity'):
+                                tumor_size = observation['valueQuantity'].get('value')
+                        
+                        # Check for lymph node status
+                        elif 'lymph node' in obs_text or 'lymph nodes' in obs_text:
+                            if observation.get('valueCodeableConcept'):
+                                value_concept = observation['valueCodeableConcept']
+                                if value_concept.get('text'):
+                                    lymph_node_status = value_concept['text']
+                                elif value_concept.get('coding'):
+                                    lymph_node_status = value_concept['coding'][0].get('display')
+                        
+                        # Check for metastasis status
+                        elif 'metastasis' in obs_text or 'metastases' in obs_text:
+                            if observation.get('valueCodeableConcept'):
+                                value_concept = observation['valueCodeableConcept']
+                                if value_concept.get('text'):
+                                    metastasis_status = value_concept['text']
+                                elif value_concept.get('coding'):
+                                    metastasis_status = value_concept['coding'][0].get('display')
+                        
+                        # Check for ER status
+                        elif 'estrogen receptor' in obs_text or obs_text == 'er':
+                            if observation.get('valueCodeableConcept'):
+                                value_concept = observation['valueCodeableConcept']
+                                if value_concept.get('text'):
+                                    er_status = value_concept['text']
+                                elif value_concept.get('coding'):
+                                    er_status = value_concept['coding'][0].get('display')
+                        
+                        # Check for PR status
+                        elif 'progesterone receptor' in obs_text or obs_text == 'pr':
+                            if observation.get('valueCodeableConcept'):
+                                value_concept = observation['valueCodeableConcept']
+                                if value_concept.get('text'):
+                                    pr_status = value_concept['text']
+                                elif value_concept.get('coding'):
+                                    pr_status = value_concept['coding'][0].get('display')
+                        
+                        # Check for HER2 status
+                        elif 'her2' in obs_text or 'her-2' in obs_text:
+                            if observation.get('valueCodeableConcept'):
+                                value_concept = observation['valueCodeableConcept']
+                                if value_concept.get('text'):
+                                    her2_status = value_concept['text']
+                                elif value_concept.get('coding'):
+                                    her2_status = value_concept['coding'][0].get('display')
+                        
+                        # Check for Ki67
+                        elif 'ki67' in obs_text or 'ki-67' in obs_text:
+                            if observation.get('valueQuantity'):
+                                ki67_index = observation['valueQuantity'].get('value')
+                        
+                        # Check for PD-L1
+                        elif 'pd-l1' in obs_text or 'pdl1' in obs_text:
+                            if observation.get('valueCodeableConcept'):
+                                value_concept = observation['valueCodeableConcept']
+                                if value_concept.get('text'):
+                                    pdl1_status = value_concept['text']
+                                elif value_concept.get('coding'):
+                                    pdl1_status = value_concept['coding'][0].get('display')
+                            # Check for PD-L1 percentage in component
+                            if observation.get('component'):
+                                for component in observation['component']:
+                                    comp_text = component.get('code', {}).get('text', '').lower()
+                                    if 'percentage' in comp_text or 'tumor cells' in comp_text:
+                                        if component.get('valueQuantity'):
+                                            pdl1_percentage = component['valueQuantity'].get('value')
+                        
+                        # Check for genetic mutations (component-based observations)
+                        elif 'gene' in obs_text and 'mutation' in obs_text:
+                            mutation_data = {
+                                'gene': None,
+                                'mutation': None,
+                                'origin': None,
+                                'interpretation': None
+                            }
+                            
+                            # Get interpretation from main valueCodeableConcept
+                            if observation.get('valueCodeableConcept'):
+                                value_concept = observation['valueCodeableConcept']
+                                if value_concept.get('text'):
+                                    mutation_data['interpretation'] = value_concept['text']
+                                elif value_concept.get('coding'):
+                                    mutation_data['interpretation'] = value_concept['coding'][0].get('display')
+                            
+                            # Extract gene, mutation, and origin from components
+                            if observation.get('component'):
+                                for component in observation['component']:
+                                    comp_code = component.get('code', {})
+                                    comp_text = comp_code.get('text', '').lower()
+                                    
+                                    if 'gene' in comp_text:
+                                        if component.get('valueCodeableConcept'):
+                                            mutation_data['gene'] = component['valueCodeableConcept'].get('text')
+                                    elif 'mutation' in comp_text or 'dna change' in comp_text:
+                                        if component.get('valueCodeableConcept'):
+                                            mutation_data['mutation'] = component['valueCodeableConcept'].get('text')
+                                    elif 'origin' in comp_text or 'source class' in comp_text:
+                                        if component.get('valueCodeableConcept'):
+                                            value = component['valueCodeableConcept'].get('text')
+                                            if value:
+                                                mutation_data['origin'] = value
+                                            elif component['valueCodeableConcept'].get('coding'):
+                                                mutation_data['origin'] = component['valueCodeableConcept']['coding'][0].get('display')
+                            
+                            # Only add if we have at least gene and mutation
+                            if mutation_data['gene'] and mutation_data['mutation']:
+                                genetic_mutations.append(mutation_data)
+                    
                     for observation in data['observations']:
                         obs_date = None
                         if observation.get('effectiveDateTime'):
@@ -447,7 +599,78 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                             )
                             measurement_id += 1
                     
-                    # Create PatientInfo with address, ethnicity, and vital signs
+                    # Extract therapy information from MedicationStatement resources
+                    therapy_lines = {}  # {line_number: {'regimen': name, 'date': date, 'outcome': outcome}}
+                    
+                    for medication in data.get('medications', []):
+                        # Get therapy line from extension
+                        therapy_line = None
+                        therapy_outcome = None
+                        
+                        for ext in medication.get('extension', []):
+                            if 'therapy-line' in ext.get('url', ''):
+                                therapy_line = ext.get('valueInteger')
+                            elif 'therapy-outcome' in ext.get('url', ''):
+                                therapy_outcome = ext.get('valueString')
+                        
+                        if therapy_line is None:
+                            continue
+                        
+                        # Check if this is a regimen (parent) or individual drug (partOf)
+                        if not medication.get('partOf'):
+                            # This is the named regimen
+                            regimen_name = medication.get('medicationCodeableConcept', {}).get('text', '')
+                            start_date = medication.get('effectivePeriod', {}).get('start')
+                            
+                            if therapy_line not in therapy_lines:
+                                therapy_lines[therapy_line] = {
+                                    'regimen': regimen_name,
+                                    'date': start_date,
+                                    'outcome': therapy_outcome
+                                }
+                            else:
+                                therapy_lines[therapy_line]['regimen'] = regimen_name
+                                therapy_lines[therapy_line]['outcome'] = therapy_outcome
+                    
+                    # Map therapy lines to first/second/later fields
+                    first_line_therapy = None
+                    first_line_date = None
+                    first_line_outcome = None
+                    second_line_therapy = None
+                    second_line_date = None
+                    second_line_outcome = None
+                    later_therapy = None
+                    later_date = None
+                    later_outcome = None
+                    
+                    if 1 in therapy_lines:
+                        first_line_therapy = therapy_lines[1]['regimen']
+                        if therapy_lines[1]['date']:
+                            try:
+                                first_line_date = datetime.strptime(therapy_lines[1]['date'], '%Y-%m-%d').date()
+                            except:
+                                pass
+                        first_line_outcome = therapy_lines[1]['outcome']
+                    
+                    if 2 in therapy_lines:
+                        second_line_therapy = therapy_lines[2]['regimen']
+                        if therapy_lines[2]['date']:
+                            try:
+                                second_line_date = datetime.strptime(therapy_lines[2]['date'], '%Y-%m-%d').date()
+                            except:
+                                pass
+                        second_line_outcome = therapy_lines[2]['outcome']
+                    
+                    if 3 in therapy_lines:
+                        later_therapy = therapy_lines[3]['regimen']
+                        if therapy_lines[3]['date']:
+                            try:
+                                later_date = datetime.strptime(therapy_lines[3]['date'], '%Y-%m-%d').date()
+                            except:
+                                pass
+                        later_outcome = therapy_lines[3]['outcome']
+                    
+                    # Create PatientInfo with address, ethnicity, vital signs, and therapy
                     patient_info = PatientInfo.objects.create(
                         person=person,
                         date_of_birth=birth_date,
@@ -466,6 +689,25 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         systolic_blood_pressure=systolic_bp,
                         diastolic_blood_pressure=diastolic_bp,
                         heartrate=heart_rate,
+                        ecog_performance_status=ecog,
+                        tumor_size=tumor_size,
+                        lymph_node_status=lymph_node_status,
+                        metastasis_status=metastasis_status,
+                        estrogen_receptor_status=er_status,
+                        progesterone_receptor_status=pr_status,
+                        her2_status=her2_status,
+                        ki67_proliferation_index=ki67_index,
+                        pd_l1_tumor_cels=pdl1_percentage,
+                        genetic_mutations=genetic_mutations,
+                        first_line_therapy=first_line_therapy,
+                        first_line_date=first_line_date,
+                        first_line_outcome=first_line_outcome,
+                        second_line_therapy=second_line_therapy,
+                        second_line_date=second_line_date,
+                        second_line_outcome=second_line_outcome,
+                        later_therapy=later_therapy,
+                        later_date=later_date,
+                        later_outcome=later_outcome,
                     )
                     
                     created_count += 1

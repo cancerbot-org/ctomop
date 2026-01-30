@@ -83,7 +83,10 @@ class Location(models.Model):
 
 
 class Person(models.Model):
+    """OMOP CDM Person table - stores demographic information"""
     person_id = models.IntegerField(primary_key=True)
+    
+    # Gender
     gender_concept = models.ForeignKey(
         Concept, 
         on_delete=models.PROTECT, 
@@ -92,9 +95,42 @@ class Person(models.Model):
         blank=True,
         db_column='gender_concept_id'
     )
-    year_of_birth = models.IntegerField()
+    gender_source_value = models.CharField(max_length=50, null=True, blank=True)
+    gender_source_concept = models.ForeignKey(
+        Concept,
+        on_delete=models.PROTECT,
+        related_name='person_gender_source',
+        null=True,
+        blank=True,
+        db_column='gender_source_concept_id'
+    )
+    
+    # Birth date fields - all nullable
+    year_of_birth = models.IntegerField(null=True, blank=True)
     month_of_birth = models.IntegerField(null=True, blank=True)
     day_of_birth = models.IntegerField(null=True, blank=True)
+    birth_datetime = models.DateTimeField(null=True, blank=True)
+    
+    # Race
+    race_concept = models.ForeignKey(
+        Concept,
+        on_delete=models.PROTECT,
+        related_name='person_race',
+        null=True,
+        blank=True,
+        db_column='race_concept_id'
+    )
+    race_source_value = models.CharField(max_length=50, null=True, blank=True)
+    race_source_concept = models.ForeignKey(
+        Concept,
+        on_delete=models.PROTECT,
+        related_name='person_race_source',
+        null=True,
+        blank=True,
+        db_column='race_source_concept_id'
+    )
+    
+    # Ethnicity
     ethnicity_concept = models.ForeignKey(
         Concept, 
         on_delete=models.PROTECT, 
@@ -103,11 +139,31 @@ class Person(models.Model):
         blank=True,
         db_column='ethnicity_concept_id'
     )
+    ethnicity_source_value = models.CharField(max_length=50, null=True, blank=True)
+    ethnicity_source_concept = models.ForeignKey(
+        Concept,
+        on_delete=models.PROTECT,
+        related_name='person_ethnicity_source',
+        null=True,
+        blank=True,
+        db_column='ethnicity_source_concept_id'
+    )
+    
+    # Location and provider references
+    location_id = models.IntegerField(null=True, blank=True)
+    provider_id = models.IntegerField(null=True, blank=True)
+    care_site_id = models.IntegerField(null=True, blank=True)
+    
+    # Name fields (extension to OMOP CDM for practical use)
+    given_name = models.CharField(max_length=100, null=True, blank=True, help_text="First/Given name")
+    family_name = models.CharField(max_length=100, null=True, blank=True, help_text="Last/Family name")
     
     class Meta:
         db_table = 'person'
     
     def __str__(self):
+        if self.given_name or self.family_name:
+            return f"{self.given_name} {self.family_name}".strip()
         return f"Person {self.person_id}"
 
 
@@ -224,6 +280,32 @@ class DrugExposure(models.Model):
 
     def __str__(self):
         return f"Drug Exposure {self.drug_exposure_id} for Person {self.person_id}"
+
+
+class ProcedureOccurrence(models.Model):
+    """OMOP CDM Procedure Occurrence table - medical procedures and therapies."""
+    procedure_occurrence_id = models.BigIntegerField(primary_key=True)
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, db_column='person_id')
+    procedure_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='procedure_occurrences', db_column='procedure_concept_id')
+    procedure_date = models.DateField()
+    procedure_datetime = models.DateTimeField(null=True, blank=True)
+    procedure_end_date = models.DateField(null=True, blank=True)
+    procedure_end_datetime = models.DateTimeField(null=True, blank=True)
+    procedure_type_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='procedure_types', db_column='procedure_type_concept_id')
+    modifier_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='procedure_modifiers', db_column='modifier_concept_id', null=True, blank=True)
+    quantity = models.IntegerField(null=True, blank=True)
+    provider_id = models.IntegerField(null=True, blank=True)
+    visit_occurrence = models.ForeignKey(VisitOccurrence, on_delete=models.SET_NULL, db_column='visit_occurrence_id', null=True, blank=True)
+    visit_detail_id = models.IntegerField(null=True, blank=True)
+    procedure_source_value = models.CharField(max_length=50, null=True, blank=True)
+    procedure_source_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='procedure_sources', db_column='procedure_source_concept_id', null=True, blank=True)
+    modifier_source_value = models.CharField(max_length=50, null=True, blank=True)
+
+    class Meta:
+        db_table = 'procedure_occurrence'
+
+    def __str__(self):
+        return f"Procedure {self.procedure_occurrence_id} for Person {self.person_id}"
 
 
 class Measurement(models.Model):
@@ -613,6 +695,11 @@ class PatientInfo(models.Model):
     tnbc_status = models.BooleanField(blank=True, null=True)
     hrd_status = models.TextField(blank=True, null=True)
     hr_status = models.TextField(blank=True, null=True)
+    
+    # Tumor characteristics
+    tumor_size = models.FloatField(blank=True, null=True, help_text="Tumor size in cm")
+    lymph_node_status = models.CharField(max_length=50, blank=True, null=True, help_text="Lymph node status (Positive/Negative/Unknown)")
+    metastasis_status = models.CharField(max_length=50, blank=True, null=True, help_text="Metastasis status (Positive/Negative/Unknown)")
 
     tumor_stage = models.TextField(blank=True, null=True)
     nodes_stage = models.TextField(blank=True, null=True)
@@ -665,7 +752,7 @@ class PatientInfo(models.Model):
         return ", ".join(display_parts)
 
     def save(self, *args, **kwargs):
-        """Calculate BMI when saving if weight and height are provided"""
+        """Calculate BMI and update therapy-related computed fields when saving"""
         if self.weight and self.height:
             # Convert to metric units for calculation
             weight_kg = self.weight
@@ -681,4 +768,56 @@ class PatientInfo(models.Model):
             
             self.bmi = round(weight_kg / (height_m ** 2), 2)
         
+        # Update therapy-related computed fields
+        self._update_therapy_computed_fields()
+        
         super().save(*args, **kwargs)
+    
+    def _update_therapy_computed_fields(self):
+        """Update computed fields based on therapy line data"""
+        # Count therapy lines
+        lines_count = 0
+        if self.first_line_therapy:
+            lines_count += 1
+        if self.second_line_therapy:
+            lines_count += 1
+        if self.later_therapy:
+            lines_count += 1
+        
+        self.therapy_lines_count = lines_count
+        
+        # Set prior_therapy based on whether any lines exist
+        self.prior_therapy = 'Yes' if lines_count > 0 else 'No'
+        
+        # Determine refractory status from last line outcome
+        last_outcome = None
+        if self.later_therapy and self.later_outcome:
+            last_outcome = self.later_outcome
+        elif self.second_line_therapy and self.second_line_outcome:
+            last_outcome = self.second_line_outcome
+        elif self.first_line_therapy and self.first_line_outcome:
+            last_outcome = self.first_line_outcome
+        
+        if last_outcome:
+            if last_outcome == 'Progressive Disease':
+                self.treatment_refractory_status = 'Refractory'
+            elif last_outcome in ['Complete Response', 'Partial Response']:
+                self.treatment_refractory_status = 'Responsive'
+            elif last_outcome == 'Stable Disease':
+                self.treatment_refractory_status = 'Stable'
+            else:
+                self.treatment_refractory_status = 'Unknown'
+        else:
+            self.treatment_refractory_status = None
+        
+        # Calculate relapse count based on outcomes
+        # Count number of times treatment was followed by progression or new line
+        relapse = 0
+        if self.first_line_outcome == 'Progressive Disease' and self.second_line_therapy:
+            relapse += 1
+        if self.second_line_outcome == 'Progressive Disease' and self.later_therapy:
+            relapse += 1
+        if self.later_outcome == 'Progressive Disease':
+            relapse += 1
+        
+        self.relapse_count = relapse if relapse > 0 else None

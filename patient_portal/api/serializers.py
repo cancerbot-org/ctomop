@@ -29,13 +29,11 @@ class PatientListSerializer(serializers.ModelSerializer):
         ]
     
     def get_patient_name(self, obj):
-        # Get user associated with this person
-        try:
-            user = User.objects.get(id=obj.person.person_id)
-            full_name = f"{user.first_name} {user.last_name}".strip()
-            return full_name if full_name else user.username
-        except User.DoesNotExist:
-            return f"Patient {obj.person.person_id}"
+        # Get name from Person model (OMOP extension)
+        if obj.person:
+            full_name = f"{obj.person.given_name or ''} {obj.person.family_name or ''}".strip()
+            return full_name if full_name else f"Patient {obj.person.person_id}"
+        return f"Patient {obj.person.person_id}"
     
     def get_age(self, obj):
         if obj.date_of_birth:
@@ -49,6 +47,8 @@ class PatientInfoSerializer(serializers.ModelSerializer):
     person_id = serializers.IntegerField(source='person.person_id', read_only=True)
     patient_name = serializers.SerializerMethodField()
     age = serializers.SerializerMethodField()
+    gender = serializers.SerializerMethodField()
+    refractory_status = serializers.CharField(source='treatment_refractory_status', required=False, allow_null=True, allow_blank=True)
     
     class Meta:
         model = PatientInfo
@@ -56,12 +56,11 @@ class PatientInfoSerializer(serializers.ModelSerializer):
         read_only_fields = ['person', 'created_at', 'updated_at']
     
     def get_patient_name(self, obj):
-        try:
-            user = User.objects.get(id=obj.person.person_id)
-            full_name = f"{user.first_name} {user.last_name}".strip()
-            return full_name if full_name else user.username
-        except User.DoesNotExist:
-            return f"Patient {obj.person.person_id}"
+        # Get name from Person model (OMOP extension)
+        if obj.person:
+            full_name = f"{obj.person.given_name or ''} {obj.person.family_name or ''}".strip()
+            return full_name if full_name else f"Patient {obj.person.person_id}"
+        return f"Patient {obj.person.person_id}"
     
     def get_age(self, obj):
         if obj.date_of_birth:
@@ -69,3 +68,20 @@ class PatientInfoSerializer(serializers.ModelSerializer):
             age = today.year - obj.date_of_birth.year - ((today.month, today.day) < (obj.date_of_birth.month, obj.date_of_birth.day))
             return age
         return None
+    
+    def get_gender(self, obj):
+        if obj.person and obj.person.gender_concept:
+            gender_name = obj.person.gender_concept.concept_name
+            if gender_name == 'MALE':
+                return 'Male'
+            elif gender_name == 'FEMALE':
+                return 'Female'
+            else:
+                return 'Other'
+        return 'Unknown'
+    
+    def update(self, instance, validated_data):
+        # Handle the refractory_status mapping
+        if 'treatment_refractory_status' in validated_data:
+            instance.treatment_refractory_status = validated_data.pop('treatment_refractory_status')
+        return super().update(instance, validated_data)
