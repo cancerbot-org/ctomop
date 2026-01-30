@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "cd frontend && npm install && npm run build && cd .. && python manage.py migrate && python manage.py collectstatic --noinput && gunicorn ctomop.wsgi:application --bind 0.0.0.0:$PORT --timeout 120",
+    "startCommand": "cd frontend && npm install && npm run build && cd .. && python manage.py migrate && rm -rf staticfiles && python manage.py collectstatic --noinput && gunicorn ctomop.wsgi:application --bind 0.0.0.0:$PORT --timeout 120",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }

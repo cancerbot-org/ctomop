@@ -44,7 +44,12 @@ export interface PatientInfo {
   measurable_disease_imwg?: string;
   
   // Treatment
+  prior_therapy?: string;
   prior_lines_of_therapy?: number;
+  therapy_lines_count?: number;
+  relapse_count?: number;
+  refractory_status?: string;
+  treatment_refractory_status?: string;
   prior_treatments?: string;
   prior_chemotherapy?: boolean;
   prior_radiation?: boolean;
@@ -53,6 +58,20 @@ export interface PatientInfo {
   prior_targeted_therapy?: boolean;
   current_medications?: string;
   allergies?: string;
+  
+  // Therapy Lines
+  first_line_therapy?: string;
+  first_line_date?: string;
+  first_line_outcome?: string;
+  second_line_therapy?: string;
+  second_line_date?: string;
+  second_line_outcome?: string;
+  later_therapy?: string;
+  later_line_therapy?: string;  // UI uses this name
+  later_date?: string;
+  later_line_date?: string;  // UI uses this name
+  later_outcome?: string;
+  later_line_outcome?: string;  // UI uses this name
   
   // Blood Markers
   hemoglobin_g_dl?: number;
