@@ -597,7 +597,31 @@ const PatientDetail: React.FC = () => {
         </Typography>
       </Grid>
       {renderTextField('Ki-67 Proliferation Index (%)', 'ki67_proliferation_index', false, 'number')}
+      {renderTextField('Ki-67 Percentage (%)', 'ki67_percentage', false, 'number')}
       {renderTextField('PD-L1 Status (%)', 'pd_l1_tumor_cels', false, 'number')}
+      {renderTextField('Oncotype DX Score', 'oncotype_dx_score', false, 'number')}
+      {renderTextField('Androgen Receptor Status', 'androgen_receptor_status', true)}
+      
+      <Grid item xs={12}>
+        <Divider sx={{ my: 2 }} />
+        <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+          Test Information
+        </Typography>
+      </Grid>
+      {renderTextField('Test Methodology', 'test_methodology', true)}
+      {renderDateField('Test Date', 'test_date')}
+      {renderTextField('Test Specimen Type', 'test_specimen_type', true)}
+      {renderTextField('Report Interpretation', 'report_interpretation', true)}
+      {renderDateField('ECOG Assessment Date', 'ecog_assessment_date')}
+      
+      <Grid item xs={12}>
+        <Divider sx={{ my: 2 }} />
+        <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+          Treatment Information
+        </Typography>
+      </Grid>
+      {renderTextField('Therapy Intent', 'therapy_intent', true)}
+      {renderTextField('Reason for Discontinuation', 'reason_for_discontinuation', true)}
       
       <Grid item xs={12}>
         <Divider sx={{ my: 2 }} />
@@ -1057,6 +1081,8 @@ const PatientDetail: React.FC = () => {
             {renderTextField('Serum Sodium (mEq/L)', 'serum_sodium', false, 'number')}
             {renderTextField('Serum Potassium (mEq/L)', 'serum_potassium', false, 'number')}
             {renderTextField('Serum Calcium (mg/dL)', 'serum_calcium_level', false, 'number')}
+            {renderTextField('Magnesium (mg/dL)', 'magnesium', false, 'number')}
+            {renderTextField('Phosphorus (mg/dL)', 'phosphorus', false, 'number')}
             {renderTextField('Serum Albumin (g/dL)', 'albumin_level', false, 'number')}
             {renderTextField('Total Protein (g/dL)', 'total_protein', false, 'number')}
             
@@ -1077,7 +1103,8 @@ const PatientDetail: React.FC = () => {
                 Other Markers
               </Typography>
             </Grid>
-            {renderTextField('LDH (U/L)', 'ldh_level', false, 'number')}
+            {renderTextField('LDH (U/L)', 'ldh', false, 'number')}
+            {renderTextField('Alkaline Phosphatase (U/L)', 'alkaline_phosphatase', false, 'number')}
             {renderTextField('Beta-2 Microglobulin (mg/L)', 'beta2_microglobulin', false, 'number')}
             {renderTextField('C-Reactive Protein (mg/L)', 'c_reactive_protein', false, 'number')}
             {renderTextField('ESR (mm/hr)', 'esr', false, 'number')}
@@ -1132,6 +1159,15 @@ const PatientDetail: React.FC = () => {
             {renderSelectField('Insurance Type', 'insurance_type', INSURANCE_TYPE_OPTIONS)}
             {renderTextField('Number of Dependents', 'number_of_dependents', false, 'number')}
             {renderTextField('Annual Household Income (USD)', 'annual_household_income', false, 'number')}
+            
+            <Grid item xs={12}>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ mt: 2 }}>
+                Reproductive Health
+              </Typography>
+            </Grid>
+            {renderDateField('Pregnancy Test Date', 'pregnancy_test_date')}
+            {renderTextField('Pregnancy Test Result', 'pregnancy_test_result_value', true)}
           </Grid>
         </TabPanel>
       </Paper>
