@@ -6,16 +6,20 @@ from django.contrib.auth.models import User
 from django.contrib.auth import logout, login, authenticate
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+from django.utils import timezone
 from omop_core.models import Person, PatientInfo, Concept
 from datetime import datetime
 import csv
 import json
+import logging
 from io import StringIO
 from .serializers import (
     UserSerializer, PatientInfoSerializer, PatientListSerializer
 )
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
+
+logger = logging.getLogger(__name__)
 
 
 def get_gender_concept(gender_str):
@@ -365,7 +369,8 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         # Get condition onset date
                         if condition.get('onsetDateTime'):
                             try:
-                                condition_date = datetime.strptime(condition['onsetDateTime'], '%Y-%m-%d')
+                                naive_dt = datetime.strptime(condition['onsetDateTime'], '%Y-%m-%d')
+                                condition_date = timezone.make_aware(naive_dt)
                             except ValueError:
                                 pass
                     
@@ -810,7 +815,8 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         obs_date = None
                         if observation.get('effectiveDateTime'):
                             try:
-                                obs_date = datetime.strptime(observation['effectiveDateTime'], '%Y-%m-%d')
+                                naive_dt = datetime.strptime(observation['effectiveDateTime'], '%Y-%m-%d')
+                                obs_date = timezone.make_aware(naive_dt)
                             except ValueError:
                                 continue
                         
@@ -1094,6 +1100,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     )
                     
                     created_count += 1
+                    logger.info(f"Successfully imported patient {fhir_patient_id} ({person.person_id}) with {measurement_id - (last_measurement.measurement_id + 1 if last_measurement else 1)} measurements (dates converted to timezone-aware UTC)")
                     
                 except Exception as e:
                     errors.append(f"Patient {fhir_patient_id}: {str(e)}")
