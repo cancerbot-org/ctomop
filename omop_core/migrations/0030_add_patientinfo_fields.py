@@ -10,25 +10,19 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Add patient_info fields that were added via SQL
-        migrations.AddField(
-            model_name='patientinfo',
-            name='city',
-            field=models.CharField(blank=True, max_length=255, null=True),
-        ),
-        migrations.AddField(
-            model_name='patientinfo',
-            name='date_of_birth',
-            field=models.DateField(blank=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='patientinfo',
-            name='created_at',
-            field=models.DateTimeField(auto_now_add=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='patientinfo',
-            name='updated_at',
-            field=models.DateTimeField(auto_now=True, null=True),
+        # Add patient_info fields using raw SQL with IF NOT EXISTS
+        migrations.RunSQL(
+            sql="""
+                ALTER TABLE patient_info ADD COLUMN IF NOT EXISTS city VARCHAR(255);
+                ALTER TABLE patient_info ADD COLUMN IF NOT EXISTS date_of_birth DATE;
+                ALTER TABLE patient_info ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+                ALTER TABLE patient_info ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+            """,
+            reverse_sql="""
+                ALTER TABLE patient_info DROP COLUMN IF EXISTS updated_at;
+                ALTER TABLE patient_info DROP COLUMN IF EXISTS created_at;
+                ALTER TABLE patient_info DROP COLUMN IF EXISTS date_of_birth;
+                ALTER TABLE patient_info DROP COLUMN IF EXISTS city;
+            """
         ),
     ]
