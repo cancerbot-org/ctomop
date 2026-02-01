@@ -405,7 +405,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     last_measurement = Measurement.objects.all().order_by('-measurement_id').first()
                     measurement_id = last_measurement.measurement_id + 1 if last_measurement else 1
                     
-                    # Extract tumor characteristics from observations
+                    # Extract tumor characteristics and lab values from observations
                     tumor_size = None
                     lymph_node_status = None
                     metastasis_status = None
@@ -417,9 +417,220 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     pdl1_percentage = None
                     genetic_mutations = []
                     
+                    # Blood count values
+                    hemoglobin_g_dl = None
+                    hematocrit_percent = None
+                    wbc_count = None
+                    rbc_count = None
+                    platelet_count = None
+                    anc_count = None
+                    alc_count = None
+                    amc_count = None
+                    
+                    # Kidney function
+                    serum_calcium = None
+                    serum_creatinine = None
+                    creatinine_clearance = None
+                    egfr = None
+                    bun = None
+                    
+                    # Electrolytes
+                    sodium = None
+                    potassium = None
+                    calcium = None
+                    magnesium = None
+                    
+                    # Liver function
+                    bilirubin_total = None
+                    bilirubin_direct = None
+                    alt = None
+                    ast = None
+                    alkaline_phosphatase = None
+                    albumin = None
+                    total_protein = None
+                    
+                    # Cardiac & Other
+                    troponin = None
+                    bnp = None
+                    glucose = None
+                    hba1c = None
+                    ldh = None
+                    
+                    # Other markers
+                    beta2_microglobulin = None
+                    c_reactive_protein = None
+                    esr = None
+                    creatinine_clearance_rate = None
+                    
+                    # Coagulation
+                    inr = None
+                    pt = None
+                    ptt = None
+                    
+                    # Tumor markers
+                    cea = None
+                    ca19_9 = None
+                    psa = None
+                    
+                    # Behavior tab - Lifestyle
+                    smoking_status = None
+                    pack_years = None
+                    alcohol_use = None
+                    drinks_per_week = None
+                    exercise_frequency = None
+                    exercise_minutes_per_week = None
+                    diet_type = None
+                    
+                    # Behavior tab - Sleep & Wellbeing
+                    sleep_hours_per_night = None
+                    sleep_quality = None
+                    stress_level = None
+                    social_support = None
+                    
+                    # Behavior tab - Socioeconomic
+                    employment_status = None
+                    education_level = None
+                    marital_status = None
+                    insurance_type = None
+                    number_of_dependents = None
+                    annual_household_income = None
+                    
                     for observation in data['observations']:
                         obs_code = observation.get('code', {})
                         obs_text = obs_code.get('text', '').lower()
+                        value_number = observation.get('valueQuantity', {}).get('value') if observation.get('valueQuantity') else None
+                        value_codeable = observation.get('valueCodeableConcept', {}).get('text') if observation.get('valueCodeableConcept') else None
+                        
+                        # Get LOINC code for lab mapping
+                        loinc_code = None
+                        if obs_code.get('coding'):
+                            for coding in obs_code['coding']:
+                                if coding.get('system') == 'http://loinc.org':
+                                    loinc_code = coding.get('code')
+                                    break
+                        
+                        # Map LOINC codes to blood count fields
+                        if loinc_code == '718-7':  # Hemoglobin
+                            hemoglobin_g_dl = value_number
+                        elif loinc_code == '4544-3':  # Hematocrit
+                            hematocrit_percent = value_number
+                        elif loinc_code == '6690-2':  # WBC
+                            wbc_count = value_number
+                        elif loinc_code == '789-8':  # RBC
+                            rbc_count = value_number
+                        elif loinc_code == '777-3':  # Platelets
+                            platelet_count = value_number
+                        elif loinc_code == '751-8':  # ANC
+                            anc_count = value_number
+                        elif loinc_code == '731-0':  # ALC
+                            alc_count = value_number
+                        elif loinc_code == '742-7':  # AMC
+                            amc_count = value_number
+                        # Kidney function
+                        elif loinc_code == '17861-6' or loinc_code == '2000-8':  # Serum Calcium / Calcium
+                            serum_calcium = value_number
+                            calcium = value_number
+                        elif loinc_code == '2160-0':  # Serum Creatinine
+                            serum_creatinine = value_number
+                        elif loinc_code == '2164-2':  # Creatinine Clearance
+                            creatinine_clearance = value_number
+                        elif loinc_code == '33914-3':  # eGFR
+                            egfr = value_number
+                        elif loinc_code == '3094-0':  # BUN
+                            bun = value_number
+                        # Electrolytes
+                        elif loinc_code == '2951-2':  # Sodium
+                            sodium = value_number
+                        elif loinc_code == '2823-3':  # Potassium
+                            potassium = value_number
+                        elif loinc_code == '19123-9':  # Magnesium
+                            magnesium = value_number
+                        # Liver function
+                        elif loinc_code == '1975-2':  # Total Bilirubin
+                            bilirubin_total = value_number
+                        elif loinc_code == '1968-7':  # Direct Bilirubin
+                            bilirubin_direct = value_number
+                        elif loinc_code == '1742-6':  # ALT
+                            alt = value_number
+                        elif loinc_code == '1920-8':  # AST
+                            ast = value_number
+                        elif loinc_code == '6768-6':  # Alkaline Phosphatase
+                            alkaline_phosphatase = value_number
+                        elif loinc_code == '1751-7':  # Albumin
+                            albumin = value_number
+                        elif loinc_code == '2885-2':  # Total Protein
+                            total_protein = value_number
+                        # Other markers
+                        elif loinc_code == '1754-1' or loinc_code == '48346-3':  # Beta-2 Microglobulin
+                            beta2_microglobulin = value_number
+                        elif loinc_code == '1988-5':  # C-Reactive Protein
+                            c_reactive_protein = value_number
+                        elif loinc_code == '4537-7' or loinc_code == '30341-2':  # ESR
+                            esr = value_number
+                        elif loinc_code == '2164-2' or loinc_code == '33558-8':  # Creatinine Clearance Rate
+                            creatinine_clearance_rate = value_number
+                        # Cardiac & Other
+                        elif loinc_code == '10839-9' or loinc_code == '6598-7':  # Troponin
+                            troponin = value_number
+                        elif loinc_code == '42637-9':  # BNP
+                            bnp = value_number
+                        elif loinc_code == '2345-7':  # Glucose
+                            glucose = value_number
+                        elif loinc_code == '4548-4':  # HbA1c
+                            hba1c = value_number
+                        elif loinc_code == '2532-0':  # LDH
+                            ldh = value_number
+                        # Coagulation
+                        elif loinc_code == '6301-6':  # INR
+                            inr = value_number
+                        elif loinc_code == '5902-2':  # PT
+                            pt = value_number
+                        elif loinc_code == '3173-2':  # PTT
+                            ptt = value_number
+                        # Tumor markers
+                        elif loinc_code == '2039-6':  # CEA
+                            cea = value_number
+                        elif loinc_code == '25390-6':  # CA 19-9
+                            ca19_9 = value_number
+                        elif loinc_code == '2857-1':  # PSA
+                            psa = value_number
+                        # Behavior - Lifestyle
+                        elif loinc_code == '72166-2':  # Smoking Status
+                            smoking_status = value_codeable
+                        elif loinc_code == '63640-7':  # Pack Years
+                            pack_years = value_number
+                        elif loinc_code == '74013-4':  # Alcohol Use
+                            alcohol_use = value_codeable
+                        elif loinc_code == '11286-7':  # Drinks per Week
+                            drinks_per_week = value_number
+                        elif loinc_code == '68516-4':  # Exercise Frequency
+                            exercise_frequency = value_codeable
+                        elif loinc_code == '89555-7':  # Exercise Minutes per Week
+                            exercise_minutes_per_week = value_number
+                        elif loinc_code == '88365-2':  # Diet Type
+                            diet_type = value_codeable
+                        # Behavior - Sleep & Wellbeing
+                        elif loinc_code == '93832-4':  # Sleep Hours per Night
+                            sleep_hours_per_night = value_number
+                        elif loinc_code == '93831-6':  # Sleep Quality
+                            sleep_quality = value_codeable
+                        elif loinc_code == '73985-4':  # Stress Level
+                            stress_level = value_codeable
+                        elif loinc_code == '93033-9':  # Social Support
+                            social_support = value_codeable
+                        # Behavior - Socioeconomic
+                        elif loinc_code == '74165-2':  # Employment Status
+                            employment_status = value_codeable
+                        elif loinc_code == '82589-3':  # Education Level
+                            education_level = value_codeable
+                        elif loinc_code == '45404-1':  # Marital Status
+                            marital_status = value_codeable
+                        elif loinc_code == '76513-1':  # Insurance Type
+                            insurance_type = value_codeable
+                        elif loinc_code == '63512-8':  # Number of Dependents
+                            number_of_dependents = value_number
+                        elif loinc_code == '77243-3':  # Annual Household Income
+                            annual_household_income = value_number
                         
                         # Check for tumor size
                         if 'tumor size' in obs_text or 'size tumor' in obs_text:
@@ -679,7 +890,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                                 pass
                         later_outcome = therapy_lines[3]['outcome']
                     
-                    # Create PatientInfo with address, ethnicity, vital signs, and therapy
+                    # Create PatientInfo with address, ethnicity, vital signs, therapy, and lab values
                     patient_info = PatientInfo.objects.create(
                         person=person,
                         date_of_birth=birth_date,
@@ -717,6 +928,87 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         later_therapy=later_therapy,
                         later_date=later_date,
                         later_outcome=later_outcome,
+                        # Blood counts (Blood tab)
+                        hemoglobin_g_dl=hemoglobin_g_dl,
+                        hematocrit_percent=hematocrit_percent,
+                        wbc_count_thousand_per_ul=wbc_count,
+                        rbc_million_per_ul=rbc_count,
+                        platelet_count_thousand_per_ul=platelet_count,
+                        anc_thousand_per_ul=anc_count,
+                        alc_thousand_per_ul=alc_count,
+                        amc_thousand_per_ul=amc_count,
+                        # Kidney function (Blood tab)
+                        serum_calcium_mg_dl=serum_calcium,
+                        serum_creatinine_mg_dl=serum_creatinine,
+                        creatinine_clearance_ml_min=creatinine_clearance,
+                        egfr_ml_min_173m2=egfr,
+                        bun_mg_dl=bun,
+                        # Electrolytes (Blood tab)
+                        sodium_meq_l=sodium,
+                        potassium_meq_l=potassium,
+                        calcium_mg_dl=calcium,
+                        magnesium_mg_dl=magnesium,
+                        # Liver function (Blood tab)
+                        bilirubin_total_mg_dl=bilirubin_total,
+                        alt_u_l=alt,
+                        ast_u_l=ast,
+                        alkaline_phosphatase_u_l=alkaline_phosphatase,
+                        albumin_g_dl=albumin,
+                        # Cardiac & Other (Blood tab)
+                        troponin_ng_ml=troponin,
+                        bnp_pg_ml=bnp,
+                        glucose_mg_dl=glucose,
+                        hba1c_percent=hba1c,
+                        ldh_u_l=ldh,
+                        # Coagulation (Blood tab)
+                        inr=inr,
+                        pt_seconds=pt,
+                        ptt_seconds=ptt,
+                        # Tumor markers (Blood tab)
+                        cea_ng_ml=cea,
+                        ca19_9_u_ml=ca19_9,
+                        psa_ng_ml=psa,
+                        # Labs tab - Chemistry Panel (duplicate mapping for old field names)
+                        serum_creatinine_level=serum_creatinine,
+                        serum_calcium_level=serum_calcium,
+                        blood_urea_nitrogen=bun,
+                        egfr=egfr,
+                        serum_sodium=sodium,
+                        serum_potassium=potassium,
+                        albumin_level=albumin,
+                        total_protein=total_protein,
+                        creatinine_clearance_rate=creatinine_clearance_rate,
+                        # Labs tab - Liver Function Tests
+                        liver_enzyme_levels_ast=ast,
+                        liver_enzyme_levels_alt=alt,
+                        liver_enzyme_levels_alp=alkaline_phosphatase,
+                        serum_bilirubin_level_total=bilirubin_total,
+                        serum_bilirubin_level_direct=bilirubin_direct,
+                        # Labs tab - Other Markers
+                        ldh_level=ldh,
+                        beta2_microglobulin=beta2_microglobulin,
+                        c_reactive_protein=c_reactive_protein,
+                        esr=esr,
+                        # Behavior tab - Lifestyle
+                        smoking_status=smoking_status,
+                        pack_years=pack_years,
+                        alcohol_use=alcohol_use,
+                        drinks_per_week=drinks_per_week,
+                        exercise_frequency=exercise_frequency,
+                        exercise_minutes_per_week=exercise_minutes_per_week,
+                        diet_type=diet_type,
+                        # Behavior tab - Sleep & Wellbeing
+                        sleep_hours_per_night=sleep_hours_per_night,
+                        sleep_quality=sleep_quality,
+                        stress_level=stress_level,
+                        social_support=social_support,
+                        # Behavior tab - Socioeconomic
+                        employment_status=employment_status,
+                        education_level=education_level,
+                        marital_status=marital_status,
+                        insurance_type=insurance_type,
+                        number_of_dependents=number_of_dependents,
+                        annual_household_income=annual_household_income,
                     )
                     
                     created_count += 1

@@ -591,6 +591,46 @@ class PatientInfo(models.Model):
         default='G/DL'
     )
 
+    # Blood count fields (simplified names for UI)
+    hemoglobin_g_dl = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Hemoglobin (g/dL)")
+    hematocrit_percent = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Hematocrit (%)")
+    wbc_count_thousand_per_ul = models.DecimalField(decimal_places=1, max_digits=6, blank=True, null=True, help_text="White Blood Cell Count (10³/µL)")
+    rbc_million_per_ul = models.DecimalField(decimal_places=2, max_digits=5, blank=True, null=True, help_text="Red Blood Cell Count (10⁶/µL)")
+    platelet_count_thousand_per_ul = models.DecimalField(decimal_places=1, max_digits=6, blank=True, null=True, help_text="Platelet Count (10³/µL)")
+    anc_thousand_per_ul = models.DecimalField(decimal_places=1, max_digits=6, blank=True, null=True, help_text="Absolute Neutrophil Count (10³/µL)")
+    alc_thousand_per_ul = models.DecimalField(decimal_places=1, max_digits=6, blank=True, null=True, help_text="Absolute Lymphocyte Count (10³/µL)")
+    amc_thousand_per_ul = models.DecimalField(decimal_places=1, max_digits=6, blank=True, null=True, help_text="Absolute Monocyte Count (10³/µL)")
+    
+    # Additional kidney and electrolyte fields (simplified names for UI)
+    serum_calcium_mg_dl = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Serum Calcium (mg/dL)")
+    serum_creatinine_mg_dl = models.DecimalField(decimal_places=2, max_digits=5, blank=True, null=True, help_text="Serum Creatinine (mg/dL)")
+    creatinine_clearance_ml_min = models.DecimalField(decimal_places=1, max_digits=6, blank=True, null=True, help_text="Creatinine Clearance (mL/min)")
+    creatinine_mg_dl = models.DecimalField(decimal_places=2, max_digits=5, blank=True, null=True, help_text="Creatinine (mg/dL)")
+    egfr_ml_min_173m2 = models.DecimalField(decimal_places=1, max_digits=6, blank=True, null=True, help_text="eGFR (mL/min/1.73m²)")
+    bun_mg_dl = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Blood Urea Nitrogen (mg/dL)")
+    sodium_meq_l = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Sodium (mEq/L)")
+    potassium_meq_l = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Potassium (mEq/L)")
+    calcium_mg_dl = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Calcium (mg/dL)")
+    magnesium_mg_dl = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Magnesium (mg/dL)")
+    
+    # Liver function and other lab tests (simplified names for UI)
+    bilirubin_total_mg_dl = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Total Bilirubin (mg/dL)")
+    alt_u_l = models.IntegerField(blank=True, null=True, help_text="ALT (U/L)")
+    ast_u_l = models.IntegerField(blank=True, null=True, help_text="AST (U/L)")
+    alkaline_phosphatase_u_l = models.IntegerField(blank=True, null=True, help_text="Alkaline Phosphatase (U/L)")
+    albumin_g_dl = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Albumin (g/dL)")
+    troponin_ng_ml = models.DecimalField(decimal_places=3, max_digits=7, blank=True, null=True, help_text="Troponin (ng/mL)")
+    bnp_pg_ml = models.IntegerField(blank=True, null=True, help_text="BNP (pg/mL)")
+    glucose_mg_dl = models.IntegerField(blank=True, null=True, help_text="Glucose (mg/dL)")
+    hba1c_percent = models.DecimalField(decimal_places=1, max_digits=4, blank=True, null=True, help_text="HbA1c (%)")
+    inr = models.DecimalField(decimal_places=2, max_digits=5, blank=True, null=True, help_text="INR")
+    pt_seconds = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="PT (seconds)")
+    ptt_seconds = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="PTT (seconds)")
+    cea_ng_ml = models.DecimalField(decimal_places=1, max_digits=8, blank=True, null=True, help_text="CEA (ng/mL)")
+    ca19_9_u_ml = models.DecimalField(decimal_places=1, max_digits=8, blank=True, null=True, help_text="CA 19-9 (U/mL)")
+    psa_ng_ml = models.DecimalField(decimal_places=2, max_digits=7, blank=True, null=True, help_text="PSA (ng/mL)")
+    ldh_u_l = models.IntegerField(blank=True, null=True, help_text="LDH (U/L)")
+
     # Additional lab values
     bone_lesions = models.TextField(blank=True, null=True)
     meets_crab = models.BooleanField(blank=True, null=True)
@@ -623,6 +663,20 @@ class PatientInfo(models.Model):
         null=True,
         default='G/DL'
     )
+    
+    # Additional Labs tab fields (Chemistry Panel)
+    blood_urea_nitrogen = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Blood Urea Nitrogen (mg/dL)")
+    egfr = models.DecimalField(decimal_places=1, max_digits=6, blank=True, null=True, help_text="eGFR (mL/min/1.73m²)")
+    serum_sodium = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Serum Sodium (mEq/L)")
+    serum_potassium = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Serum Potassium (mEq/L)")
+    total_protein = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Total Protein (g/dL)")
+    
+    # Additional Labs tab fields (Other Markers)
+    ldh_level = models.IntegerField(blank=True, null=True, help_text="LDH (U/L)")
+    beta2_microglobulin = models.DecimalField(decimal_places=2, max_digits=6, blank=True, null=True, help_text="Beta-2 Microglobulin (mg/L)")
+    c_reactive_protein = models.DecimalField(decimal_places=2, max_digits=6, blank=True, null=True, help_text="C-Reactive Protein (mg/L)")
+    esr = models.IntegerField(blank=True, null=True, help_text="ESR (mm/hr)")
+    
     kappa_flc = models.IntegerField(blank=True, null=True)
     lambda_flc = models.IntegerField(blank=True, null=True)
     meets_slim = models.BooleanField(blank=True, null=True)
@@ -649,6 +703,29 @@ class PatientInfo(models.Model):
     no_mental_health_disorder_status = models.BooleanField(help_text="Does the patient have a mental health disorder?", blank=False, null=False, default=True)
     no_concomitant_medication_status = models.BooleanField(help_text="Does the patient have concomitant medication?", blank=False, null=False, default=True)
     concomitant_medication_details = models.CharField(max_length=255, help_text="Details about the patient's concomitant medications", blank=True, null=True)
+    
+    # Behavior tab - Lifestyle Factors
+    smoking_status = models.CharField(max_length=50, blank=True, null=True, help_text="Smoking Status (Never/Former/Current)")
+    pack_years = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Pack Years")
+    alcohol_use = models.CharField(max_length=50, blank=True, null=True, help_text="Alcohol Use (None/Light/Moderate/Heavy)")
+    drinks_per_week = models.IntegerField(blank=True, null=True, help_text="Drinks per Week")
+    exercise_frequency = models.CharField(max_length=50, blank=True, null=True, help_text="Exercise Frequency")
+    exercise_minutes_per_week = models.IntegerField(blank=True, null=True, help_text="Exercise Minutes per Week")
+    diet_type = models.CharField(max_length=100, blank=True, null=True, help_text="Diet Type")
+    
+    # Behavior tab - Sleep & Wellbeing
+    sleep_hours_per_night = models.DecimalField(decimal_places=1, max_digits=4, blank=True, null=True, help_text="Average Sleep Hours per Night")
+    sleep_quality = models.CharField(max_length=50, blank=True, null=True, help_text="Sleep Quality")
+    stress_level = models.CharField(max_length=50, blank=True, null=True, help_text="Stress Level")
+    social_support = models.CharField(max_length=50, blank=True, null=True, help_text="Social Support")
+    
+    # Behavior tab - Socioeconomic Factors
+    employment_status = models.CharField(max_length=50, blank=True, null=True, help_text="Employment Status")
+    education_level = models.CharField(max_length=100, blank=True, null=True, help_text="Education Level")
+    marital_status = models.CharField(max_length=50, blank=True, null=True, help_text="Marital Status")
+    insurance_type = models.CharField(max_length=100, blank=True, null=True, help_text="Insurance Type")
+    number_of_dependents = models.IntegerField(blank=True, null=True, help_text="Number of Dependents")
+    annual_household_income = models.DecimalField(decimal_places=2, max_digits=12, blank=True, null=True, help_text="Annual Household Income (USD)")
 
     no_tobacco_use_status = models.BooleanField(help_text="Does the patient use tobacco?", blank=False, null=False, default=True)
     tobacco_use_details = models.CharField(max_length=255, help_text="Details about the patient's tobacco use", blank=True, null=True)

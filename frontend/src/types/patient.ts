@@ -75,15 +75,21 @@ export interface PatientInfo {
   
   // Blood Markers
   hemoglobin_g_dl?: number;
+  hematocrit_percent?: number;
   wbc_count_thousand_per_ul?: number;
+  rbc_million_per_ul?: number;
   platelet_count_thousand_per_ul?: number;
   anc_thousand_per_ul?: number;
   alc_thousand_per_ul?: number;
+  amc_thousand_per_ul?: number;
+  serum_creatinine_mg_dl?: number;
+  creatinine_clearance_ml_min?: number;
   creatinine_mg_dl?: number;
   egfr_ml_min_173m2?: number;
   bun_mg_dl?: number;
   sodium_meq_l?: number;
   potassium_meq_l?: number;
+  serum_calcium_mg_dl?: number;
   calcium_mg_dl?: number;
   magnesium_mg_dl?: number;
   
@@ -132,6 +138,29 @@ export interface PatientInfo {
   english_read_write?: boolean;
   spanish_speak_understand?: boolean;
   spanish_read_write?: boolean;
+  
+  // Behavior tab - Lifestyle
+  smoking_status?: string;
+  pack_years?: number;
+  alcohol_use?: string;
+  drinks_per_week?: number;
+  exercise_frequency?: string;
+  exercise_minutes_per_week?: number;
+  diet_type?: string;
+  
+  // Behavior tab - Sleep & Wellbeing
+  sleep_hours_per_night?: number;
+  sleep_quality?: string;
+  stress_level?: string;
+  social_support?: string;
+  
+  // Behavior tab - Socioeconomic
+  employment_status?: string;
+  education_level?: string;
+  marital_status?: string;
+  insurance_type?: string;
+  number_of_dependents?: number;
+  annual_household_income?: number;
 }
 
 export interface PatientMessage {

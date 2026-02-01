@@ -1000,14 +1000,45 @@ const PatientDetail: React.FC = () => {
         <TabPanel value={activeTab} index={3}>
           <Typography variant="h6" gutterBottom>Blood Counts</Typography>
           <Grid container spacing={3}>
-            {renderTextField('Hemoglobin (g/dL)', 'hemoglobin_level', false, 'number')}
-            {renderTextField('Hematocrit (%)', 'hematocrit', false, 'number')}
-            {renderTextField('White Blood Cell Count (10³/µL)', 'white_blood_cell_count', false, 'number')}
-            {renderTextField('Red Blood Cell Count (10⁶/µL)', 'red_blood_cell_count', false, 'number')}
-            {renderTextField('Platelet Count (10³/µL)', 'platelet_count', false, 'number')}
-            {renderTextField('Absolute Neutrophil Count (10³/µL)', 'absolute_neutrophile_count', false, 'number')}
-            {renderTextField('Absolute Lymphocyte Count (10³/µL)', 'absolute_lymphocyte_count', false, 'number')}
-            {renderTextField('Absolute Monocyte Count (10³/µL)', 'absolute_monocyte_count', false, 'number')}
+            {renderTextField('Hemoglobin (g/dL)', 'hemoglobin_g_dl', false, 'number')}
+            {renderTextField('Hematocrit (%)', 'hematocrit_percent', false, 'number')}
+            {renderTextField('WBC Count (10³/µL)', 'wbc_count_thousand_per_ul', false, 'number')}
+            {renderTextField('RBC Count (10⁶/µL)', 'rbc_million_per_ul', false, 'number')}
+            {renderTextField('Platelet Count (10³/µL)', 'platelet_count_thousand_per_ul', false, 'number')}
+            {renderTextField('ANC (10³/µL)', 'anc_thousand_per_ul', false, 'number')}
+            {renderTextField('ALC (10³/µL)', 'alc_thousand_per_ul', false, 'number')}
+            {renderTextField('AMC (10³/µL)', 'amc_thousand_per_ul', false, 'number')}
+          </Grid>
+          
+          <Typography variant="h6" gutterBottom sx={{ mt: 3 }}>Electrolytes</Typography>
+          <Grid container spacing={3}>
+            {renderTextField('Sodium (mEq/L)', 'sodium_meq_l', false, 'number')}
+            {renderTextField('Potassium (mEq/L)', 'potassium_meq_l', false, 'number')}
+            {renderTextField('Calcium (mg/dL)', 'calcium_mg_dl', false, 'number')}
+            {renderTextField('Magnesium (mg/dL)', 'magnesium_mg_dl', false, 'number')}
+          </Grid>
+          
+          <Typography variant="h6" gutterBottom sx={{ mt: 3 }}>Cardiac & Other</Typography>
+          <Grid container spacing={3}>
+            {renderTextField('Troponin (ng/mL)', 'troponin_ng_ml', false, 'number')}
+            {renderTextField('BNP (pg/mL)', 'bnp_pg_ml', false, 'number')}
+            {renderTextField('Glucose (mg/dL)', 'glucose_mg_dl', false, 'number')}
+            {renderTextField('HbA1c (%)', 'hba1c_percent', false, 'number')}
+            {renderTextField('LDH (U/L)', 'ldh_u_l', false, 'number')}
+          </Grid>
+          
+          <Typography variant="h6" gutterBottom sx={{ mt: 3 }}>Coagulation</Typography>
+          <Grid container spacing={3}>
+            {renderTextField('INR', 'inr', false, 'number')}
+            {renderTextField('PT (seconds)', 'pt_seconds', false, 'number')}
+            {renderTextField('PTT (seconds)', 'ptt_seconds', false, 'number')}
+          </Grid>
+          
+          <Typography variant="h6" gutterBottom sx={{ mt: 3 }}>Tumor Markers</Typography>
+          <Grid container spacing={3}>
+            {renderTextField('CEA (ng/mL)', 'cea_ng_ml', false, 'number')}
+            {renderTextField('CA 19-9 (U/mL)', 'ca19_9_u_ml', false, 'number')}
+            {renderTextField('PSA (ng/mL)', 'psa_ng_ml', false, 'number')}
           </Grid>
         </TabPanel>
 
@@ -1020,6 +1051,7 @@ const PatientDetail: React.FC = () => {
               </Typography>
             </Grid>
             {renderTextField('Serum Creatinine (mg/dL)', 'serum_creatinine_level', false, 'number')}
+            {renderTextField('Creatinine Clearance Rate', 'creatinine_clearance_rate', false, 'number')}
             {renderTextField('Blood Urea Nitrogen (mg/dL)', 'blood_urea_nitrogen', false, 'number')}
             {renderTextField('eGFR (mL/min/1.73m²)', 'egfr', false, 'number')}
             {renderTextField('Serum Sodium (mEq/L)', 'serum_sodium', false, 'number')}
@@ -1038,6 +1070,7 @@ const PatientDetail: React.FC = () => {
             {renderTextField('ALP (U/L)', 'liver_enzyme_levels_alp', false, 'number')}
             {renderTextField('Total Bilirubin (mg/dL)', 'serum_bilirubin_level_total', false, 'number')}
             {renderTextField('Direct Bilirubin (mg/dL)', 'serum_bilirubin_level_direct', false, 'number')}
+            {renderTextField('Albumin (g/dL)', 'albumin_g_dl', false, 'number')}
             
             <Grid item xs={12}>
               <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ mt: 2 }}>

@@ -253,15 +253,21 @@ def update_health_records(request):
             
         elif tab == 'blood':
             patient_info.hemoglobin_g_dl = get_value('hemoglobin_g_dl', float)
+            patient_info.hematocrit_percent = get_value('hematocrit_percent', float)
             patient_info.wbc_count_thousand_per_ul = get_value('wbc_count_thousand_per_ul', float)
+            patient_info.rbc_million_per_ul = get_value('rbc_million_per_ul', float)
             patient_info.platelet_count_thousand_per_ul = get_value('platelet_count_thousand_per_ul', float)
             patient_info.anc_thousand_per_ul = get_value('anc_thousand_per_ul', float)
             patient_info.alc_thousand_per_ul = get_value('alc_thousand_per_ul', float)
+            patient_info.amc_thousand_per_ul = get_value('amc_thousand_per_ul', float)
+            patient_info.serum_creatinine_mg_dl = get_value('serum_creatinine_mg_dl', float)
+            patient_info.creatinine_clearance_ml_min = get_value('creatinine_clearance_ml_min', float)
             patient_info.creatinine_mg_dl = get_value('creatinine_mg_dl', float)
             patient_info.egfr_ml_min_173m2 = get_value('egfr_ml_min_173m2', float)
             patient_info.bun_mg_dl = get_value('bun_mg_dl', float)
             patient_info.sodium_meq_l = get_value('sodium_meq_l', float)
             patient_info.potassium_meq_l = get_value('potassium_meq_l', float)
+            patient_info.serum_calcium_mg_dl = get_value('serum_calcium_mg_dl', float)
             patient_info.calcium_mg_dl = get_value('calcium_mg_dl', float)
             patient_info.magnesium_mg_dl = get_value('magnesium_mg_dl', float)
             

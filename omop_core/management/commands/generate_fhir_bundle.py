@@ -435,15 +435,41 @@ class Command(BaseCommand):
         observations = []
         
         labs = [
+            # Complete Blood Count (CBC)
             ("hemoglobin", round(random.uniform(9.5, 15.0), 1), "g/dL", "718-7", "Hemoglobin", (12.0, 16.0)),
+            ("hematocrit", round(random.uniform(33.0, 48.0), 1), "%", "4544-3", "Hematocrit", (36.0, 46.0)),
             ("wbc", round(random.uniform(3.5, 11.0), 1), "10*3/uL", "6690-2", "White blood cell count", (4.0, 11.0)),
-            ("anc", round(random.uniform(1.5, 7.0), 1), "10*3/uL", "751-8", "Neutrophils", (1.5, 8.0)),
+            ("rbc", round(random.uniform(3.8, 5.5), 2), "10*6/uL", "789-8", "Red blood cell count", (4.0, 5.2)),
             ("platelets", random.randint(100, 400), "10*3/uL", "777-3", "Platelets", (150, 400)),
+            ("anc", round(random.uniform(1.5, 7.0), 1), "10*3/uL", "751-8", "Absolute Neutrophil Count", (1.5, 8.0)),
+            ("alc", round(random.uniform(1.0, 4.0), 1), "10*3/uL", "731-0", "Absolute Lymphocyte Count", (1.0, 4.8)),
+            ("amc", round(random.uniform(0.2, 0.9), 1), "10*3/uL", "742-7", "Absolute Monocyte Count", (0.2, 0.8)),
+            
+            # Kidney Function
+            ("serum_creatinine", round(random.uniform(0.6, 1.8), 2), "mg/dL", "2160-0", "Serum Creatinine", (0.6, 1.2)),
             ("creatinine", round(random.uniform(0.6, 1.8), 2), "mg/dL", "2160-0", "Creatinine", (0.6, 1.2)),
+            ("creatinine_clearance", round(random.uniform(60.0, 120.0), 1), "mL/min", "2164-2", "Creatinine Clearance", (85.0, 125.0)),
+            ("egfr", round(random.uniform(60.0, 120.0), 1), "mL/min/1.73m2", "33914-3", "eGFR", (90.0, 120.0)),
+            ("bun", round(random.uniform(7.0, 25.0), 1), "mg/dL", "3094-0", "Blood Urea Nitrogen", (7.0, 20.0)),
+            
+            # Electrolytes
+            ("sodium", round(random.uniform(135.0, 145.0), 1), "mEq/L", "2951-2", "Sodium", (136.0, 145.0)),
+            ("potassium", round(random.uniform(3.5, 5.0), 1), "mEq/L", "2823-3", "Potassium", (3.5, 5.0)),
+            ("serum_calcium", round(random.uniform(8.5, 10.5), 1), "mg/dL", "17861-6", "Serum Calcium", (8.6, 10.2)),
+            ("calcium", round(random.uniform(8.5, 10.5), 1), "mg/dL", "17861-6", "Calcium", (8.6, 10.2)),
+            ("magnesium", round(random.uniform(1.7, 2.5), 1), "mg/dL", "19123-9", "Magnesium", (1.7, 2.2)),
+            
+            # Liver Function
             ("alt", random.randint(10, 100), "U/L", "1742-6", "ALT", (7, 56)),
             ("ast", random.randint(10, 100), "U/L", "1920-8", "AST", (8, 48)),
-            ("bilirubin", round(random.uniform(0.2, 2.0), 1), "mg/dL", "1975-2", "Total Bilirubin", (0.1, 1.2)),
+            ("bilirubin_total", round(random.uniform(0.2, 2.0), 1), "mg/dL", "1975-2", "Total Bilirubin", (0.1, 1.2)),
             ("albumin", round(random.uniform(3.0, 5.0), 1), "g/dL", "1751-7", "Albumin", (3.5, 5.5)),
+            ("alkaline_phosphatase", random.randint(30, 120), "U/L", "6768-6", "Alkaline Phosphatase", (30, 120)),
+            
+            # Other Labs
+            ("glucose", random.randint(70, 140), "mg/dL", "2345-7", "Glucose", (70, 100)),
+            ("hba1c", round(random.uniform(4.5, 6.5), 1), "%", "4548-4", "HbA1c", (4.0, 5.6)),
+            ("ldh", random.randint(100, 250), "U/L", "2532-0", "LDH", (122, 222)),
         ]
         
         for name, value, unit, loinc_code, display, ref_range in labs:

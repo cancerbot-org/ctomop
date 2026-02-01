@@ -295,8 +295,18 @@
             </div>
             
             <div class="form-group">
+                <label for="hematocrit_percent">Hematocrit (%)</label>
+                <input type="number" step="0.1" id="hematocrit_percent" name="hematocrit_percent" value="{{ patient_info.hematocrit_percent|default:'' }}">
+            </div>
+            
+            <div class="form-group">
                 <label for="wbc_count_thousand_per_ul">White Blood Cell Count (x10³/µL)</label>
                 <input type="number" step="0.1" id="wbc_count_thousand_per_ul" name="wbc_count_thousand_per_ul" value="{{ patient_info.wbc_count_thousand_per_ul|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="rbc_million_per_ul">Red Blood Cell Count (x10⁶/µL)</label>
+                <input type="number" step="0.01" id="rbc_million_per_ul" name="rbc_million_per_ul" value="{{ patient_info.rbc_million_per_ul|default:'' }}">
             </div>
             
             <div class="form-group">
@@ -313,12 +323,27 @@
                 <label for="alc_thousand_per_ul">Absolute Lymphocyte Count (x10³/µL)</label>
                 <input type="number" step="0.1" id="alc_thousand_per_ul" name="alc_thousand_per_ul" value="{{ patient_info.alc_thousand_per_ul|default:'' }}">
             </div>
+            
+            <div class="form-group">
+                <label for="amc_thousand_per_ul">Absolute Monocyte Count (x10³/µL)</label>
+                <input type="number" step="0.1" id="amc_thousand_per_ul" name="amc_thousand_per_ul" value="{{ patient_info.amc_thousand_per_ul|default:'' }}">
+            </div>
 
             <h3 style="color: #2c3e50; margin-top: 1.5rem;">Kidney Function</h3>
             
             <div class="form-group">
+                <label for="serum_creatinine_mg_dl">Serum Creatinine (mg/dL)</label>
+                <input type="number" step="0.01" id="serum_creatinine_mg_dl" name="serum_creatinine_mg_dl" value="{{ patient_info.serum_creatinine_mg_dl|default:'' }}">
+            </div>
+            
+            <div class="form-group">
                 <label for="creatinine_mg_dl">Creatinine (mg/dL)</label>
                 <input type="number" step="0.01" id="creatinine_mg_dl" name="creatinine_mg_dl" value="{{ patient_info.creatinine_mg_dl|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="creatinine_clearance_ml_min">Creatinine Clearance (mL/min)</label>
+                <input type="number" step="0.1" id="creatinine_clearance_ml_min" name="creatinine_clearance_ml_min" value="{{ patient_info.creatinine_clearance_ml_min|default:'' }}">
             </div>
             
             <div class="form-group">
@@ -344,8 +369,18 @@
             </div>
             
             <div class="form-group">
+                <label for="serum_calcium_mg_dl">Serum Calcium (mg/dL)</label>
+                <input type="number" step="0.1" id="serum_calcium_mg_dl" name="serum_calcium_mg_dl" value="{{ patient_info.serum_calcium_mg_dl|default:'' }}">
+            </div>
+            
+            <div class="form-group">
                 <label for="calcium_mg_dl">Calcium (mg/dL)</label>
                 <input type="number" step="0.1" id="calcium_mg_dl" name="calcium_mg_dl" value="{{ patient_info.calcium_mg_dl|default:'' }}">
+            </div>
+            
+            <div class="form-group">
+                <label for="magnesium_mg_dl">Magnesium (mg/dL)</label>
+                <input type="number" step="0.1" id="magnesium_mg_dl" name="magnesium_mg_dl" value="{{ patient_info.magnesium_mg_dl|default:'' }}">
             </div>
             
             <div class="form-group">
