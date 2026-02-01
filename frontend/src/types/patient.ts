@@ -185,6 +185,20 @@ export interface PatientInfo {
   // Reproductive Health
   pregnancy_test_date?: string;
   pregnancy_test_result_value?: string;
+  contraceptive_use?: boolean;
+  
+  // Consent and Support
+  consent_capability?: boolean;
+  caregiver_availability_status?: boolean;
+  
+  // Mental Health and Substance Use
+  no_mental_health_disorder_status?: boolean;
+  no_substance_use_status?: boolean;
+  substance_use_details?: string;
+  
+  // Geographic Exposure
+  no_geographic_exposure_risk?: boolean;
+  geographic_exposure_risk_details?: string;
 }
 
 export interface PatientMessage {

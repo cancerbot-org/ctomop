@@ -555,6 +555,35 @@ const PatientDetail: React.FC = () => {
     );
   };
 
+  const renderBooleanField = (label: string, field: string) => {
+    // Convert boolean to Yes/No for display
+    const boolValue = editedInfo?.[field];
+    const displayValue = boolValue === true ? 'Yes' : boolValue === false ? 'No' : '';
+    
+    return (
+      <Grid item xs={12} md={6}>
+        <FormControl fullWidth size="small">
+          <InputLabel>{label}</InputLabel>
+          <Select
+            value={displayValue}
+            label={label}
+            onChange={(e) => {
+              // Convert Yes/No back to boolean
+              const newValue = e.target.value === 'Yes' ? true : e.target.value === 'No' ? false : null;
+              handleFieldChange(field, newValue);
+            }}
+          >
+            <MenuItem value="">
+              <em>None</em>
+            </MenuItem>
+            <MenuItem value="Yes">Yes</MenuItem>
+            <MenuItem value="No">No</MenuItem>
+          </Select>
+        </FormControl>
+      </Grid>
+    );
+  };
+
   const renderBreastCancerTab = () => (
     <Grid container spacing={3}>
       <Grid item xs={12}>
@@ -1168,6 +1197,35 @@ const PatientDetail: React.FC = () => {
             </Grid>
             {renderDateField('Pregnancy Test Date', 'pregnancy_test_date')}
             {renderTextField('Pregnancy Test Result', 'pregnancy_test_result_value', true)}
+            {renderBooleanField('Using Contraceptives', 'contraceptive_use')}
+            
+            <Grid item xs={12}>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ mt: 2 }}>
+                Consent and Care Support
+              </Typography>
+            </Grid>
+            {renderBooleanField('Ability to Consent', 'consent_capability')}
+            {renderBooleanField('Availability of Caregiver', 'caregiver_availability_status')}
+            
+            <Grid item xs={12}>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ mt: 2 }}>
+                Mental Health and Substance Use
+              </Typography>
+            </Grid>
+            {renderBooleanField('Mental Health Disorders', 'no_mental_health_disorder_status')}
+            {renderBooleanField('Non-prescription Recreational Drug Use', 'no_substance_use_status')}
+            {renderTextField('Substance Use Details', 'substance_use_details', true)}
+            
+            <Grid item xs={12}>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ mt: 2 }}>
+                Environmental and Occupational Risk
+              </Typography>
+            </Grid>
+            {renderBooleanField('Geographic/Occupational/Environmental/Infectious Disease Exposure Risk', 'no_geographic_exposure_risk')}
+            {renderTextField('Exposure Risk Details', 'geographic_exposure_risk_details', true)}
           </Grid>
         </TabPanel>
       </Paper>

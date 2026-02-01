@@ -523,6 +523,20 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     # Reproductive Health
                     pregnancy_test_date = None
                     pregnancy_test_result_value = None
+                    contraceptive_use = None
+                    
+                    # Consent and Support
+                    consent_capability = None
+                    caregiver_availability_status = None
+                    
+                    # Mental Health and Substance Use
+                    no_mental_health_disorder_status = None
+                    no_substance_use_status = None
+                    substance_use_details = None
+                    
+                    # Geographic Exposure
+                    no_geographic_exposure_risk = None
+                    geographic_exposure_risk_details = None
                     
                     for observation in data['observations']:
                         obs_code = observation.get('code', {})
@@ -698,6 +712,25 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                             pregnancy_test_result_value = value_codeable
                             if observation.get('effectiveDateTime'):
                                 pregnancy_test_date = observation['effectiveDateTime'][:10]
+                        elif loinc_code == '8659-8':  # Contraceptive Use
+                            contraceptive_use = value_codeable and value_codeable.lower() in ['yes', 'true']
+                        # Consent and Support
+                        elif loinc_code == '75985-6':  # Ability to Consent
+                            consent_capability = value_codeable and value_codeable.lower() in ['yes', 'true']
+                        elif loinc_code == '74014-2':  # Caregiver Availability
+                            caregiver_availability_status = value_codeable and value_codeable.lower() in ['yes', 'true']
+                        # Mental Health and Substance Use
+                        elif loinc_code == '75618-3':  # Mental Health Disorders
+                            no_mental_health_disorder_status = value_codeable and value_codeable.lower() in ['no', 'false']
+                        elif loinc_code == '74204-0':  # Non-prescription Drug Use
+                            no_substance_use_status = value_codeable and value_codeable.lower() in ['no', 'false']
+                            if observation.get('note'):
+                                substance_use_details = observation['note'][0].get('text')
+                        # Geographic Exposure
+                        elif loinc_code == '82593-5':  # Geographic/Environmental Exposure Risk
+                            no_geographic_exposure_risk = value_codeable and value_codeable.lower() in ['no', 'false']
+                            if observation.get('note'):
+                                geographic_exposure_risk_details = observation['note'][0].get('text')
                         
                         # Check for tumor size
                         if 'tumor size' in obs_text or 'size tumor' in obs_text:
@@ -1097,6 +1130,17 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         # Reproductive Health
                         pregnancy_test_date=pregnancy_test_date,
                         pregnancy_test_result_value=pregnancy_test_result_value,
+                        contraceptive_use=contraceptive_use if contraceptive_use is not None else False,
+                        # Consent and Support
+                        consent_capability=consent_capability if consent_capability is not None else True,
+                        caregiver_availability_status=caregiver_availability_status if caregiver_availability_status is not None else True,
+                        # Mental Health and Substance Use
+                        no_mental_health_disorder_status=no_mental_health_disorder_status if no_mental_health_disorder_status is not None else True,
+                        no_substance_use_status=no_substance_use_status if no_substance_use_status is not None else True,
+                        substance_use_details=substance_use_details,
+                        # Geographic Exposure
+                        no_geographic_exposure_risk=no_geographic_exposure_risk if no_geographic_exposure_risk is not None else True,
+                        geographic_exposure_risk_details=geographic_exposure_risk_details,
                     )
                     
                     created_count += 1
