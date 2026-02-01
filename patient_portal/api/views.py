@@ -495,6 +495,30 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     number_of_dependents = None
                     annual_household_income = None
                     
+                    # Cancer Assessment Fields
+                    ecog_assessment_date = None
+                    test_methodology = None
+                    test_date = None
+                    test_specimen_type = None
+                    report_interpretation = None
+                    oncotype_dx_score = None
+                    ki67_percentage = None
+                    androgen_receptor_status = None
+                    
+                    # Treatment Fields
+                    therapy_intent = None
+                    reason_for_discontinuation = None
+                    
+                    # Additional Lab Values
+                    ldh_new = None
+                    alkaline_phosphatase = None
+                    magnesium = None
+                    phosphorus = None
+                    
+                    # Reproductive Health
+                    pregnancy_test_date = None
+                    pregnancy_test_result_value = None
+                    
                     for observation in data['observations']:
                         obs_code = observation.get('code', {})
                         obs_text = obs_code.get('text', '').lower()
@@ -631,6 +655,44 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                             number_of_dependents = value_number
                         elif loinc_code == '77243-3':  # Annual Household Income
                             annual_household_income = value_number
+                        # Cancer Assessment Fields
+                        elif loinc_code == '89247-1':  # ECOG Performance Status
+                            # Store the date from effectiveDateTime
+                            if observation.get('effectiveDateTime'):
+                                ecog_assessment_date = observation['effectiveDateTime'][:10]
+                        elif loinc_code == '85337-4':  # Test Methodology
+                            test_methodology = value_codeable
+                            # Also check if this is Oncotype DX score
+                            if value_number is not None:
+                                oncotype_dx_score = value_number
+                        elif loinc_code == '31208-2':  # Specimen Source
+                            test_specimen_type = value_codeable
+                            if observation.get('effectiveDateTime'):
+                                test_date = observation['effectiveDateTime'][:10]
+                        elif loinc_code == '69548-6':  # Test Interpretation
+                            report_interpretation = value_codeable
+                        elif loinc_code == '94638-6':  # Ki-67
+                            ki67_percentage = value_number
+                        elif loinc_code == '16112-5':  # Androgen Receptor
+                            androgen_receptor_status = value_codeable
+                        elif loinc_code == '42804-5':  # Therapy Intent
+                            therapy_intent = value_codeable
+                        elif loinc_code == '91379-3':  # Reason for Discontinuation
+                            reason_for_discontinuation = value_codeable
+                        # Additional Lab Values
+                        elif loinc_code == '14804-9':  # LDH
+                            ldh_new = value_number
+                        elif loinc_code == '6768-6':  # Alkaline Phosphatase
+                            alkaline_phosphatase = value_number
+                        elif loinc_code == '2601-3':  # Magnesium
+                            magnesium = value_number
+                        elif loinc_code == '2777-1':  # Phosphorus
+                            phosphorus = value_number
+                        # Reproductive Health
+                        elif loinc_code == '2106-3':  # Pregnancy Test
+                            pregnancy_test_result_value = value_codeable
+                            if observation.get('effectiveDateTime'):
+                                pregnancy_test_date = observation['effectiveDateTime'][:10]
                         
                         # Check for tumor size
                         if 'tumor size' in obs_text or 'size tumor' in obs_text:
@@ -1009,6 +1071,26 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         insurance_type=insurance_type,
                         number_of_dependents=number_of_dependents,
                         annual_household_income=annual_household_income,
+                        # Cancer Assessment Fields
+                        ecog_assessment_date=ecog_assessment_date,
+                        test_methodology=test_methodology,
+                        test_date=test_date,
+                        test_specimen_type=test_specimen_type,
+                        report_interpretation=report_interpretation,
+                        oncotype_dx_score=oncotype_dx_score,
+                        ki67_percentage=ki67_percentage,
+                        androgen_receptor_status=androgen_receptor_status,
+                        # Treatment Fields
+                        therapy_intent=therapy_intent,
+                        reason_for_discontinuation=reason_for_discontinuation,
+                        # Additional Lab Values
+                        ldh=ldh_new if ldh_new is not None else ldh,
+                        alkaline_phosphatase=alkaline_phosphatase,
+                        magnesium=magnesium,
+                        phosphorus=phosphorus,
+                        # Reproductive Health
+                        pregnancy_test_date=pregnancy_test_date,
+                        pregnancy_test_result_value=pregnancy_test_result_value,
                     )
                     
                     created_count += 1

@@ -161,6 +161,30 @@ export interface PatientInfo {
   insurance_type?: string;
   number_of_dependents?: number;
   annual_household_income?: number;
+  
+  // Cancer Assessment Fields
+  ecog_assessment_date?: string;
+  test_methodology?: string;
+  test_date?: string;
+  test_specimen_type?: string;
+  report_interpretation?: string;
+  oncotype_dx_score?: number;
+  ki67_percentage?: number;
+  androgen_receptor_status?: string;
+  
+  // Treatment Fields
+  therapy_intent?: string;
+  reason_for_discontinuation?: string;
+  
+  // Additional Lab Values
+  ldh?: number;
+  alkaline_phosphatase?: number;
+  magnesium?: number;
+  phosphorus?: number;
+  
+  // Reproductive Health
+  pregnancy_test_date?: string;
+  pregnancy_test_result_value?: string;
 }
 
 export interface PatientMessage {

@@ -727,6 +727,30 @@ class PatientInfo(models.Model):
     number_of_dependents = models.IntegerField(blank=True, null=True, help_text="Number of Dependents")
     annual_household_income = models.DecimalField(decimal_places=2, max_digits=12, blank=True, null=True, help_text="Annual Household Income (USD)")
 
+    # Cancer Assessment Fields
+    ecog_assessment_date = models.DateField(blank=True, null=True, help_text="ECOG Performance Status Assessment Date")
+    test_methodology = models.CharField(max_length=50, blank=True, null=True, help_text="Test Methodology (NGS/IHC/FISH/PCR)")
+    test_date = models.DateField(blank=True, null=True, help_text="Test Date")
+    test_specimen_type = models.CharField(max_length=50, blank=True, null=True, help_text="Test Specimen Type (Primary/Metastatic Biopsy)")
+    report_interpretation = models.CharField(max_length=50, blank=True, null=True, help_text="Report Interpretation (Positive/Negative/Indeterminate/Not Tested)")
+    oncotype_dx_score = models.IntegerField(blank=True, null=True, help_text="Oncotype DX Score")
+    ki67_percentage = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Ki-67 Percentage")
+    androgen_receptor_status = models.CharField(max_length=50, blank=True, null=True, help_text="Androgen Receptor Status")
+    
+    # Treatment Fields
+    therapy_intent = models.CharField(max_length=50, blank=True, null=True, help_text="Therapy Intent (Adjuvant/Neoadjuvant/Metastatic)")
+    reason_for_discontinuation = models.CharField(max_length=100, blank=True, null=True, help_text="Reason for Discontinuation (Progression/Toxicity/Completion)")
+    
+    # Additional Lab Values
+    ldh = models.IntegerField(blank=True, null=True, help_text="LDH (U/L)")
+    alkaline_phosphatase = models.IntegerField(blank=True, null=True, help_text="Alkaline Phosphatase (U/L)")
+    magnesium = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Magnesium (mg/dL)")
+    phosphorus = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Phosphorus (mg/dL)")
+    
+    # Reproductive Health
+    pregnancy_test_date = models.DateField(blank=True, null=True, help_text="Pregnancy Test Date")
+    pregnancy_test_result_value = models.CharField(max_length=50, blank=True, null=True, help_text="Pregnancy Test Result (Positive/Negative)")
+
     no_tobacco_use_status = models.BooleanField(help_text="Does the patient use tobacco?", blank=False, null=False, default=True)
     tobacco_use_details = models.CharField(max_length=255, help_text="Details about the patient's tobacco use", blank=True, null=True)
     no_substance_use_status = models.BooleanField(help_text="Does the patient use substances?", blank=False, null=False, default=True)
