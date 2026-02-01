@@ -1,6 +1,6 @@
 # Migration to make ConditionOccurrence fields nullable
 
-from django.db import migrations, models
+from django.db import migrations
 
 
 class Migration(migrations.Migration):
@@ -10,101 +10,110 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Make basic fields nullable
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='condition_status_source_value',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='condition_source_value',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='stop_reason',
-            field=models.CharField(blank=True, max_length=20, null=True),
-        ),
-        # Make cancer-specific fields nullable
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='ajcc_clinical_m',
-            field=models.CharField(blank=True, max_length=10, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='ajcc_clinical_n',
-            field=models.CharField(blank=True, max_length=10, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='ajcc_clinical_stage',
-            field=models.CharField(blank=True, max_length=10, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='ajcc_clinical_t',
-            field=models.CharField(blank=True, max_length=10, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='ajcc_pathologic_m',
-            field=models.CharField(blank=True, max_length=10, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='ajcc_pathologic_n',
-            field=models.CharField(blank=True, max_length=10, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='ajcc_pathologic_stage',
-            field=models.CharField(blank=True, max_length=10, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='ajcc_pathologic_t',
-            field=models.CharField(blank=True, max_length=10, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='estrogen_receptor_status',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='her2_status',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='histologic_grade',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='nuclear_grade',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='progesterone_receptor_status',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='staging_system',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='staging_system_version',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AlterField(
-            model_name='conditionoccurrence',
-            name='tumor_laterality',
-            field=models.CharField(blank=True, max_length=50, null=True),
+        # Make ConditionOccurrence fields nullable using raw SQL
+        # Only alter columns that exist
+        migrations.RunSQL(
+            sql="""
+                DO $$
+                BEGIN
+                    -- Basic fields
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='condition_status_source_value') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN condition_status_source_value DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='condition_source_value') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN condition_source_value DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='stop_reason') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN stop_reason DROP NOT NULL;
+                    END IF;
+                    
+                    -- Cancer fields
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='ajcc_clinical_m') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN ajcc_clinical_m DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='ajcc_clinical_n') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN ajcc_clinical_n DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='ajcc_clinical_stage') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN ajcc_clinical_stage DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='ajcc_clinical_t') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN ajcc_clinical_t DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='ajcc_pathologic_m') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN ajcc_pathologic_m DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='ajcc_pathologic_n') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN ajcc_pathologic_n DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='ajcc_pathologic_stage') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN ajcc_pathologic_stage DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='ajcc_pathologic_t') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN ajcc_pathologic_t DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='estrogen_receptor_status') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN estrogen_receptor_status DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='her2_status') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN her2_status DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='histologic_grade') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN histologic_grade DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='nuclear_grade') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN nuclear_grade DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='progesterone_receptor_status') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN progesterone_receptor_status DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='staging_system') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN staging_system DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='staging_system_version') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN staging_system_version DROP NOT NULL;
+                    END IF;
+                    
+                    IF EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='condition_occurrence' AND column_name='tumor_laterality') THEN
+                        ALTER TABLE condition_occurrence ALTER COLUMN tumor_laterality DROP NOT NULL;
+                    END IF;
+                END $$;
+            """,
+            reverse_sql=migrations.RunSQL.noop
         ),
     ]
