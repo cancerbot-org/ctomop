@@ -1,6 +1,13 @@
 db.*
 .env
 data/
+
+# Node modules and frontend build
+node_modules/
+frontend/node_modules/
+frontend/build/
+staticfiles/
+
 # Django
 *.log
 *.pot
