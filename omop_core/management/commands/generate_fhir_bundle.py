@@ -846,8 +846,9 @@ class Command(BaseCommand):
         return observations
 
     def generate_prior_therapy(self, patient_id, diagnosis_date, assigned_lines=None):
-        """Generate prior lines of therapy with named regimens"""
+        """Generate prior lines of therapy with named regimens, therapy intent and discontinuation observations"""
         medications = []
+        observations = []
         
         # Distribution: 40% treatment-naive, 30% one line, 20% two lines, 10% three lines
         if assigned_lines is not None:
@@ -1016,8 +1017,76 @@ class Command(BaseCommand):
                     }
                 }
                 medications.append(drug_resource)
+            
+            # Create Therapy Intent observation (LOINC 42804-5)
+            # First line is often Adjuvant or Neoadjuvant, later lines are Metastatic
+            if line_num == 1:
+                therapy_intent = random.choices(['Adjuvant', 'Neoadjuvant'], weights=[0.7, 0.3])[0]
+            else:
+                therapy_intent = 'Metastatic'
+            
+            intent_obs = {
+                "fullUrl": f"http://example.org/Observation/intent-{patient_id}-line{line_num}",
+                "resource": {
+                    "resourceType": "Observation",
+                    "id": f"intent-{patient_id}-line{line_num}",
+                    "status": "final",
+                    "code": {
+                        "coding": [{
+                            "system": "http://loinc.org",
+                            "code": "42804-5",
+                            "display": "Therapy Intent"
+                        }],
+                        "text": "Therapy Intent"
+                    },
+                    "subject": {
+                        "reference": f"Patient/{patient_id}"
+                    },
+                    "effectiveDateTime": therapy_start.strftime('%Y-%m-%d'),
+                    "valueCodeableConcept": {
+                        "text": therapy_intent
+                    }
+                }
+            }
+            observations.append(intent_obs)
+            
+            # Create Discontinuation Reason observation (LOINC 91379-3) for completed lines
+            if line_num < num_lines:  # Only for completed therapy lines
+                # Determine discontinuation reason based on outcome
+                if outcome == 'Progressive Disease':
+                    discontinuation = 'Progression'
+                elif outcome in ['Partial Response', 'Complete Response']:
+                    discontinuation = 'Completion'
+                else:
+                    discontinuation = random.choice(['Toxicity', 'Completion'])
+                
+                disc_obs = {
+                    "fullUrl": f"http://example.org/Observation/discontinuation-{patient_id}-line{line_num}",
+                    "resource": {
+                        "resourceType": "Observation",
+                        "id": f"discontinuation-{patient_id}-line{line_num}",
+                        "status": "final",
+                        "code": {
+                            "coding": [{
+                                "system": "http://loinc.org",
+                                "code": "91379-3",
+                                "display": "Reason for Discontinuation"
+                            }],
+                            "text": "Reason for Discontinuation"
+                        },
+                        "subject": {
+                            "reference": f"Patient/{patient_id}"
+                        },
+                        "effectiveDateTime": therapy_end.strftime('%Y-%m-%d'),
+                        "valueCodeableConcept": {
+                            "text": discontinuation
+                        }
+                    }
+                }
+                observations.append(disc_obs)
         
-        return medications
+        # Return both medications and observations
+        return medications + observations
 
     def generate_random_date(self, start_year, end_year):
         """Generate random date between years"""
