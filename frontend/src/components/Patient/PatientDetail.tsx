@@ -231,6 +231,79 @@ const MYELOMA_LATER_LINE = [
   'Other'
 ];
 
+const PLANNED_THERAPIES = [
+  // Breast Cancer Therapies
+  'AC-T (Doxorubicin/Cyclophosphamide followed by Paclitaxel)',
+  'TC (Docetaxel/Cyclophosphamide)',
+  'TAC (Docetaxel/Doxorubicin/Cyclophosphamide)',
+  'Paclitaxel/Trastuzumab/Pertuzumab (HER2+)',
+  'Docetaxel/Trastuzumab/Pertuzumab',
+  'TCH (Docetaxel/Carboplatin/Trastuzumab)',
+  'T-DM1 (Trastuzumab emtansine)',
+  'T-DXd (Trastuzumab deruxtecan)',
+  'Sacituzumab govitecan',
+  'CDK4/6 Inhibitor + Aromatase Inhibitor',
+  'Palbociclib + Letrozole',
+  'Ribociclib + Letrozole',
+  'Abemaciclib + Letrozole',
+  'Fulvestrant',
+  'Tamoxifen',
+  'Letrozole',
+  'Anastrozole',
+  'Exemestane',
+  'Everolimus + Exemestane',
+  'Alpelisib + Fulvestrant (PIK3CA+)',
+  'Olaparib (BRCA+)',
+  'Talazoparib (BRCA+)',
+  'Pembrolizumab + Chemotherapy',
+  'Atezolizumab + Nab-paclitaxel',
+  'Tucatinib/Trastuzumab/Capecitabine',
+  'Lapatinib + Capecitabine',
+  'Neratinib + Capecitabine',
+  'Eribulin',
+  'Capecitabine',
+  'Vinorelbine',
+  'Ixabepilone',
+  'Gemcitabine/Carboplatin',
+  'Paclitaxel',
+  'Docetaxel',
+  'Doxorubicin',
+  // Lymphoma Therapies
+  'R-CHOP (Rituximab/Cyclophosphamide/Doxorubicin/Vincristine/Prednisone)',
+  'BR (Bendamustine/Rituximab)',
+  'R-CVP (Rituximab/Cyclophosphamide/Vincristine/Prednisone)',
+  'R-ICE (Rituximab/Ifosfamide/Carboplatin/Etoposide)',
+  'R-DHAP (Rituximab/Dexamethasone/Cytarabine/Cisplatin)',
+  'Rituximab Monotherapy',
+  'Obinutuzumab-based therapy',
+  'Obinutuzumab Monotherapy',
+  'Lenalidomide/Rituximab',
+  'Tazemetostat',
+  'PI3K Inhibitor (Copanlisib/Duvelisib/Idelalisib)',
+  // Myeloma Therapies
+  'VRd (Bortezomib/Lenalidomide/Dexamethasone)',
+  'CyBorD (Cyclophosphamide/Bortezomib/Dexamethasone)',
+  'DRd (Daratumumab/Lenalidomide/Dexamethasone)',
+  'KRd (Carfilzomib/Lenalidomide/Dexamethasone)',
+  'DVd (Daratumumab/Bortezomib/Dexamethasone)',
+  'Elotuzumab/Lenalidomide/Dexamethasone',
+  'Ixazomib/Lenalidomide/Dexamethasone',
+  'Carfilzomib/Dexamethasone',
+  'Isatuximab/Pomalidomide/Dexamethasone',
+  'Daratumumab/Pomalidomide/Dexamethasone',
+  'Selinexor/Bortezomib/Dexamethasone',
+  'Belantamab mafodotin',
+  'CAR-T Therapy',
+  // General Options
+  'Autologous Stem Cell Transplant',
+  'Allogeneic Stem Cell Transplant',
+  'Radiation Therapy',
+  'Surgery',
+  'Clinical Trial',
+  'Watch and Wait',
+  'Other'
+];
+
 const PatientDetail: React.FC = () => {
   const { personId } = useParams<{ personId: string }>();
   const navigate = useNavigate();
@@ -1036,19 +1109,20 @@ const PatientDetail: React.FC = () => {
             <Grid item xs={12}>
               <Divider sx={{ my: 2 }} />
               <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
-                Prior Treatments
+                Supportive Therapy
               </Typography>
             </Grid>
-            {renderSelectField('Prior Surgery', 'prior_surgery', YES_NO_OPTIONS)}
-            {renderSelectField('Prior Radiation', 'prior_radiation', YES_NO_OPTIONS)}
-            {renderSelectField('Prior Chemotherapy', 'prior_chemotherapy', YES_NO_OPTIONS)}
-            {renderSelectField('Prior Hormone Therapy', 'prior_hormone_therapy', YES_NO_OPTIONS)}
-            {renderSelectField('Prior Targeted Therapy', 'prior_targeted_therapy', YES_NO_OPTIONS)}
-            {renderSelectField('Prior Immunotherapy', 'prior_immunotherapy', YES_NO_OPTIONS)}
-            {renderSelectField('Prior Transplant', 'prior_transplant', YES_NO_OPTIONS)}
-            {renderSelectField('Prior Proteasome Inhibitor', 'prior_proteasome_inhibitor', YES_NO_OPTIONS)}
-            {renderSelectField('Prior Immunomodulatory Drug', 'prior_immunomodulatory_drug', YES_NO_OPTIONS)}
-            {renderSelectField('Prior Anti-CD38 Antibody', 'prior_anti_cd38', YES_NO_OPTIONS)}
+            {renderDateField('Supportive Therapy Start Date', 'supportive_therapy_start_date')}
+            {renderDateField('Supportive Therapy End Date', 'supportive_therapy_end_date')}
+            {renderSelectField('Supportive Therapy Intent', 'supportive_therapy_intent', THERAPY_INTENT_OPTIONS)}
+            
+            <Grid item xs={12}>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+                Planned Therapies
+              </Typography>
+            </Grid>
+            {renderSelectField('Planned Therapies', 'planned_therapies', PLANNED_THERAPIES, true)}
           </Grid>
         </TabPanel>
 

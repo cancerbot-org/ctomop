@@ -85,6 +85,14 @@ export interface PatientInfo {
   later_outcome?: string;
   later_line_outcome?: string;  // UI uses this name
   
+  // Supportive Therapy
+  supportive_therapy_start_date?: string;
+  supportive_therapy_end_date?: string;
+  supportive_therapy_intent?: string;
+  
+  // Planned Therapies
+  planned_therapies?: string;
+  
   // Blood Markers
   hemoglobin_g_dl?: number;
   hematocrit_percent?: number;

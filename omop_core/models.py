@@ -536,6 +536,10 @@ class PatientInfo(models.Model):
     later_discontinuation_reason = models.CharField(max_length=50, blank=True, null=True, help_text="Later Line Reason for Discontinuation (Progression/Toxicity/Completion)")
     supportive_therapies = models.TextField(blank=True, null=True)
     supportive_therapy_date = models.DateField(blank=True, null=True)
+    supportive_therapy_start_date = models.DateField(blank=True, null=True, help_text="Supportive Therapy Start Date")
+    supportive_therapy_end_date = models.DateField(blank=True, null=True, help_text="Supportive Therapy End Date")
+    supportive_therapy_intent = models.CharField(max_length=50, blank=True, null=True, help_text="Supportive Therapy Intent")
+    planned_therapies = models.TextField(blank=True, null=True, help_text="Planned standard of care therapies")
     relapse_count = models.IntegerField(blank=True, null=True)
     treatment_refractory_status = models.CharField(max_length=255, blank=True, null=True)
 

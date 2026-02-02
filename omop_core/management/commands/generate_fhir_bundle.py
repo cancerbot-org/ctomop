@@ -130,6 +130,16 @@ class Command(BaseCommand):
             assigned_lines = therapy_lines[i-1] if therapy_lines else None
             for med in self.generate_prior_therapy(i, diagnosis_date, assigned_lines):
                 bundle["entry"].append(med)
+            
+            # Generate supportive therapy
+            supportive = self.generate_supportive_therapy(i, diagnosis_date)
+            if supportive:
+                bundle["entry"].append(supportive)
+            
+            # Generate planned therapy
+            planned = self.generate_planned_therapy(i)
+            if planned:
+                bundle["entry"].append(planned)
         
         return bundle
 
@@ -1019,11 +1029,22 @@ class Command(BaseCommand):
                 medications.append(drug_resource)
             
             # Create Therapy Intent observation (LOINC 42804-5)
-            # First line is often Adjuvant or Neoadjuvant, later lines are Metastatic
+            # Most lines should be DEFINITIVE_LOCAL (primary curative treatment)
             if line_num == 1:
-                therapy_intent = random.choices(['Adjuvant', 'Neoadjuvant'], weights=[0.7, 0.3])[0]
+                therapy_intent = random.choices(
+                    ['DEFINITIVE_LOCAL', 'ADJUVANT', 'NEOADJUVANT', 'INDUCTION'],
+                    weights=[0.70, 0.15, 0.10, 0.05]
+                )[0]
+            elif line_num == 2:
+                therapy_intent = random.choices(
+                    ['DEFINITIVE_LOCAL', 'METASTATIC_DISEASE_CONTROL', 'CONSOLIDATION', 'MAINTENANCE'],
+                    weights=[0.60, 0.20, 0.15, 0.05]
+                )[0]
             else:
-                therapy_intent = 'Metastatic'
+                therapy_intent = random.choices(
+                    ['DEFINITIVE_LOCAL', 'METASTATIC_DISEASE_CONTROL', 'SALVAGE', 'PALLIATIVE_SYMPTOM'],
+                    weights=[0.50, 0.25, 0.15, 0.10]
+                )[0]
             
             intent_obs = {
                 "fullUrl": f"http://example.org/Observation/intent-{patient_id}-line{line_num}",
@@ -1087,6 +1108,116 @@ class Command(BaseCommand):
         
         # Return both medications and observations
         return medications + observations
+    
+    def generate_supportive_therapy(self, patient_id, diagnosis_date):
+        """Generate supportive therapy with intent (adjuvant/neoadjuvant)"""
+        # 60% of patients have supportive therapy
+        if random.random() > 0.6:
+            return None
+        
+        supportive_intent_options = ['ADJUVANT', 'NEOADJUVANT']
+        supportive_intent = random.choice(supportive_intent_options)
+        
+        # Generate supportive therapy dates relative to diagnosis
+        if supportive_intent == 'NEOADJUVANT':
+            # Before primary treatment/surgery
+            start_date = diagnosis_date - timedelta(days=random.randint(30, 90))
+            duration = random.randint(60, 120)  # 2-4 months
+        else:  # ADJUVANT
+            # After primary treatment/surgery
+            start_date = diagnosis_date + timedelta(days=random.randint(90, 180))
+            duration = random.randint(180, 365)  # 6-12 months
+        
+        end_date = start_date + timedelta(days=duration)
+        
+        supportive_therapies = [
+            'G-CSF (Filgrastim)',
+            'Pegfilgrastim',
+            'Ondansetron',
+            'Zoledronic acid',
+            'Denosumab',
+            'Bisphosphonates',
+            'Antiemetics',
+            'Growth factors'
+        ]
+        
+        therapy_name = random.choice(supportive_therapies)
+        
+        return {
+            "fullUrl": f"http://example.org/MedicationStatement/supportive-{patient_id}",
+            "resource": {
+                "resourceType": "MedicationStatement",
+                "id": f"supportive-{patient_id}",
+                "status": "completed",
+                "medicationCodeableConcept": {
+                    "text": therapy_name
+                },
+                "subject": {
+                    "reference": f"Patient/{patient_id}"
+                },
+                "effectivePeriod": {
+                    "start": start_date.strftime('%Y-%m-%d'),
+                    "end": end_date.strftime('%Y-%m-%d')
+                },
+                "extension": [
+                    {
+                        "url": "http://example.org/fhir/StructureDefinition/supportive-therapy-intent",
+                        "valueString": supportive_intent
+                    },
+                    {
+                        "url": "http://example.org/fhir/StructureDefinition/therapy-type",
+                        "valueString": "Supportive"
+                    }
+                ]
+            }
+        }
+    
+    def generate_planned_therapy(self, patient_id):
+        """Generate planned therapy from standard of care options"""
+        # 70% of patients have planned therapy
+        if random.random() > 0.7:
+            return None
+        
+        planned_therapies = [
+            'AC-T (Doxorubicin/Cyclophosphamide followed by Paclitaxel)',
+            'TC (Docetaxel/Cyclophosphamide)',
+            'Paclitaxel/Trastuzumab/Pertuzumab (HER2+)',
+            'T-DM1 (Trastuzumab emtansine)',
+            'T-DXd (Trastuzumab deruxtecan)',
+            'CDK4/6 Inhibitor + Aromatase Inhibitor',
+            'Palbociclib + Letrozole',
+            'Fulvestrant',
+            'Olaparib (BRCA+)',
+            'Pembrolizumab + Chemotherapy',
+            'Capecitabine',
+            'Eribulin',
+            'Autologous Stem Cell Transplant',
+            'Radiation Therapy',
+            'Clinical Trial'
+        ]
+        
+        planned_therapy = random.choice(planned_therapies)
+        
+        return {
+            "fullUrl": f"http://example.org/CarePlan/planned-{patient_id}",
+            "resource": {
+                "resourceType": "CarePlan",
+                "id": f"planned-{patient_id}",
+                "status": "active",
+                "intent": "plan",
+                "title": "Planned Therapy",
+                "description": planned_therapy,
+                "subject": {
+                    "reference": f"Patient/{patient_id}"
+                },
+                "activity": [{
+                    "detail": {
+                        "status": "scheduled",
+                        "description": planned_therapy
+                    }
+                }]
+            }
+        }
 
     def generate_random_date(self, start_year, end_year):
         """Generate random date between years"""
