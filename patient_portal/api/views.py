@@ -513,6 +513,8 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     # Treatment Fields
                     therapy_intent = None
                     reason_for_discontinuation = None
+                    therapy_intent_observations = []  # List of {'date': date, 'value': value}
+                    discontinuation_observations = []  # List of {'date': date, 'value': value}
                     
                     # Additional Lab Values
                     ldh_new = None
@@ -695,9 +697,15 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         elif loinc_code == '16112-5':  # Androgen Receptor
                             androgen_receptor_status = value_codeable
                         elif loinc_code == '42804-5':  # Therapy Intent
-                            therapy_intent = value_codeable
+                            obs_date = observation.get('effectiveDateTime', '')[:10] if observation.get('effectiveDateTime') else None
+                            therapy_intent_observations.append({'date': obs_date, 'value': value_codeable})
+                            if not therapy_intent:  # Keep first for backwards compatibility
+                                therapy_intent = value_codeable
                         elif loinc_code == '91379-3':  # Reason for Discontinuation
-                            reason_for_discontinuation = value_codeable
+                            obs_date = observation.get('effectiveDateTime', '')[:10] if observation.get('effectiveDateTime') else None
+                            discontinuation_observations.append({'date': obs_date, 'value': value_codeable})
+                            if not reason_for_discontinuation:  # Keep first for backwards compatibility
+                                reason_for_discontinuation = value_codeable
                         # Additional Lab Values
                         elif loinc_code == '14804-9':  # LDH
                             ldh_new = value_number
@@ -912,7 +920,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                             measurement_id += 1
                     
                     # Extract therapy information from MedicationStatement resources
-                    therapy_lines = {}  # {line_number: {'regimen': name, 'date': date, 'outcome': outcome}}
+                    therapy_lines = {}  # {line_number: {'regimen': name, 'start_date': date, 'end_date': date, 'outcome': outcome}}
                     
                     for medication in data.get('medications', []):
                         # Get therapy line from extension
@@ -932,43 +940,77 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         if not medication.get('partOf'):
                             # This is the named regimen
                             regimen_name = medication.get('medicationCodeableConcept', {}).get('text', '')
-                            start_date = medication.get('effectivePeriod', {}).get('start')
+                            effective_period = medication.get('effectivePeriod', {})
+                            start_date = effective_period.get('start')
+                            end_date = effective_period.get('end')
+                            # Also support effectiveDateTime for backwards compatibility
+                            if not start_date:
+                                start_date = medication.get('effectiveDateTime')
                             
                             if therapy_line not in therapy_lines:
                                 therapy_lines[therapy_line] = {
                                     'regimen': regimen_name,
-                                    'date': start_date,
+                                    'start_date': start_date,
+                                    'end_date': end_date,
                                     'outcome': therapy_outcome
                                 }
                             else:
                                 therapy_lines[therapy_line]['regimen'] = regimen_name
+                                if start_date:
+                                    therapy_lines[therapy_line]['start_date'] = start_date
+                                if end_date:
+                                    therapy_lines[therapy_line]['end_date'] = end_date
                                 therapy_lines[therapy_line]['outcome'] = therapy_outcome
                     
                     # Map therapy lines to first/second/later fields
                     first_line_therapy = None
                     first_line_date = None
+                    first_line_start_date = None
+                    first_line_end_date = None
                     first_line_outcome = None
+                    first_line_intent = None
+                    first_line_discontinuation_reason = None
                     second_line_therapy = None
                     second_line_date = None
+                    second_line_start_date = None
+                    second_line_end_date = None
                     second_line_outcome = None
+                    second_line_intent = None
+                    second_line_discontinuation_reason = None
                     later_therapy = None
                     later_date = None
+                    later_start_date = None
+                    later_end_date = None
                     later_outcome = None
+                    later_intent = None
+                    later_discontinuation_reason = None
                     
                     if 1 in therapy_lines:
                         first_line_therapy = therapy_lines[1]['regimen']
-                        if therapy_lines[1]['date']:
+                        if therapy_lines[1].get('start_date'):
                             try:
-                                first_line_date = datetime.strptime(therapy_lines[1]['date'], '%Y-%m-%d').date()
+                                first_line_start_date = datetime.strptime(therapy_lines[1]['start_date'][:10], '%Y-%m-%d').date()
+                                first_line_date = first_line_start_date  # Keep for backwards compatibility
+                            except:
+                                pass
+                        if therapy_lines[1].get('end_date'):
+                            try:
+                                first_line_end_date = datetime.strptime(therapy_lines[1]['end_date'][:10], '%Y-%m-%d').date()
                             except:
                                 pass
                         first_line_outcome = therapy_lines[1]['outcome']
                     
                     if 2 in therapy_lines:
                         second_line_therapy = therapy_lines[2]['regimen']
-                        if therapy_lines[2]['date']:
+                        if therapy_lines[2].get('start_date'):
                             try:
-                                second_line_date = datetime.strptime(therapy_lines[2]['date'], '%Y-%m-%d').date()
+                                second_line_start_date = datetime.strptime(therapy_lines[2]['start_date'][:10], '%Y-%m-%d').date()
+                                second_line_date = second_line_start_date  # Keep for backwards compatibility
+                            except:
+                                pass
+                        if therapy_lines[2].get('end_date'):
+                            try:
+                                second_line_end_date = datetime.strptime(therapy_lines[2]['end_date'][:10], '%Y-%m-%d').date()
                             except:
                                 pass
                         second_line_outcome = therapy_lines[2]['outcome']
@@ -976,20 +1018,59 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     # Map line 3 and 4 to "later" field (prioritize most recent)
                     if 4 in therapy_lines:
                         later_therapy = therapy_lines[4]['regimen']
-                        if therapy_lines[4]['date']:
+                        if therapy_lines[4].get('start_date'):
                             try:
-                                later_date = datetime.strptime(therapy_lines[4]['date'], '%Y-%m-%d').date()
+                                later_start_date = datetime.strptime(therapy_lines[4]['start_date'][:10], '%Y-%m-%d').date()
+                                later_date = later_start_date  # Keep for backwards compatibility
+                            except:
+                                pass
+                        if therapy_lines[4].get('end_date'):
+                            try:
+                                later_end_date = datetime.strptime(therapy_lines[4]['end_date'][:10], '%Y-%m-%d').date()
                             except:
                                 pass
                         later_outcome = therapy_lines[4]['outcome']
                     elif 3 in therapy_lines:
                         later_therapy = therapy_lines[3]['regimen']
-                        if therapy_lines[3]['date']:
+                        if therapy_lines[3].get('start_date'):
                             try:
-                                later_date = datetime.strptime(therapy_lines[3]['date'], '%Y-%m-%d').date()
+                                later_start_date = datetime.strptime(therapy_lines[3]['start_date'][:10], '%Y-%m-%d').date()
+                                later_date = later_start_date  # Keep for backwards compatibility
+                            except:
+                                pass
+                        if therapy_lines[3].get('end_date'):
+                            try:
+                                later_end_date = datetime.strptime(therapy_lines[3]['end_date'][:10], '%Y-%m-%d').date()
                             except:
                                 pass
                         later_outcome = therapy_lines[3]['outcome']
+                    
+                    # Match therapy intent and discontinuation observations to therapy lines by date
+                    for intent_obs in therapy_intent_observations:
+                        if intent_obs['date']:
+                            intent_date = intent_obs['date']
+                            # Match to first line
+                            if first_line_start_date and intent_date == str(first_line_start_date):
+                                first_line_intent = intent_obs['value']
+                            # Match to second line
+                            elif second_line_start_date and intent_date == str(second_line_start_date):
+                                second_line_intent = intent_obs['value']
+                            # Match to later line
+                            elif later_start_date and intent_date == str(later_start_date):
+                                later_intent = intent_obs['value']
+                    
+                    for disc_obs in discontinuation_observations:
+                        if disc_obs['date']:
+                            disc_date = disc_obs['date']
+                            # Match to first line
+                            if first_line_end_date and disc_date == str(first_line_end_date):
+                                first_line_discontinuation_reason = disc_obs['value']
+                            # Match to second line
+                            elif second_line_end_date and disc_date == str(second_line_end_date):
+                                second_line_discontinuation_reason = disc_obs['value']
+                            # Match to later line
+                            elif later_end_date and disc_date == str(later_end_date):
+                                later_discontinuation_reason = disc_obs['value']
                     
                     # Create PatientInfo with address, ethnicity, vital signs, therapy, and lab values
                     patient_info = PatientInfo.objects.create(
@@ -1022,12 +1103,24 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         genetic_mutations=genetic_mutations,
                         first_line_therapy=first_line_therapy,
                         first_line_date=first_line_date,
+                        first_line_start_date=first_line_start_date,
+                        first_line_end_date=first_line_end_date,
+                        first_line_intent=first_line_intent,
+                        first_line_discontinuation_reason=first_line_discontinuation_reason,
                         first_line_outcome=first_line_outcome,
                         second_line_therapy=second_line_therapy,
                         second_line_date=second_line_date,
+                        second_line_start_date=second_line_start_date,
+                        second_line_end_date=second_line_end_date,
+                        second_line_intent=second_line_intent,
+                        second_line_discontinuation_reason=second_line_discontinuation_reason,
                         second_line_outcome=second_line_outcome,
                         later_therapy=later_therapy,
                         later_date=later_date,
+                        later_start_date=later_start_date,
+                        later_end_date=later_end_date,
+                        later_intent=later_intent,
+                        later_discontinuation_reason=later_discontinuation_reason,
                         later_outcome=later_outcome,
                         # Blood counts (Blood tab)
                         hemoglobin_g_dl=hemoglobin_g_dl,

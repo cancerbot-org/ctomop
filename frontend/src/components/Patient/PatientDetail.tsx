@@ -67,6 +67,8 @@ const SMOKING_STATUS_OPTIONS = ['Never Smoker', 'Former Smoker', 'Current Smoker
 const ALCOHOL_USE_OPTIONS = ['None', 'Occasional', 'Moderate', 'Heavy', 'Unknown'];
 const EXERCISE_FREQUENCY_OPTIONS = ['None', 'Rarely', '1-2 times/week', '3-4 times/week', '5+ times/week', 'Daily', 'Unknown'];
 const REFRACTORY_STATUS_OPTIONS = ['Responsive', 'Stable', 'Refractory', 'Unknown'];
+const THERAPY_INTENT_OPTIONS = ['Adjuvant', 'Neoadjuvant', 'Metastatic'];
+const DISCONTINUATION_REASON_OPTIONS = ['Progression', 'Toxicity', 'Completion'];
 const DIET_TYPE_OPTIONS = ['Regular', 'Vegetarian', 'Vegan', 'Mediterranean', 'Low-carb', 'Ketogenic', 'Other'];
 const SLEEP_QUALITY_OPTIONS = ['Excellent', 'Good', 'Fair', 'Poor', 'Very Poor'];
 const STRESS_LEVEL_OPTIONS = ['None', 'Low', 'Moderate', 'High', 'Very High'];
@@ -604,6 +606,7 @@ const PatientDetail: React.FC = () => {
       {renderSelectField('Estrogen Receptor (ER) Status', 'estrogen_receptor_status', ER_PR_OPTIONS)}
       {renderSelectField('Progesterone Receptor (PR) Status', 'progesterone_receptor_status', ER_PR_OPTIONS)}
       {renderSelectField('HER2 Status', 'her2_status', HER2_OPTIONS)}
+      {renderSelectField('Androgen Receptor Status', 'androgen_receptor_status', ER_PR_OPTIONS)}
       
       <Grid item xs={12} sm={6}>
         <TextField
@@ -629,7 +632,6 @@ const PatientDetail: React.FC = () => {
       {renderTextField('Ki-67 Percentage (%)', 'ki67_percentage', false, 'number')}
       {renderTextField('PD-L1 Status (%)', 'pd_l1_tumor_cels', false, 'number')}
       {renderTextField('Oncotype DX Score', 'oncotype_dx_score', false, 'number')}
-      {renderTextField('Androgen Receptor Status', 'androgen_receptor_status', true)}
       
       <Grid item xs={12}>
         <Divider sx={{ my: 2 }} />
@@ -641,16 +643,6 @@ const PatientDetail: React.FC = () => {
       {renderDateField('Test Date', 'test_date')}
       {renderTextField('Test Specimen Type', 'test_specimen_type', true)}
       {renderTextField('Report Interpretation', 'report_interpretation', true)}
-      {renderDateField('ECOG Assessment Date', 'ecog_assessment_date')}
-      
-      <Grid item xs={12}>
-        <Divider sx={{ my: 2 }} />
-        <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
-          Treatment Information
-        </Typography>
-      </Grid>
-      {renderTextField('Therapy Intent', 'therapy_intent', true)}
-      {renderTextField('Reason for Discontinuation', 'reason_for_discontinuation', true)}
       
       <Grid item xs={12}>
         <Divider sx={{ my: 2 }} />
@@ -971,6 +963,7 @@ const PatientDetail: React.FC = () => {
             {renderSelectField('Stage', 'stage', STAGE_OPTIONS)}
             {renderTextField('Histologic Type', 'histologic_type', true)}
             {renderSelectField('ECOG Performance Status', 'ecog_performance_status', ECOG_OPTIONS)}
+            {renderDateField('ECOG Assessment Date', 'ecog_assessment_date')}
             {renderSelectField('Karnofsky Performance Score', 'karnofsky_performance_score', KARNOFSKY_OPTIONS)}
             
             <Grid item xs={12}>
@@ -1008,7 +1001,10 @@ const PatientDetail: React.FC = () => {
               </Typography>
             </Grid>
             {renderSelectField('First Line Therapy', 'first_line_therapy', getTherapyOptions('first'), true)}
-            {renderDateField('First Line Date', 'first_line_date')}
+            {renderDateField('First Line Start Date', 'first_line_start_date')}
+            {renderDateField('First Line End Date', 'first_line_end_date')}
+            {renderSelectField('Therapy Intent', 'first_line_intent', THERAPY_INTENT_OPTIONS)}
+            {renderSelectField('Reason for Discontinuation', 'first_line_discontinuation_reason', DISCONTINUATION_REASON_OPTIONS)}
             {renderSelectField('First Line Outcome', 'first_line_outcome', THERAPY_OUTCOME_OPTIONS)}
             
             <Grid item xs={12}>
@@ -1018,7 +1014,10 @@ const PatientDetail: React.FC = () => {
               </Typography>
             </Grid>
             {renderSelectField('Second Line Therapy', 'second_line_therapy', getTherapyOptions('second'), true)}
-            {renderDateField('Second Line Date', 'second_line_date')}
+            {renderDateField('Second Line Start Date', 'second_line_start_date')}
+            {renderDateField('Second Line End Date', 'second_line_end_date')}
+            {renderSelectField('Therapy Intent', 'second_line_intent', THERAPY_INTENT_OPTIONS)}
+            {renderSelectField('Reason for Discontinuation', 'second_line_discontinuation_reason', DISCONTINUATION_REASON_OPTIONS)}
             {renderSelectField('Second Line Outcome', 'second_line_outcome', THERAPY_OUTCOME_OPTIONS)}
             
             <Grid item xs={12}>
@@ -1028,7 +1027,10 @@ const PatientDetail: React.FC = () => {
               </Typography>
             </Grid>
             {renderSelectField('Later Line Therapy', 'later_therapy', getTherapyOptions('later'), true)}
-            {renderDateField('Later Line Date', 'later_date')}
+            {renderDateField('Later Line Start Date', 'later_start_date')}
+            {renderDateField('Later Line End Date', 'later_end_date')}
+            {renderSelectField('Therapy Intent', 'later_intent', THERAPY_INTENT_OPTIONS)}
+            {renderSelectField('Reason for Discontinuation', 'later_discontinuation_reason', DISCONTINUATION_REASON_OPTIONS)}
             {renderSelectField('Later Line Outcome', 'later_outcome', THERAPY_OUTCOME_OPTIONS)}
             
             <Grid item xs={12}>

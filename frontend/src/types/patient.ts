@@ -62,14 +62,26 @@ export interface PatientInfo {
   // Therapy Lines
   first_line_therapy?: string;
   first_line_date?: string;
+  first_line_start_date?: string;
+  first_line_end_date?: string;
+  first_line_intent?: string;
+  first_line_discontinuation_reason?: string;
   first_line_outcome?: string;
   second_line_therapy?: string;
   second_line_date?: string;
+  second_line_start_date?: string;
+  second_line_end_date?: string;
+  second_line_intent?: string;
+  second_line_discontinuation_reason?: string;
   second_line_outcome?: string;
   later_therapy?: string;
   later_line_therapy?: string;  // UI uses this name
   later_date?: string;
   later_line_date?: string;  // UI uses this name
+  later_start_date?: string;
+  later_end_date?: string;
+  later_intent?: string;
+  later_discontinuation_reason?: string;
   later_outcome?: string;
   later_line_outcome?: string;  // UI uses this name
   
@@ -171,10 +183,6 @@ export interface PatientInfo {
   oncotype_dx_score?: number;
   ki67_percentage?: number;
   androgen_receptor_status?: string;
-  
-  // Treatment Fields
-  therapy_intent?: string;
-  reason_for_discontinuation?: string;
   
   // Additional Lab Values
   ldh?: number;
