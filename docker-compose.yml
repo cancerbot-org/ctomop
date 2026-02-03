@@ -3,6 +3,7 @@ version: "3.9"
 services:
   db:
     image: postgres:15
+    restart: always
     container_name: ctomop_db
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -15,6 +16,7 @@ services:
 
   web:
     build: .
+    restart: always
     container_name: ctomop_web
     depends_on:
       - db
