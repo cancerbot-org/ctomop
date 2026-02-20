@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15
+    restart: always
+    container_name: ctomop_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  web:
+    build: .
+    restart: always
+    container_name: ctomop_web
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:${POSTGRES_PORT}/${POSTGRES_DB}
+      DEBUG: ${DEBUG}
+      PRODUCTION_URL: ${PRODUCTION_URL}
+      PORT: 8000
+    ports:
+      - "8000:8000"
+    command: >
+      ./wait-for-db.sh db sh -c "
+      python manage.py migrate &&
+      gunicorn ctomop.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers 4
+      --threads 2
+      --timeout 120
+      --access-logfile - 
+      --error-logfile - 
+      --log-level info
+      "
+
+volumes:
+  postgres_data:
