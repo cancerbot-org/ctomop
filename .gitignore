@@ -1,6 +1,7 @@
 db.*
 .env
 .env.*
+!.env.example
 data/
 
 # Node modules and frontend build
