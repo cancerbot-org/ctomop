@@ -117,12 +117,14 @@ class PersonLanguageSkill(models.Model):
 | `first_line_date` | Earliest drug exposure | Treatment timeline |
 | `second_line_therapy` | Second drug by date | Progression indicator |
 | `second_line_date` | Second drug date | Treatment timeline |
-| `later_therapy` | Subsequent drugs | Heavily pretreated status |
+| `later_therapy` | Subsequent drugs (plain text) | Heavily pretreated status |
+| `later_therapies` | Subsequent drugs (structured JSON) | Structured later-line history |
 | `therapy_lines_count` | Count unique treatment periods | Line of therapy |
 | `concomitant_medications` | Recent drug exposures | Drug interactions |
 
-**🎯 Clinical Trial Enhancement**: 
+**🎯 Clinical Trial Enhancement**:
 - Treatment lines derived from drug exposure patterns
+- `later_therapies` stored as a JSONField array: `[{"therapy": "...", "startDate": "...", "endDate": "..."}]`
 - Platinum-based therapy identification via drug concept analysis
 - Immunotherapy classification via drug name matching
 
@@ -132,7 +134,7 @@ class PersonLanguageSkill(models.Model):
 platinum_terms = ['platinum', 'carboplatin', 'cisplatin', 'oxaliplatin']
 is_platinum = any(term in drug_name.lower() for term in platinum_terms)
 
-# Immunotherapy detection  
+# Immunotherapy detection
 immuno_terms = ['pembrolizumab', 'nivolumab', 'atezolizumab', 'durvalumab']
 is_immunotherapy = any(term in drug_name.lower() for term in immuno_terms)
 ```
@@ -185,6 +187,72 @@ is_immunotherapy = any(term in drug_name.lower() for term in immuno_terms)
 | `state` | `Location.state` | Via Person.location_id |
 | `county` | `Location.county` | Geographic analysis |
 | `zip_code` | `Location.zip` | Location details |
+
+### 11. CLL (Chronic Lymphocytic Leukemia) Fields
+
+#### Source: `Measurement` Table — LOINC codes
+| PatientInfo Field | LOINC Code | Description |
+|---|---|---|
+| `absolute_lymphocyte_count` | 731-0 | Lymphocytes [#/volume] in Blood |
+| `serum_beta2_microglobulin_level` | 48094-6 | Beta-2-microglobulin [Mass/volume] in Serum |
+| `qtcf_value` | 8632-1 | QT interval Fridericia corrected |
+| `spleen_size` | 44996-6 | Spleen diameter (ultrasound) |
+| `largest_lymph_node_size` | 21889-1 | Lymph node greatest dimension |
+| `clonal_bone_marrow_b_lymphocytes` | concept name match | Clonal bone marrow B-lymphocyte % |
+| `clonal_b_lymphocyte_count` | concept name match | Clonal B-lymphocyte count |
+| `protein_expressions` | concept name match | CD markers (CD38, CD20, CD5, ZAP70) |
+
+#### Source: `Observation` Table — concept name matching
+| PatientInfo Field | Match Pattern | Value Extraction |
+|---|---|---|
+| `binet_stage` | `'binet'` in concept name | `value_as_string` or numeric |
+| `tumor_burden` | `'tumor burden'` in concept name | `value_as_string` |
+| `disease_activity` | `'disease activity'` in concept name | `value_as_string` |
+| `hepatomegaly` | `'hepatomegaly'` in concept name | Boolean from string/number |
+| `splenomegaly` | `'splenomegaly'` in concept name | Boolean from string/number |
+| `lymphadenopathy` | `'lymphadenopathy'` in concept name | Boolean from string/number |
+| `bone_marrow_involvement` | `'bone marrow involvement'` in concept name | Boolean from string/number |
+| `autoimmune_cytopenias_refractory_to_steroids` | `'autoimmune cytopenia'` in concept name | Boolean from string/number |
+
+#### Source: `ConditionOccurrence` Table — concept name matching
+| PatientInfo Field | Match Pattern | Notes |
+|---|---|---|
+| `richter_transformation` | `'richter'` in concept name | Stores full concept name |
+| `hepatomegaly` | `'hepatomegaly'` in concept name | Fallback if not in Observation |
+| `splenomegaly` | `'splenomegaly'` in concept name | Fallback if not in Observation |
+| `lymphadenopathy` | `'lymphadenopathy'` in concept name | Fallback if not in Observation |
+
+#### Source: `DrugExposure` + `Observation` — refractoriness logic
+| PatientInfo Field | BTK inhibitors / BCL-2 inhibitors | Progression required |
+|---|---|---|
+| `btk_inhibitor_refractory` | ibrutinib, zanubrutinib, acalabrutinib, pirtobrutinib | SNOMED 182842009 (Progressive disease) |
+| `bcl2_inhibitor_refractory` | venetoclax | SNOMED 182842009 (Progressive disease) |
+
+#### Computed CLL fields
+| PatientInfo Field | Computation |
+|---|---|
+| `lymphocyte_doubling_time` | Estimated from serial ALC measurements using log-linear growth model (months, min 1) |
+| `tp53_disruption` | `True` if any `genetic_mutations` entry has `gene=tp53` and `interpretation=pathogenic` |
+| `measurable_disease_imwg` | `True` if serum M-protein ≥ 0.5 g/dL OR urine M-protein ≥ 200 mg/24h OR FLC ratio abnormal with diff ≥ 10 mg/dL |
+
+### 12. Follicular Lymphoma Fields
+
+#### Source: `Observation` + `Measurement` Tables
+| PatientInfo Field | Source | Match Pattern |
+|---|---|---|
+| `flipi_score` | Observation (numeric) | `'flipi'` in concept name |
+| `flipi_score_options` | Observation (string) | `'flipi'` in concept name, string value |
+| `gelf_criteria_status` | Observation | `'gelf'` in concept name |
+| `tumor_grade` | Measurement (numeric) | `'grade'` + `'lymphoma'` in concept name |
+
+### 13. Shared New Fields
+
+| PatientInfo Field | Source | Extraction |
+|---|---|---|
+| `languages_skills` | `PersonLanguageSkill` relation | `"Language: skill_level"` pairs joined with `, ` |
+| `status` | (to be populated externally) | Not extracted by `populate_patient_info` |
+| `later_therapies` | `DrugExposure` | JSON array of later-line drugs (see §6) |
+| `measurable_disease_imwg` | Computed | See CLL computed fields above |
 
 ## 🆕 Key Enhancements Added
 
