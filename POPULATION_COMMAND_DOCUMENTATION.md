@@ -43,10 +43,10 @@ Options:
 
 The command includes specialized functions to extract data from each model:
 
-1. **get_demographics()**: Age calculation, gender mapping, race/ethnicity, language
+1. **get_demographics()**: Age calculation, gender mapping, race/ethnicity, language skills (from `PersonLanguageSkill` related objects, formatted as `"English: native, French: intermediate"`)
 2. **get_location_data()**: Geographic information from Location model
 3. **get_disease_data()**: Cancer diagnosis, staging, histology from ConditionOccurrence
-4. **get_treatment_data()**: Treatment lines, regimens, responses from TreatmentLine
+4. **get_treatment_data()**: Treatment lines, regimens, responses from TreatmentLine; also populates `later_therapies` as a JSON array of `{therapy, startDate, endDate}` objects for 3rd line and beyond
 5. **get_vitals_data()**: Blood pressure, weight, height from standard OMOP Measurement table
 6. **get_biomarker_data()**: PD-L1, hormone receptors from BiomarkerMeasurement
 7. **get_social_data()**: Employment, insurance from SocialDeterminant
@@ -55,6 +55,65 @@ The command includes specialized functions to extract data from each model:
 10. **get_assessment_data()**: Tumor response from TumorAssessment
 11. **get_laboratory_data()**: Lab values from Measurement
 12. **get_performance_data()**: ECOG, Karnofsky from Observation
+13. **get_cll_data()**: CLL-specific fields extracted from OMOP clinical tables (see below)
+14. **get_lymphoma_data()**: Follicular Lymphoma-specific fields (FLIPI score, GELF criteria, tumor grade)
+15. **_compute_derived_fields()**: Post-extraction computation of fields that depend on other PatientInfo fields
+16. **_compute_lymphocyte_doubling_time()**: Static helper — log-linear estimate from serial ALC measurements
+
+##### get_cll_data() — CLL Field Extraction
+
+Extracts the 22 CLL-specific fields from standard OMOP tables:
+
+| Field | Source | LOINC / Concept |
+|---|---|---|
+| `absolute_lymphocyte_count` | Measurement | LOINC 26474-7 |
+| `serum_beta2_microglobulin_level` | Measurement | LOINC 48436-3 |
+| `qtcf_value` | Measurement | LOINC 8625-6 |
+| `spleen_size` | Measurement | LOINC 59157-8 |
+| `largest_lymph_node_size` | Measurement | LOINC 33728-7 |
+| `clonal_bone_marrow_b_lymphocytes` | Measurement | LOINC 5905-5 |
+| `binet_stage` | Observation | string value (A/B/C) |
+| `tumor_burden` | Observation | string value |
+| `disease_activity` | Observation | string value |
+| `protein_expressions` | Observation | string value |
+| `measurable_disease_iwcll` | Observation | boolean (1/0 or Yes/No string) |
+| `hepatomegaly` | Observation | boolean |
+| `splenomegaly` | Observation | boolean |
+| `lymphadenopathy` | Observation | boolean |
+| `autoimmune_cytopenias_refractory_to_steroids` | Observation | boolean |
+| `bone_marrow_involvement` | Observation | boolean |
+| `richter_transformation` | ConditionOccurrence | SNOMED concept (ICD10: C83.39) |
+| `clonal_b_lymphocyte_count` | Observation | integer count |
+| `btk_inhibitor_refractory` | DrugExposure + Observation | BTK drug followed by progression observation |
+| `bcl2_inhibitor_refractory` | DrugExposure + Observation | BCL-2 drug followed by progression observation |
+| `lymphocyte_doubling_time` | Measurement (serial ALC) | Computed via `_compute_lymphocyte_doubling_time()` |
+| `tp53_disruption` | Computed | Set by `_compute_derived_fields()` from `genetic_mutations` JSON |
+
+##### get_lymphoma_data() — Follicular Lymphoma Fields
+
+| Field | Source | Notes |
+|---|---|---|
+| `flipi_score` | Observation | Integer (0–5) |
+| `flipi_score_options` | Observation | String label (e.g. "Low", "Intermediate", "High") |
+| `gelf_criteria_status` | Observation | String value |
+| `tumor_grade` | Observation | Integer (1–3) |
+
+##### _compute_derived_fields() — Computed Fields
+
+Called after all other extraction methods on the unsaved `PatientInfo` instance:
+
+- **`measurable_disease_imwg`**: `True` if serum M-protein ≥ 1 g/dL OR urine M-protein ≥ 200 mg/24h OR serum FLC ratio abnormal with involved FLC ≥ 100 mg/L. `False` if all three are measured but below thresholds. `None` if insufficient data.
+- **`tp53_disruption`**: `True` if `genetic_mutations` JSON contains a mutation on gene `TP53` with classification `pathogenic`. `False` if TP53 entry exists but not pathogenic. `None` if no TP53 entry.
+
+##### _compute_lymphocyte_doubling_time() — ALC Doubling Time
+
+```
+LDT (months) = months_elapsed × ln(2) / ln(ALC_last / ALC_first)
+```
+
+- Requires ≥ 2 ALC measurements taken at different times
+- Returns `None` if ALC is not rising (ratio ≤ 1) or if only one data point exists
+- Minimum returned value: 1 month (negative results indicate rapid progression but are clamped)
 
 ### 3. Comprehensive Field Mapping
 
@@ -64,7 +123,7 @@ The command maps data from OMOP models to PatientInfo fields:
 - Age calculated from birth year and death date
 - Gender mapped from concept names
 - Race/ethnicity from Person model
-- Language preferences and skill levels
+- Language preferences and skill levels (via `PersonLanguageSkill` junction model)
 
 #### Disease Information
 - Primary cancer diagnosis
@@ -78,6 +137,15 @@ The command maps data from OMOP models to PatientInfo fields:
 - Treatment intent and setting
 - Response outcomes
 - Platinum, immunotherapy, chemotherapy flags
+- `later_therapies`: JSON array of 3rd-line-and-beyond regimens with start/end dates
+
+#### CLL-Specific
+- All 22 CLL fields: staging (Binet), lab measurements (ALC, β2M, QTc), clinical observations (hepatomegaly, splenomegaly, lymphadenopathy), refractoriness (BTK/BCL-2 inhibitors), and computed values (lymphocyte doubling time, TP53 disruption)
+
+#### Follicular Lymphoma-Specific
+- FLIPI score (numeric) and risk category (string)
+- GELF criteria status
+- Tumor grade
 
 #### Biomarkers
 - PD-L1 expression and assay method

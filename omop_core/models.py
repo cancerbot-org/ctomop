@@ -833,6 +833,48 @@ class PatientInfo(models.Model):
     pd_l1_combined_positive_score = models.IntegerField(blank=True, null=True)
     ki67_proliferation_index = models.IntegerField(blank=True, null=True)
 
+    # Status
+    status = models.TextField(blank=True, null=True)
+
+    # Languages (denormalized from PersonLanguageSkill for API consumption)
+    languages_skills = models.TextField(blank=True, null=True)
+
+    # Lymphoma (Follicular Lymphoma)
+    gelf_criteria_status = models.TextField(blank=True, null=True)
+    flipi_score = models.IntegerField(blank=True, null=True)
+    flipi_score_options = models.TextField(blank=True, null=True)
+    tumor_grade = models.IntegerField(blank=True, null=True)
+
+    # Measurable disease
+    measurable_disease_imwg = models.BooleanField(blank=True, null=True)
+
+    # Later therapies (structured list, mirrors cancerbot JSONField)
+    later_therapies = models.JSONField(blank=True, null=False, default=list)
+
+    # CLL (Chronic Lymphocytic Leukemia)
+    binet_stage = models.TextField(blank=True, null=True)
+    protein_expressions = models.TextField(blank=True, null=True)
+    richter_transformation = models.TextField(blank=True, null=True)
+    tumor_burden = models.TextField(blank=True, null=True)
+    lymphocyte_doubling_time = models.IntegerField(blank=True, null=True)
+    tp53_disruption = models.BooleanField(blank=True, null=True)
+    measurable_disease_iwcll = models.BooleanField(blank=True, null=True)
+    hepatomegaly = models.BooleanField(blank=True, null=True)
+    autoimmune_cytopenias_refractory_to_steroids = models.BooleanField(blank=True, null=True)
+    lymphadenopathy = models.BooleanField(blank=True, null=True)
+    largest_lymph_node_size = models.FloatField(blank=True, null=True)
+    splenomegaly = models.BooleanField(blank=True, null=True)
+    spleen_size = models.FloatField(blank=True, null=True)
+    disease_activity = models.TextField(blank=True, null=True)
+    btk_inhibitor_refractory = models.BooleanField(blank=True, null=True)
+    bcl2_inhibitor_refractory = models.BooleanField(blank=True, null=True)
+    absolute_lymphocyte_count = models.FloatField(blank=True, null=True)
+    qtcf_value = models.FloatField(blank=True, null=True)
+    serum_beta2_microglobulin_level = models.FloatField(blank=True, null=True)
+    clonal_bone_marrow_b_lymphocytes = models.FloatField(blank=True, null=True)
+    clonal_b_lymphocyte_count = models.IntegerField(blank=True, null=True)
+    bone_marrow_involvement = models.BooleanField(blank=True, null=True)
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

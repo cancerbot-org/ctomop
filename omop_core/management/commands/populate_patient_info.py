@@ -176,8 +176,18 @@ class Command(BaseCommand):
         for field, value in genetic_data.items():
             setattr(patient_info, field, value)
 
-        # Set last updated timestamp
-        patient_info.last_updated = timezone.now()
+        # Populate CLL-specific data
+        cll_data = self.get_cll_data(person)
+        for field, value in cll_data.items():
+            setattr(patient_info, field, value)
+
+        # Populate lymphoma-specific data
+        lymphoma_data = self.get_lymphoma_data(person)
+        for field, value in lymphoma_data.items():
+            setattr(patient_info, field, value)
+
+        # Compute derived fields that depend on other fields being set first
+        self._compute_derived_fields(patient_info)
 
         # Save the PatientInfo
         patient_info.save()
@@ -208,16 +218,14 @@ class Command(BaseCommand):
         if person.race_concept:
             data['ethnicity'] = person.race_concept.concept_name
 
-        # Language support (from PersonLanguageSkill model)
-        primary_language = person.get_primary_language()
-        if primary_language:
-            data['languages'] = primary_language
-            # Get language skills summary for additional context
-            language_skills = person.get_language_skills_summary()
-            if language_skills:
-                data['language_skill_level'] = list(language_skills.values())[0] if language_skills else 'speak'
-            else:
-                data['language_skill_level'] = 'speak'
+        # Language support (from PersonLanguageSkill relation)
+        lang_skills = person.language_skills.select_related('language_concept').all()
+        if lang_skills.exists():
+            parts = [
+                f'{ls.language_concept.concept_name}: {ls.skill_level}'
+                for ls in lang_skills
+            ]
+            data['languages_skills'] = ', '.join(parts)
 
         return data
 
@@ -303,16 +311,24 @@ class Command(BaseCommand):
                 later_drugs = therapy_details[2:]
                 data['later_therapy'] = '; '.join([drug['drug'] for drug in later_drugs[:3]])
                 data['later_date'] = later_drugs[0]['start_date']
+                data['later_therapies'] = [
+                    {
+                        'therapy': d['drug'],
+                        'startDate': d['start_date'],
+                        'endDate': d['end_date'],
+                    }
+                    for d in later_drugs
+                ]
 
             # Treatment types based on drug concepts
-            drug_names = [drug.drug_concept.concept_name.lower() if drug.drug_concept else '' 
+            drug_names = [drug.drug_concept.concept_name.lower() if drug.drug_concept else ''
                          for drug in drug_exposures]
-            
+
             # Look for platinum-based drugs
             platinum_terms = ['platinum', 'carboplatin', 'cisplatin', 'oxaliplatin']
             if any(any(term in name for term in platinum_terms) for name in drug_names):
                 data['prior_therapy'] = 'Platinum-based chemotherapy'
-                
+
             # Look for immunotherapy
             immuno_terms = ['pembrolizumab', 'nivolumab', 'atezolizumab', 'durvalumab']
             if any(any(term in name for term in immuno_terms) for name in drug_names):
@@ -320,7 +336,7 @@ class Command(BaseCommand):
                 data['prior_therapy'] = (existing_therapy + '; Immunotherapy').strip('; ')
 
         return data
-        
+
         if drug_exposures.exists():
             # Get recent treatments 
             recent_drugs = drug_exposures[:10]  # Last 10 drug exposures
@@ -764,5 +780,228 @@ class Command(BaseCommand):
         
         # Set the genetic_mutations field
         data['genetic_mutations'] = mutations
-        
+
         return data
+
+    # ------------------------------------------------------------------
+    # CLL-specific extraction
+    # ------------------------------------------------------------------
+
+    def get_cll_data(self, person):
+        """Extract CLL-specific fields from OMOP Measurement/Observation/Condition tables."""
+        data = {}
+        measurements = Measurement.objects.filter(person=person).order_by('-measurement_date')
+        observations = Observation.objects.filter(person=person).order_by('-observation_date')
+        conditions = ConditionOccurrence.objects.filter(person=person)
+
+        # ------ Numeric measurements ------
+        loinc_map = {
+            '731-0':    'absolute_lymphocyte_count',      # Lymphocytes [#/vol] Blood
+            '48094-6':  'serum_beta2_microglobulin_level', # Beta-2-microglobulin serum
+            '8632-1':   'qtcf_value',                      # QTcF interval
+            '44996-6':  'spleen_size',                     # Spleen diameter (US)
+            '21889-1':  'largest_lymph_node_size',         # Lymph node greatest dimension
+        }
+        for loinc_code, field in loinc_map.items():
+            m = measurements.filter(
+                measurement_concept__concept_code=loinc_code,
+                value_as_number__isnull=False,
+            ).first()
+            if m:
+                data[field] = float(m.value_as_number)
+
+        # Clonal bone marrow / B-lymphocyte counts — match by concept name
+        for m in measurements:
+            cname = m.measurement_concept.concept_name.lower() if m.measurement_concept else ''
+            if 'clonal' in cname and 'bone marrow' in cname and 'b' in cname and m.value_as_number:
+                data['clonal_bone_marrow_b_lymphocytes'] = float(m.value_as_number)
+            elif 'clonal b' in cname and 'lymphocyte' in cname and m.value_as_number:
+                data['clonal_b_lymphocyte_count'] = int(m.value_as_number)
+
+        # Protein expressions (CD markers) — store as CSV string
+        cd_markers = []
+        for m in measurements:
+            cname = m.measurement_concept.concept_name if m.measurement_concept else ''
+            if any(cd in cname.upper() for cd in ('CD38', 'CD20', 'CD5', 'ZAP70')):
+                if m.value_as_string:
+                    cd_markers.append(f'{cname}: {m.value_as_string}')
+        if cd_markers:
+            data['protein_expressions'] = ', '.join(cd_markers)
+
+        # ------ Staging / boolean observations ------
+        for obs in observations:
+            cname = obs.observation_concept.concept_name.lower() if obs.observation_concept else ''
+            val_str = (obs.value_as_string or '').lower()
+            val_num = obs.value_as_number
+
+            if 'binet' in cname:
+                stage_val = obs.value_as_string or (str(int(val_num)) if val_num else None)
+                if stage_val:
+                    data['binet_stage'] = stage_val
+
+            elif 'tumor burden' in cname or 'tumour burden' in cname:
+                data['tumor_burden'] = obs.value_as_string or cname
+
+            elif 'disease activity' in cname:
+                data['disease_activity'] = obs.value_as_string or cname
+
+            elif 'bone marrow involvement' in cname or 'bone marrow infiltrat' in cname:
+                data['bone_marrow_involvement'] = val_str in ('true', 'yes', '1') or val_num == 1
+
+            elif 'hepatomegaly' in cname:
+                data['hepatomegaly'] = val_str in ('true', 'yes', '1', 'present') or val_num == 1
+
+            elif 'splenomegaly' in cname:
+                data['splenomegaly'] = val_str in ('true', 'yes', '1', 'present') or val_num == 1
+
+            elif 'lymphadenopathy' in cname:
+                data['lymphadenopathy'] = val_str in ('true', 'yes', '1', 'present') or val_num == 1
+
+            elif 'autoimmune cytopenia' in cname:
+                data['autoimmune_cytopenias_refractory_to_steroids'] = (
+                    val_str in ('true', 'yes', '1', 'refractory') or val_num == 1
+                )
+
+        # ------ ConditionOccurrence-based booleans ------
+        for cond in conditions:
+            cname = (cond.condition_concept.concept_name or '').lower() if cond.condition_concept else ''
+            if 'richter' in cname:
+                data['richter_transformation'] = cond.condition_concept.concept_name
+            if 'hepatomegaly' in cname and 'hepatomegaly' not in data:
+                data['hepatomegaly'] = True
+            if 'splenomegaly' in cname and 'splenomegaly' not in data:
+                data['splenomegaly'] = True
+            if 'lymphadenopathy' in cname and 'lymphadenopathy' not in data:
+                data['lymphadenopathy'] = True
+
+        # ------ Drug-based refractoriness ------
+        drug_exposures = DrugExposure.objects.filter(person=person)
+        btk_terms = ('ibrutinib', 'zanubrutinib', 'acalabrutinib', 'pirtobrutinib')
+        bcl2_terms = ('venetoclax',)
+
+        had_btk = any(
+            any(t in (de.drug_concept.concept_name or '').lower() for t in btk_terms)
+            for de in drug_exposures if de.drug_concept
+        )
+        had_bcl2 = any(
+            any(t in (de.drug_concept.concept_name or '').lower() for t in bcl2_terms)
+            for de in drug_exposures if de.drug_concept
+        )
+
+        # Refractory only if the drug was used AND the patient had documented progression
+        has_progression = observations.filter(
+            observation_concept__concept_code='182842009'  # Progressive disease SNOMED
+        ).exists()
+
+        if had_btk:
+            data['btk_inhibitor_refractory'] = has_progression
+        if had_bcl2:
+            data['bcl2_inhibitor_refractory'] = has_progression
+
+        # ------ Lymphocyte doubling time ------
+        alc_loinc = '731-0'
+        alc_concept = Concept.objects.filter(
+            concept_code=alc_loinc,
+            vocabulary__vocabulary_id='LOINC',
+        ).first()
+        if alc_concept:
+            alc_measurements = (
+                Measurement.objects.filter(
+                    person=person,
+                    measurement_concept=alc_concept,
+                    value_as_number__isnull=False,
+                )
+                .order_by('measurement_date')
+            )
+            if alc_measurements.count() >= 2:
+                pts = list(alc_measurements.values_list('measurement_date', 'value_as_number'))
+                ldt = self._compute_lymphocyte_doubling_time(pts)
+                if ldt is not None:
+                    data['lymphocyte_doubling_time'] = ldt
+
+        return data
+
+    @staticmethod
+    def _compute_lymphocyte_doubling_time(alc_points):
+        """
+        Estimate lymphocyte doubling time (months) from serial ALC measurements.
+
+        alc_points: list of (date, Decimal) tuples ordered ascending by date.
+        Returns integer months, or None if data insufficient / ALC not rising.
+        """
+        if len(alc_points) < 2:
+            return None
+        first_date, first_alc = alc_points[0]
+        last_date, last_alc = alc_points[-1]
+        if float(last_alc) <= float(first_alc) or float(first_alc) <= 0:
+            return None
+        import math
+        days = (last_date - first_date).days
+        if days <= 0:
+            return None
+        months = days / 30.44
+        ldt = months * math.log(2) / math.log(float(last_alc) / float(first_alc))
+        return max(1, int(round(ldt)))
+
+    # ------------------------------------------------------------------
+    # Lymphoma-specific extraction
+    # ------------------------------------------------------------------
+
+    def get_lymphoma_data(self, person):
+        """Extract Follicular Lymphoma specific fields from OMOP Observation/Measurement."""
+        data = {}
+        observations = Observation.objects.filter(person=person).order_by('-observation_date')
+        measurements = Measurement.objects.filter(person=person).order_by('-measurement_date')
+
+        for obs in observations:
+            cname = (obs.observation_concept.concept_name or '').lower() if obs.observation_concept else ''
+
+            if 'flipi' in cname:
+                if obs.value_as_number is not None:
+                    data['flipi_score'] = int(obs.value_as_number)
+                elif obs.value_as_string:
+                    data['flipi_score_options'] = obs.value_as_string
+
+            elif 'gelf' in cname:
+                data['gelf_criteria_status'] = obs.value_as_string or cname
+
+        for m in measurements:
+            cname = (m.measurement_concept.concept_name or '').lower() if m.measurement_concept else ''
+            if 'grade' in cname and 'lymphoma' in cname and m.value_as_number is not None:
+                data['tumor_grade'] = int(m.value_as_number)
+
+        return data
+
+    # ------------------------------------------------------------------
+    # Derived fields computed after all source data is loaded
+    # ------------------------------------------------------------------
+
+    def _compute_derived_fields(self, patient_info):
+        """Compute fields that depend on other PatientInfo fields being set first."""
+        # measurable_disease_imwg — serum M-protein ≥0.5 g/dL OR
+        #   urine M-protein ≥200 mg/24h OR (FLC ratio abnormal AND diff ≥10 mg/dL)
+        serum_mp = patient_info.monoclonal_protein_serum
+        urine_mp = patient_info.monoclonal_protein_urine
+        kappa = patient_info.kappa_flc
+        lam = patient_info.lambda_flc
+
+        imwg = None
+        if serum_mp is not None and float(serum_mp) >= 0.5:
+            imwg = True
+        elif urine_mp is not None and float(urine_mp) >= 200:
+            imwg = True
+        elif kappa is not None and lam is not None and lam > 0:
+            ratio = kappa / lam
+            diff = abs(kappa - lam)
+            if (ratio > 100 or ratio < 0.01) and diff >= 10:
+                imwg = True
+        elif any(v is not None for v in (serum_mp, urine_mp, kappa, lam)):
+            imwg = False
+        patient_info.measurable_disease_imwg = imwg
+
+        # tp53_disruption — any TP53 pathogenic mutation in genetic_mutations
+        mutations = patient_info.genetic_mutations or []
+        patient_info.tp53_disruption = any(
+            m.get('gene', '').lower() == 'tp53' and m.get('interpretation') == 'pathogenic'
+            for m in mutations
+        )
