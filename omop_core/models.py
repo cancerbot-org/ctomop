@@ -750,7 +750,6 @@ class PatientInfo(models.Model):
     test_specimen_type = models.CharField(max_length=50, blank=True, null=True, help_text="Test Specimen Type (Primary/Metastatic Biopsy)")
     report_interpretation = models.CharField(max_length=50, blank=True, null=True, help_text="Report Interpretation (Positive/Negative/Indeterminate/Not Tested)")
     oncotype_dx_score = models.IntegerField(blank=True, null=True, help_text="Oncotype DX Score")
-    ki67_percentage = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Ki-67 Percentage")
     androgen_receptor_status = models.CharField(max_length=50, blank=True, null=True, help_text="Androgen Receptor Status")
     
     # Treatment Fields
@@ -874,6 +873,54 @@ class PatientInfo(models.Model):
     clonal_bone_marrow_b_lymphocytes = models.FloatField(blank=True, null=True)
     clonal_b_lymphocyte_count = models.IntegerField(blank=True, null=True)
     bone_marrow_involvement = models.BooleanField(blank=True, null=True)
+
+    # -------------------------------------------------------------------------
+    # HealthTree AI Lines of Therapy
+    # Denormalized from core__ai_lines_of_therapy (one row per LOT per user).
+    # Stored as a JSON array so all lines are co-located with the patient.
+    # Each element mirrors the columns in core__ai_lines_of_therapy:
+    #   ai_lines_of_therapy_summary_id, line_number, disease, outcome,
+    #   start_date, end_date, is_ongoing_line_of_therapy,
+    #   active_ingredients, active_ingredients_induction,
+    #   active_ingredients_maintenance, has_bispecifics,
+    #   line_has_procedures, procedures, has_transplant, has_cart,
+    #   is_clinical_trial, clinical_trial_identifier, censoring_date,
+    #   notes, is_validated, prompt_version, created_at, updated_at
+    # -------------------------------------------------------------------------
+    ai_lines_of_therapy = models.JSONField(
+        blank=True,
+        null=True,
+        default=list,
+        help_text=(
+            "AI-generated lines of therapy from HealthTree "
+            "(core__ai_lines_of_therapy). Array of LOT objects, "
+            "one per treatment line, ordered by line_number."
+        ),
+    )
+
+    # -------------------------------------------------------------------------
+    # HealthTree Survey Responses
+    # Denormalized from core__survey_responses (one row per user/survey/question).
+    # Stored as a JSON array — each element mirrors the columns in
+    # core__survey_responses:
+    #   response_id, survey_id, question_id, survey_name, survey_title,
+    #   survey_type, survey_status, survey_disease,
+    #   question_label, question_type, question_options,
+    #   is_answered, answer_type, answer_scalar, answer_array,
+    #   answer_object, answer_location,
+    #   is_survey_started, is_survey_completed, survey_percentage_complete,
+    #   age_at_answer, answered_at, survey_completed_at
+    # -------------------------------------------------------------------------
+    survey_responses = models.JSONField(
+        blank=True,
+        null=True,
+        default=list,
+        help_text=(
+            "Patient survey responses from HealthTree "
+            "(core__survey_responses). Array of response objects, "
+            "one per user/survey/question combination."
+        ),
+    )
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
