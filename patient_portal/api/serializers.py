@@ -20,6 +20,7 @@ class PatientListSerializer(serializers.ModelSerializer):
     class Meta:
         model = PatientInfo
         fields = [
+            'id',
             'person_id',
             'patient_name',
             'age',
