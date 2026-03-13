@@ -233,15 +233,19 @@ class Command(BaseCommand):
         """Extract location information"""
         data = {}
         
-        if person.location:
-            location = person.location
-            data.update({
-                'country': location.country,
-                'region': location.state,
-                'postal_code': location.zip,
-                'latitude': float(location.latitude) if location.latitude else None,
-                'longitude': float(location.longitude) if location.longitude else None,
-            })
+        if person.location_id:
+            try:
+                location = Location.objects.get(location_id=person.location_id)
+                data.update({
+                    'country': location.country,
+                    'region': location.state,
+                    'city': location.city,
+                    'postal_code': location.zip,
+                    'latitude': float(location.latitude) if location.latitude else None,
+                    'longitude': float(location.longitude) if location.longitude else None,
+                })
+            except Location.DoesNotExist:
+                pass
 
         return data
 

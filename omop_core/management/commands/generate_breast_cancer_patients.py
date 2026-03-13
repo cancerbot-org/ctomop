@@ -249,7 +249,7 @@ class Command(BaseCommand):
         birth_year = date.today().year - age
         
         # Create person (location not needed for demo)
-        person = self.create_person(person_id, birth_year)
+        person = self.create_person(person_id, birth_year, location=None)
         
         # Create visit
         visit = self.create_visit(person)
@@ -349,7 +349,7 @@ class Command(BaseCommand):
             region=state,
             city=city,
             postal_code=zip_code,
-            gender='Female',
+            gender='F',
             date_of_birth=date(birth_year, random.randint(1, 12), random.randint(1, 28))
         )
         
