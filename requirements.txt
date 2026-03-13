@@ -13,7 +13,7 @@ gunicorn==23.0.0
 idna==3.10
 oauthlib==3.3.1
 packaging==24.1
-psycopg2-binary==2.9.9
+psycopg[binary]==3.3.3
 pycparser==2.23
 PyJWT==2.9.0
 python-decouple==3.8

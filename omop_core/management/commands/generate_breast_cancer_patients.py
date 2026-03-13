@@ -248,8 +248,9 @@ class Command(BaseCommand):
         age = random.randint(35, 75)
         birth_year = date.today().year - age
         
-        # Create person (location not needed for demo)
-        person = self.create_person(person_id, birth_year, location=None)
+        # Create location and person
+        location = self.create_location(patient_num)
+        person = self.create_person(person_id, birth_year, location)
         
         # Create visit
         visit = self.create_visit(person)
