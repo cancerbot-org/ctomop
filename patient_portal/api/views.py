@@ -1359,3 +1359,22 @@ def health_check(request):
         'service': 'ctomop',
         'database': 'connected'
     })
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def auth_test(request):
+    """Test auth endpoint to diagnose login 500"""
+    import traceback as tb
+    try:
+        step = 'start'
+        username = request.data.get('username', 'test')
+        step = 'got username'
+        from django.contrib.auth import authenticate as do_auth
+        step = 'imported authenticate'
+        user = do_auth(request, username=username, password='badpassword_test_only')
+        step = 'authenticate done'
+        return Response({'status': 'ok', 'step': step, 'user': str(user)})
+    except Exception as e:
+        return Response({'status': 'error', 'step': step, 'error': str(e), 'traceback': tb.format_exc()}, status=500)
