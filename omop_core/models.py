@@ -832,9 +832,6 @@ class PatientInfo(models.Model):
     pd_l1_combined_positive_score = models.IntegerField(blank=True, null=True)
     ki67_proliferation_index = models.IntegerField(blank=True, null=True)
 
-    # Status
-    status = models.TextField(blank=True, null=True)
-
     # Languages (denormalized from PersonLanguageSkill for API consumption)
     languages_skills = models.TextField(blank=True, null=True)
 
