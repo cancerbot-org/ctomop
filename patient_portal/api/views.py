@@ -1312,27 +1312,35 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
 @permission_classes([AllowAny])
 def login_view(request):
     """Simple login with username and password"""
-    username = request.data.get('username')
-    password = request.data.get('password')
-    
-    if not username or not password:
+    try:
+        username = request.data.get('username')
+        password = request.data.get('password')
+
+        if not username or not password:
+            return Response({
+                'error': 'Username and password required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        user = authenticate(request, username=username, password=password)
+
+        if user is not None:
+            login(request, user)
+            user_serializer = UserSerializer(user)
+            return Response({
+                'message': 'Login successful',
+                'user': user_serializer.data
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'error': 'Invalid credentials'
+            }, status=status.HTTP_401_UNAUTHORIZED)
+    except Exception as e:
+        import traceback
+        logger.error('Login error: %s\n%s', str(e), traceback.format_exc())
         return Response({
-            'error': 'Username and password required'
-        }, status=status.HTTP_400_BAD_REQUEST)
-    
-    user = authenticate(request, username=username, password=password)
-    
-    if user is not None:
-        login(request, user)
-        user_serializer = UserSerializer(user)
-        return Response({
-            'message': 'Login successful',
-            'user': user_serializer.data
-        }, status=status.HTTP_200_OK)
-    else:
-        return Response({
-            'error': 'Invalid credentials'
-        }, status=status.HTTP_401_UNAUTHORIZED)
+            'error': 'Login failed',
+            'detail': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @csrf_exempt
 @api_view(['POST'])
