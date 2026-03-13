@@ -507,7 +507,6 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     test_specimen_type = None
                     report_interpretation = None
                     oncotype_dx_score = None
-                    ki67_percentage = None
                     androgen_receptor_status = None
                     
                     # Treatment Fields
@@ -692,8 +691,6 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                                 test_date = observation['effectiveDateTime'][:10]
                         elif loinc_code == '69548-6':  # Test Interpretation
                             report_interpretation = value_codeable
-                        elif loinc_code == '94638-6':  # Ki-67
-                            ki67_percentage = value_number
                         elif loinc_code == '16112-5':  # Androgen Receptor
                             androgen_receptor_status = value_codeable
                         elif loinc_code == '42804-5':  # Therapy Intent
@@ -1210,7 +1207,6 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         test_specimen_type=test_specimen_type,
                         report_interpretation=report_interpretation,
                         oncotype_dx_score=oncotype_dx_score,
-                        ki67_percentage=ki67_percentage,
                         androgen_receptor_status=androgen_receptor_status,
                         # Treatment Fields
                         therapy_intent=therapy_intent,

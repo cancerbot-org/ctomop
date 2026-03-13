@@ -811,7 +811,6 @@ class PatientInfo(models.Model):
     tnbc_status = models.BooleanField(blank=True, null=True)
     hrd_status = models.TextField(blank=True, null=True)
     hr_status = models.TextField(blank=True, null=True)
-    ki67_percentage = models.DecimalField(decimal_places=1, max_digits=5, blank=True, null=True, help_text="Ki-67 Percentage")
     
     # Tumor characteristics
     tumor_size = models.FloatField(blank=True, null=True, help_text="Tumor size in cm")
