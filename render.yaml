@@ -2,6 +2,9 @@ services:
   - type: web
     name: ctomop
     runtime: python
+    repo: https://github.com/cancerbot-org/ctomop
+    branch: main
+    autoDeploy: true
     buildCommand: "pip install -r requirements.txt && cd frontend && npm install && npm run build && cd .. && python manage.py collectstatic --noinput"
     startCommand: "chmod +x start.sh && ./start.sh"
     envVars:
