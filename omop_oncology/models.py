@@ -129,9 +129,135 @@ class Histology(models.Model):
         return f"Histology {self.histology_id} for Person {self.person_id}"
 
 
-# Treatment lines should be tracked using the standard OMOP Episode table
-# Episode represents discrete healthcare encounters and can track treatment lines
-# Social determinants should be stored in the Observation table with appropriate concepts
-# Health behaviors (smoking, alcohol, etc.) should be stored in the Observation table
-# Infection status should be stored in the Observation or Measurement table with standardized concepts
-# This ensures full OMOP CDM compliance and interoperability
+class AILineOfTherapySummary(models.Model):
+    """
+    AI-generated line-of-therapy summary linked to an OMOP Episode.
+
+    The OMOP Episode + EpisodeEvent tables store the structured clinical data
+    (one DrugExposure per drug, one ProcedureOccurrence per procedure, each
+    linked back to the Episode via EpisodeEvent).  This model stores the
+    AI-generated metadata that does not have a clean OMOP home: resolved
+    ingredient names, outcome text, validation state, prompt version, CAR-T /
+    bispecific / transplant flags, and clinical-trial linkage.
+
+    Relationship:
+        Episode (1) ←─── AILineOfTherapySummary (1)
+        Episode (1) ←─── EpisodeEvent (*) ←─── DrugExposure / ProcedureOccurrence
+
+    episode.episode_number  = line number (1 = 1L, 2 = 2L, …)
+    episode.episode_concept = Treatment Regimen concept (OMOP 32531)
+    episode.episode_source_value = ai_lines_of_therapy_summary_id from upstream dbt
+    """
+
+    # Link to the OMOP Episode that represents this treatment line
+    episode = models.OneToOneField(
+        Episode,
+        on_delete=models.CASCADE,
+        related_name='ai_summary',
+        help_text="The OMOP Episode representing this line of therapy"
+    )
+
+    # Upstream identifier from the dbt / Firestore source
+    ai_lines_of_therapy_summary_id = models.CharField(
+        max_length=255, null=True, blank=True, db_index=True,
+        help_text="Source document ID from ai_lines_of_therapy_summary Firestore collection"
+    )
+
+    # Clinical outcome for this line
+    outcome = models.TextField(null=True, blank=True,
+                               help_text="Line outcome (e.g. PR, PD, CR, SD)")
+
+    # AI-resolved medication names (denormalised comma-separated strings for display)
+    active_ingredients = models.TextField(
+        null=True, blank=True,
+        help_text="All active ingredients, comma-separated (resolved from medicationMappings)"
+    )
+    active_ingredients_induction = models.TextField(
+        null=True, blank=True,
+        help_text="Induction-phase ingredients, comma-separated"
+    )
+    active_ingredients_maintenance = models.TextField(
+        null=True, blank=True,
+        help_text="Maintenance-phase ingredients, comma-separated"
+    )
+
+    # Procedure / drug-class flags (derived during AI extraction)
+    has_bispecifics = models.BooleanField(
+        default=False,
+        help_text="True if the regimen contains a bispecific antibody"
+    )
+    has_transplant = models.BooleanField(
+        default=False,
+        help_text="True if a stem-cell transplant procedure is in the line"
+    )
+    has_cart = models.BooleanField(
+        default=False,
+        help_text="True if a CAR-T therapy (procedure or medication) is in the line"
+    )
+
+    # Resolved procedure names (denormalised for display)
+    procedures = models.TextField(
+        null=True, blank=True,
+        help_text="Procedure names, comma-separated (resolved from procedureMappings)"
+    )
+
+    # Clinical trial
+    is_clinical_trial = models.BooleanField(default=False)
+    clinical_trial_identifier = models.CharField(max_length=255, null=True, blank=True)
+
+    # Censoring date (latest document date for the patient — used in LOT analyses)
+    censoring_date = models.DateField(null=True, blank=True)
+
+    # AI / data-quality metadata
+    is_validated = models.BooleanField(
+        default=False,
+        help_text="Manually validated by a clinician or data-ops reviewer"
+    )
+    prompt_version = models.CharField(
+        max_length=50, null=True, blank=True,
+        help_text="Version of the AI prompt used to extract this LOT"
+    )
+    notes = models.TextField(null=True, blank=True)
+
+    # Timestamps
+    source_created_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="created_at from the upstream Firestore document"
+    )
+    source_updated_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="updated_at from the upstream Firestore document"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'ai_line_of_therapy_summary'
+        indexes = [
+            models.Index(fields=['episode']),
+            models.Index(fields=['ai_lines_of_therapy_summary_id']),
+        ]
+
+    def __str__(self):
+        return (
+            f"LOT {self.episode.episode_number} "
+            f"for Person {self.episode.person_id} "
+            f"({self.active_ingredients or 'no ingredients'})"
+        )
+
+    @property
+    def line_number(self) -> int | None:
+        """Convenience proxy — line number is stored on the OMOP Episode."""
+        return self.episode.episode_number
+
+    @property
+    def start_date(self):
+        return self.episode.episode_start_date
+
+    @property
+    def end_date(self):
+        return self.episode.episode_end_date
+
+    @property
+    def is_ongoing(self) -> bool:
+        return self.episode.episode_end_date is None
