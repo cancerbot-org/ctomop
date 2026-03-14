@@ -1,0 +1,425 @@
+# CLAUDE.md — LLM Instructions for ctomop
+
+This file tells LLMs (Claude, Copilot, etc.) how to work on this codebase consistently.
+
+---
+
+## Project Overview
+
+**ctomop** is a Django + React application that:
+- Stores clinical oncology patient data in an OMOP CDM–aligned PostgreSQL schema
+- Exposes a DRF REST API consumed by a React TypeScript frontend
+- Accepts FHIR R4 Bundle uploads to ingest patient records
+- Generates synthetic FHIR patient data for testing via a Django management command
+- Deploys to Render (backend) with PostgreSQL
+
+**Key tech:**
+- Backend: Django 5.x, Django REST Framework, PostgreSQL (psycopg[binary] 3.x)
+- Frontend: React 18, TypeScript, Tailwind CSS
+- Data: OMOP CDM v5.4, FHIR R4
+
+---
+
+## Stack File Map
+
+| Concern | File(s) |
+|---|---|
+| OMOP data model | `omop_core/models.py` — `PatientInfo`, `Person`, `PersonLanguageSkill` |
+| DB migrations | `omop_core/migrations/` — always use `SeparateDatabaseAndState` for raw SQL migrations |
+| DRF serializers | `patient_portal/api/serializers.py` — `PatientInfoSerializer` (uses `fields = '__all__'`) |
+| Backend API views | `patient_portal/api/views.py` — `PatientInfoViewSet`, FHIR upload handler |
+| API URL routing | `patient_portal/api/urls.py` and `patient_portal/urls.py` |
+| TypeScript types | `frontend/src/types/patient.ts` — `PatientInfo` interface |
+| React UI tabs | `frontend/src/components/PatientInfo/` — `GeneralTab.tsx`, `LabsTab.tsx`, `MultipleMyelomaTab.tsx`, `FollicularLymphomaTab.tsx` |
+| Patient detail page | `frontend/src/components/Patient/PatientDetail.tsx` |
+| API client | `frontend/src/utils/api.ts` and `frontend/src/api/axios.ts` |
+| FHIR bundle generator | `omop_core/management/commands/generate_fhir_bundle.py` |
+| FHIR upload loader | `patient_portal/api/views.py` — `upload_fhir_bundle` function/view |
+| Backend tests | `omop_core/tests.py`, `patient_portal/tests.py` |
+| React tests | `frontend/src/App.test.tsx`, `frontend/src/components/**/*.test.tsx` |
+
+---
+
+## Rule: Adding a New Patient Attribute
+
+When adding any new field to `PatientInfo`, you **must** touch ALL of the following layers. Do not skip any layer.
+
+### 1. Django Model (`omop_core/models.py`)
+
+Add the field to the `PatientInfo` class with `blank=True, null=True` unless there is a specific reason for it to be required.
+
+```python
+# Example
+new_field = models.TextField(blank=True, null=True, help_text="Description of the field")
+```
+
+### 2. Database Migration (`omop_core/migrations/`)
+
+Create a new migration file numbered sequentially (e.g., `0043_add_new_field.py`).
+
+**Always use `SeparateDatabaseAndState` with `IF NOT EXISTS` SQL** to keep the migration idempotent. This pattern is required because the Render PostgreSQL DB has historically drifted from Django migration state:
+
+```python
+from django.db import migrations, models
+
+ADD_SQL = "ALTER TABLE patient_info ADD COLUMN IF NOT EXISTS new_field TEXT;"
+DROP_SQL = "ALTER TABLE patient_info DROP COLUMN IF EXISTS new_field;"
+
+class Migration(migrations.Migration):
+    dependencies = [("omop_core", "0042_drop_extra_db_columns")]
+    operations = [
+        migrations.SeparateDatabaseAndState(
+            database_operations=[migrations.RunSQL(sql=ADD_SQL, reverse_sql=DROP_SQL)],
+            state_operations=[
+                migrations.AddField(
+                    model_name="patientinfo",
+                    name="new_field",
+                    field=models.TextField(blank=True, null=True),
+                )
+            ],
+        )
+    ]
+```
+
+Apply locally to the Render DB before committing:
+```bash
+DATABASE_URL="postgresql://ctomop_user:K7mqaHP5krJHiojJFtZmCOepH3Lj66jl@dpg-d6ptpqi4d50c739fufqg-a.oregon-postgres.render.com/ctomop" \
+  .venv/bin/python manage.py migrate
+```
+
+### 3. DRF Serializer (`patient_portal/api/serializers.py`)
+
+`PatientInfoSerializer` uses `fields = '__all__'`, so new model fields are **automatically included** in the API response. However:
+
+- If the field needs **custom serialization** (e.g., computed values, nested data), add an explicit `SerializerMethodField`.
+- If the field needs **write validation**, add it to `extra_kwargs`.
+
+### 4. Backend API Views (`patient_portal/api/views.py`)
+
+**FHIR Upload Loader:** Find the `upload_fhir_bundle` view. It maps FHIR resource elements to `PatientInfo` kwargs. Add mapping logic in the appropriate section:
+
+```python
+# In the observation/component parsing section:
+elif loinc_code == 'XXXXX-X':  # LOINC code for new field
+    new_field_value = obs.get('valueQuantity', {}).get('value') or \
+                      obs.get('valueString') or \
+                      obs.get('valueCodeableConcept', {}).get('text')
+
+# In the PatientInfo.objects.create() / .save() call:
+new_field=new_field_value,
+```
+
+**PatientInfoViewSet:** If the field needs special filtering, ordering, or search, add it to `filterset_fields`, `search_fields`, or `ordering_fields` in the viewset.
+
+### 5. TypeScript Type (`frontend/src/types/patient.ts`)
+
+Add the field to the `PatientInfo` interface. All fields are optional (`?`):
+
+```typescript
+// In the appropriate section of the PatientInfo interface:
+new_field?: string;         // for TextField / CharField
+new_field?: number;         // for IntegerField / FloatField / DecimalField
+new_field?: boolean;        // for BooleanField
+new_field?: string | null;  // for nullable fields
+```
+
+### 6. React UI (`frontend/src/components/PatientInfo/`)
+
+Add the field to the appropriate tab component. Choose the tab that matches the field's clinical category:
+
+| Category | Component |
+|---|---|
+| Demographics, vitals, disease stage, ECOG/Karnofsky | `GeneralTab.tsx` |
+| Labs, blood counts, chemistry, biomarkers | `LabsTab.tsx` |
+| Myeloma-specific fields | `MultipleMyelomaTab.tsx` |
+| Lymphoma-specific fields | `FollicularLymphomaTab.tsx` |
+| CLL-specific fields | Add a `CLLTab.tsx` if needed |
+| Breast cancer fields | Add a `BreastCancerTab.tsx` if needed |
+| Behavior, lifestyle, socioeconomic | Add a `BehaviorTab.tsx` if needed |
+
+Use the existing `FormField` and `Input`/`Select` UI primitives:
+
+```tsx
+// Text / number input:
+<FormField label="New Field Label" htmlFor="new_field">
+  <Input
+    id="new_field"
+    value={patient.new_field ?? ''}
+    onChange={(e) => onUpdate({ new_field: e.target.value })}
+  />
+</FormField>
+
+// Select / enum:
+<FormField label="New Field Label" htmlFor="new_field">
+  <Select
+    id="new_field"
+    value={patient.new_field ?? ''}
+    onChange={(e) => onUpdate({ new_field: e.target.value })}
+    options={[
+      { value: 'option1', label: 'Option 1' },
+      { value: 'option2', label: 'Option 2' },
+    ]}
+  />
+</FormField>
+```
+
+Register the new tab in `frontend/src/components/Layout/TabBar.tsx` if a new tab is created. Wire the tab into `frontend/src/components/Patient/PatientDetail.tsx`.
+
+### 7. FHIR Bundle Generator (`omop_core/management/commands/generate_fhir_bundle.py`)
+
+Add synthetic data generation for the new field. The generator creates FHIR Observation, Condition, or extension resources. Pick the right FHIR resource type:
+
+- **Lab value / measurement** → FHIR `Observation` with a LOINC code
+- **Clinical status / boolean** → FHIR `Observation` with a SNOMED code or extension
+- **Demographic / free text** → FHIR `Patient` extension or `Observation`
+
+```python
+# Example: add an Observation for a new lab value
+def _generate_new_field_observation(self, patient_id: str, encounter_id: str) -> dict:
+    return {
+        "resourceType": "Observation",
+        "id": str(uuid.uuid4()),
+        "status": "final",
+        "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "laboratory"}]}],
+        "code": {
+            "coding": [{"system": "http://loinc.org", "code": "XXXXX-X", "display": "New Field Display Name"}],
+            "text": "New Field Display Name"
+        },
+        "subject": {"reference": f"Patient/{patient_id}"},
+        "encounter": {"reference": f"Encounter/{encounter_id}"},
+        "valueQuantity": {
+            "value": round(random.uniform(min_val, max_val), 1),
+            "unit": "units",
+            "system": "http://unitsofmeasure.org",
+            "code": "unit_code"
+        }
+    }
+```
+
+Call the new generator method from the main patient generation loop and add it to the bundle entries list.
+
+---
+
+## Rule: Tests for Every New Attribute
+
+For each new attribute, create tests that cover **all four layers**. Add tests to the relevant test files.
+
+### Backend Tests (`omop_core/tests.py` and `patient_portal/tests.py`)
+
+```python
+from django.test import TestCase
+from rest_framework.test import APITestCase, APIClient
+from rest_framework import status
+from django.contrib.auth.models import User
+from omop_core.models import PatientInfo, Person
+
+class NewFieldModelTest(TestCase):
+    """Test that new_field exists in DB and model"""
+
+    def setUp(self):
+        self.person = Person.objects.create(person_id=9999)
+        self.patient = PatientInfo.objects.create(
+            person=self.person,
+            new_field="test_value"
+        )
+
+    def test_new_field_saved_to_db(self):
+        """Verify new_field is persisted to and retrieved from DB"""
+        p = PatientInfo.objects.get(person_id=9999)
+        self.assertEqual(p.new_field, "test_value")
+
+    def test_new_field_nullable(self):
+        """Verify new_field can be null"""
+        self.person2 = Person.objects.create(person_id=9998)
+        p = PatientInfo.objects.create(person=self.person2)
+        self.assertIsNone(p.new_field)
+
+
+class NewFieldAPITest(APITestCase):
+    """Test that new_field is exposed via the REST API"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass')
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+        self.person = Person.objects.create(person_id=9997)
+        self.patient = PatientInfo.objects.create(
+            person=self.person,
+            new_field="api_test_value"
+        )
+
+    def test_new_field_in_api_response(self):
+        """Verify new_field appears in GET /api/patients/{id}/"""
+        response = self.client.get(f'/api/patients/{self.patient.id}/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('new_field', response.data)
+        self.assertEqual(response.data['new_field'], "api_test_value")
+
+    def test_new_field_writable_via_api(self):
+        """Verify new_field can be updated via PATCH"""
+        response = self.client.patch(
+            f'/api/patients/{self.patient.id}/',
+            {'new_field': 'updated_value'},
+            format='json'
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.patient.refresh_from_db()
+        self.assertEqual(self.patient.new_field, 'updated_value')
+
+    def test_fhir_upload_populates_new_field(self):
+        """Verify FHIR bundle upload correctly maps to new_field"""
+        # Construct a minimal FHIR bundle containing a resource that maps to new_field
+        fhir_bundle = {
+            "resourceType": "Bundle",
+            "type": "collection",
+            "entry": [
+                {
+                    "resource": {
+                        "resourceType": "Patient",
+                        "id": "test-patient-1",
+                        "name": [{"family": "Test", "given": ["Patient"]}],
+                        "gender": "female",
+                        "birthDate": "1970-01-01"
+                    }
+                },
+                {
+                    "resource": {
+                        "resourceType": "Observation",
+                        "status": "final",
+                        "code": {
+                            "coding": [{"system": "http://loinc.org", "code": "XXXXX-X"}]
+                        },
+                        "subject": {"reference": "Patient/test-patient-1"},
+                        "valueQuantity": {"value": 42.0, "unit": "units"}
+                    }
+                }
+            ]
+        }
+        response = self.client.post(
+            '/api/fhir/upload/',
+            fhir_bundle,
+            format='json'
+        )
+        self.assertIn(response.status_code, [200, 201])
+        # Verify the field was stored
+        patient = PatientInfo.objects.filter(
+            person__family_name='Test'
+        ).first()
+        self.assertIsNotNone(patient)
+        self.assertEqual(patient.new_field, 42.0)
+```
+
+### React / Frontend Tests
+
+Create or add to a test file alongside the component, e.g., `frontend/src/components/PatientInfo/LabsTab.test.tsx`:
+
+```tsx
+import React from 'react';
+import { render, screen, fireEvent } from '@testing-library/react';
+import LabsTab from './LabsTab';
+import { PatientInfo } from '../../types/patient';
+
+const mockPatient: PatientInfo = {
+  id: 1,
+  new_field: 42,
+};
+
+describe('LabsTab - new_field', () => {
+  it('renders new_field value', () => {
+    render(<LabsTab patient={mockPatient} onUpdate={jest.fn()} />);
+    expect(screen.getByDisplayValue('42')).toBeInTheDocument();
+  });
+
+  it('calls onUpdate when new_field changes', () => {
+    const onUpdate = jest.fn();
+    render(<LabsTab patient={mockPatient} onUpdate={onUpdate} />);
+    const input = screen.getByLabelText(/new field label/i);
+    fireEvent.change(input, { target: { value: '55' } });
+    expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({ new_field: '55' }));
+  });
+});
+```
+
+### Running Tests
+
+```bash
+# Backend tests
+.venv/bin/python manage.py test omop_core patient_portal
+
+# Frontend tests
+cd frontend && npm test -- --watchAll=false
+```
+
+---
+
+## Migration Conventions
+
+- **Always number sequentially**: check the last migration in `omop_core/migrations/` and increment.
+- **Always use `IF NOT EXISTS` / `IF EXISTS`** in raw SQL to keep migrations idempotent.
+- **Always use `SeparateDatabaseAndState`** when writing raw SQL so Django's migration state stays in sync.
+- **Apply to Render DB before pushing** using the external hostname (`dpg-d6ptpqi4d50c739fufqg-a.oregon-postgres.render.com`).
+- **Never generate migrations with `makemigrations`** for `PatientInfo` fields — always write them manually using the pattern above.
+
+---
+
+## DB / Model Sync Check
+
+To audit whether the DB and model are in sync at any time:
+
+```bash
+DATABASE_URL="postgresql://ctomop_user:K7mqaHP5krJHiojJFtZmCOepH3Lj66jl@dpg-d6ptpqi4d50c739fufqg-a.oregon-postgres.render.com/ctomop" \
+  .venv/bin/python manage.py shell -c "
+from django.db import connection
+from omop_core.models import PatientInfo
+cursor = connection.cursor()
+cursor.execute(\"SELECT column_name FROM information_schema.columns WHERE table_name='patient_info' ORDER BY column_name\")
+db_cols = set(r[0] for r in cursor.fetchall())
+model_cols = set(f.column for f in PatientInfo._meta.get_fields() if hasattr(f, 'column'))
+print('MISSING from DB:', sorted(model_cols - db_cols))
+print('EXTRA in DB:', sorted(db_cols - model_cols))
+"
+```
+
+Expected output: `MISSING from DB: []` and `EXTRA in DB: []`.
+
+---
+
+## Deployment
+
+- **Render service**: `https://ctomop.onrender.com`
+- **`start.sh`** runs `python manage.py migrate` on every deploy — so migrations pushed to `main` are auto-applied on next Render deploy.
+- **Push to `main`** triggers deploy (once Render GitHub App access is granted in dashboard).
+- **Admin credentials** (reset on every deploy): `admin` / `1database`
+- **Render DB internal hostname**: `dpg-d6ptpqi4d50c739fufqg-a` (only reachable from Render)
+- **Render DB external hostname**: `dpg-d6ptpqi4d50c739fufqg-a.oregon-postgres.render.com`
+
+---
+
+## FHIR Upload Architecture
+
+The FHIR upload endpoint in `patient_portal/api/views.py` (`upload_fhir_bundle`):
+
+1. Parses the FHIR Bundle entries by `resourceType`
+2. Creates a `Person` record from `Patient` resources
+3. Iterates `Observation` resources and maps LOINC codes → `PatientInfo` fields
+4. Iterates `Condition` resources for diagnosis/staging
+5. Iterates `MedicationRequest`/`MedicationStatement` for therapy lines
+6. Creates `PatientInfo` with all mapped fields in a single `.objects.create()` call
+
+When adding a FHIR mapping, add the LOINC/SNOMED code to the appropriate parsing section and the field name to the final `PatientInfo.objects.create()` kwargs.
+
+---
+
+## FHIR Bundle Generator Architecture
+
+`omop_core/management/commands/generate_fhir_bundle.py`:
+
+- Each clinical concept is a separate method (e.g., `_generate_labs`, `_generate_biomarkers`, `_generate_therapy_lines`)
+- Add a new method for the new field's FHIR resource, or extend an existing method
+- Call the new method in `_generate_patient_bundle()` and append results to `entries`
+- Use realistic random ranges appropriate for the clinical domain (e.g., normal vs. pathological ranges)
+
+Run generator:
+```bash
+.venv/bin/python manage.py generate_fhir_bundle --count 100 --output data/breast_cancer_fhir_bundle.json
+```
