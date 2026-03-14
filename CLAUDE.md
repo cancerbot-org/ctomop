@@ -94,24 +94,52 @@ DATABASE_URL="postgresql://ctomop_user:K7mqaHP5krJHiojJFtZmCOepH3Lj66jl@dpg-d6pt
 - If the field needs **custom serialization** (e.g., computed values, nested data), add an explicit `SerializerMethodField`.
 - If the field needs **write validation**, add it to `extra_kwargs`.
 
-### 4. Backend API Views (`patient_portal/api/views.py`)
+### 4. FHIR Upload Loader (`patient_portal/api/views.py` → `upload_fhir_bundle`)
 
-**FHIR Upload Loader:** Find the `upload_fhir_bundle` view. It maps FHIR resource elements to `PatientInfo` kwargs. Add mapping logic in the appropriate section:
+This is the function that parses incoming FHIR Bundles and writes data into `PatientInfo`. You **must** add a mapping here for the new field or it will never be populated from FHIR uploads.
+
+**Step A — Declare an initializer** at the top of the patient-processing block (so the variable always exists even if no matching FHIR resource is found):
 
 ```python
-# In the observation/component parsing section:
-elif loinc_code == 'XXXXX-X':  # LOINC code for new field
-    new_field_value = obs.get('valueQuantity', {}).get('value') or \
-                      obs.get('valueString') or \
-                      obs.get('valueCodeableConcept', {}).get('text')
-
-# In the PatientInfo.objects.create() / .save() call:
-new_field=new_field_value,
+# Near the top of the patient block, alongside other initializations:
+new_field_value = None
 ```
 
-**PatientInfoViewSet:** If the field needs special filtering, ordering, or search, add it to `filterset_fields`, `search_fields`, or `ordering_fields` in the viewset.
+**Step B — Add LOINC/code mapping** in the observation-parsing loop:
 
-### 5. TypeScript Type (`frontend/src/types/patient.ts`)
+```python
+# In the for obs in observations: loop:
+loinc_code = next(
+    (c.get('code') for c in obs.get('code', {}).get('coding', [])
+     if c.get('system') == 'http://loinc.org'),
+    None
+)
+# ...existing elif chain...
+elif loinc_code == 'XXXXX-X':  # Replace with the actual LOINC code
+    new_field_value = (
+        obs.get('valueQuantity', {}).get('value')
+        or obs.get('valueString')
+        or obs.get('valueCodeableConcept', {}).get('text')
+    )
+```
+
+**Step C — Pass the value to `PatientInfo.objects.create()`** (or the `.save()` update block):
+
+```python
+PatientInfo.objects.create(
+    person=person,
+    # ...existing fields...
+    new_field=new_field_value,
+)
+```
+
+> **Note:** The FHIR upload loader is ~1375 lines. Search for the comment block that matches the clinical category of the new field (e.g., `# --- Biomarkers ---`, `# --- Labs ---`, `# --- Therapy ---`) to find the right place to insert steps A–C.
+
+### 5. Backend API ViewSet (`patient_portal/api/views.py` → `PatientInfoViewSet`)
+
+If the field needs special filtering, ordering, or search, add it to `filterset_fields`, `search_fields`, or `ordering_fields` in the viewset.
+
+### 7. TypeScript Type (`frontend/src/types/patient.ts`)
 
 Add the field to the `PatientInfo` interface. All fields are optional (`?`):
 
@@ -123,7 +151,7 @@ new_field?: boolean;        // for BooleanField
 new_field?: string | null;  // for nullable fields
 ```
 
-### 6. React UI (`frontend/src/components/PatientInfo/`)
+### 8. React UI (`frontend/src/components/PatientInfo/`)
 
 Add the field to the appropriate tab component. Choose the tab that matches the field's clinical category:
 
@@ -165,7 +193,7 @@ Use the existing `FormField` and `Input`/`Select` UI primitives:
 
 Register the new tab in `frontend/src/components/Layout/TabBar.tsx` if a new tab is created. Wire the tab into `frontend/src/components/Patient/PatientDetail.tsx`.
 
-### 7. FHIR Bundle Generator (`omop_core/management/commands/generate_fhir_bundle.py`)
+### 9. FHIR Bundle Generator (`omop_core/management/commands/generate_fhir_bundle.py`)
 
 Add synthetic data generation for the new field. The generator creates FHIR Observation, Condition, or extension resources. Pick the right FHIR resource type:
 
