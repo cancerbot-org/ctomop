@@ -125,6 +125,18 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({ patientInfo, user, onSav
             </FormField>
           </div>
 
+          {/* Email */}
+          <div className="grid grid-cols-1 gap-4">
+            <FormField label="Email">
+              <Input
+                type="email"
+                placeholder="patient@example.com"
+                value={formData.email || ''}
+                onChange={(e) => handleChange('email', e.target.value)}
+              />
+            </FormField>
+          </div>
+
           {/* Age and Gender */}
           <div className="grid grid-cols-2 gap-4">
             <FormField label="Patient Age">

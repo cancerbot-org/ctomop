@@ -9,6 +9,7 @@ export interface User {
 export interface PatientInfo {
   id?: number;
   person?: number;
+  email?: string;
   
   // General
   patient_age?: number;
