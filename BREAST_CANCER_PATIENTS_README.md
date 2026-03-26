@@ -50,6 +50,7 @@ The system generates 100 synthetic breast cancer patients:
 
 ### Core Scripts
 - **`generate_breast_cancer_patients.py`**: Django management command to generate synthetic patients
+- **`generate_fhir_bundle.py`**: Django management command to generate synthetic patients for FHIR bundle
 - **`run_breast_cancer_workflow.py`**: Complete workflow script with analysis
 - **`test_genetic_mutations.py`**: Validation and testing script
 

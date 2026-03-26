@@ -8,6 +8,7 @@
 | `populate_patient_info` | **Working** | Reads existing OMOP tables (Person, Measurement, ConditionOccurrence, DrugExposure, Observation) and derives `PatientInfo` records. Requires source OMOP data to exist first. |
 | `create_enhanced_sample_data` | **Broken** | Was supposed to create OMOP source records and a `PatientInfo` record for a single lung cancer patient. |
 | `generate_breast_cancer_patients` | Untested | Generates breast cancer patients specifically. |
+| `generate_fhir_bundle` | Untested | Generates breast cancer patients specifically. |
 
 ## `create_enhanced_sample_data` — What's Broken
 
