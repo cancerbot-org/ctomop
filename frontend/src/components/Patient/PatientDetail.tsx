@@ -991,7 +991,8 @@ const PatientDetail: React.FC = () => {
               />
             </Grid>
             {renderSelectField('Gender', 'gender', GENDER_OPTIONS)}
-            
+            {renderTextField('Email', 'email', true, 'email')}
+
             <Grid item xs={12}>
               <Divider sx={{ my: 2 }} />
               <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
