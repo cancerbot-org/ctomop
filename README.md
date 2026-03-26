@@ -1,6 +1,6 @@
 # ctomop
 
-Django projec**Measurement Table** (Standard OMOP CDM)
+**Measurement Table** (Standard OMOP CDM)
 - **Vital Signs & Anthropometrics**: Essential measurements for clinical trial eligibility
   - Systolic BP (LOINC: 8480-6), Diastolic BP (LOINC: 8462-4)
   - Weight (LOINC: 29463-7), Height (LOINC: 8302-2), BMI (LOINC: 39156-5)
