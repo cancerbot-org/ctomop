@@ -864,6 +864,7 @@ class PatientInfo(models.Model):
     qtcf_value = models.FloatField(blank=True, null=True)
     serum_beta2_microglobulin_level = models.FloatField(blank=True, null=True)
     clonal_b_lymphocyte_count = models.IntegerField(blank=True, null=True)
+    clonal_bone_marrow_b_lymphocytes = models.FloatField(blank=True, null=True, help_text="Clonal B lymphocytes in bone marrow biopsy (%)")
     bone_marrow_involvement = models.BooleanField(blank=True, null=True)
 
     # Timestamps

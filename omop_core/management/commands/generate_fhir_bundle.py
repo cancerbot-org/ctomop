@@ -42,16 +42,23 @@ class Command(BaseCommand):
             default=42,
             help='Random seed for reproducibility (default: 42)',
         )
+        parser.add_argument(
+            '--tnbc-ratio',
+            type=float,
+            default=0.15,
+            help='Fraction of patients that are TNBC (default: 0.15)',
+        )
 
     def handle(self, *args, **options):
         count = options['count']
         output_path = options['output']
         seed = options['seed']
-        
+        self.tnbc_ratio = options['tnbc_ratio']
+
         random.seed(seed)
-        
+
         self.stdout.write('Generating comprehensive FHIR Bundle with breast cancer patients...')
-        
+
         bundle = self.generate_bundle(count)
         
         # Save to file
@@ -140,8 +147,38 @@ class Command(BaseCommand):
             planned = self.generate_planned_therapy(i)
             if planned:
                 bundle["entry"].append(planned)
-        
+
+            # Generate bone marrow biopsy observation (~40% of patients have it)
+            if random.random() < 0.4:
+                bm_obs = self.generate_bone_marrow_biopsy(i, diagnosis_date)
+                bundle["entry"].append(bm_obs)
+
         return bundle
+
+    def generate_bone_marrow_biopsy(self, patient_id, diagnosis_date):
+        """Generate bone marrow biopsy observation for clonal_bone_marrow_b_lymphocytes"""
+        value = round(random.uniform(0.5, 95.0), 1)
+        return {
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-bone-marrow-biopsy",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-bone-marrow-biopsy",
+                "status": "final",
+                "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "laboratory"}]}],
+                "code": {
+                    "coding": [{"system": "http://loinc.org", "code": "85319-5", "display": "Clonal bone marrow B lymphocytes"}],
+                    "text": "Clonal bone marrow B lymphocytes"
+                },
+                "subject": {"reference": f"Patient/{patient_id}"},
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueQuantity": {
+                    "value": value,
+                    "unit": "%",
+                    "system": "http://unitsofmeasure.org",
+                    "code": "%"
+                }
+            }
+        }
 
     def generate_patient(self, patient_id, first_name, last_name):
         """Generate FHIR Patient resource with US address"""
@@ -437,7 +474,127 @@ class Command(BaseCommand):
             }
         }
         observations.append(met_obs)
-        
+
+        # TNM: Tumor stage (T1-T4)
+        t_stage = random.choices(
+            ["T1", "T2", "T3", "T4"],
+            weights=[30, 35, 25, 10]
+        )[0]
+        observations.append({
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-tumor-stage",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-tumor-stage",
+                "status": "final",
+                "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "imaging"}]}],
+                "code": {
+                    "coding": [{"system": "http://loinc.org", "code": "21905-5", "display": "T category"}],
+                    "text": "Tumor stage"
+                },
+                "subject": {"reference": f"Patient/{patient_id}"},
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueCodeableConcept": {"text": t_stage}
+            }
+        })
+
+        # TNM: Nodes stage (N0-N3)
+        n_stage = random.choices(
+            ["N0", "N1", "N2", "N3"],
+            weights=[40, 30, 20, 10]
+        )[0]
+        observations.append({
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-nodes-stage",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-nodes-stage",
+                "status": "final",
+                "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "imaging"}]}],
+                "code": {
+                    "coding": [{"system": "http://loinc.org", "code": "21906-3", "display": "N category"}],
+                    "text": "Nodes stage"
+                },
+                "subject": {"reference": f"Patient/{patient_id}"},
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueCodeableConcept": {"text": n_stage}
+            }
+        })
+
+        # TNM: Distant metastasis stage (M0/M1)
+        m_stage = "M1" if metastasis_status == "Positive" else "M0"
+        observations.append({
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-distant-metastasis-stage",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-distant-metastasis-stage",
+                "status": "final",
+                "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "imaging"}]}],
+                "code": {
+                    "coding": [{"system": "http://loinc.org", "code": "21901-4", "display": "M category"}],
+                    "text": "Distant metastasis stage"
+                },
+                "subject": {"reference": f"Patient/{patient_id}"},
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueCodeableConcept": {"text": m_stage}
+            }
+        })
+
+        # Staging modality
+        staging_modality = random.choice(["CT", "PET-CT", "MRI", "CT+MRI", "Clinical exam"])
+        observations.append({
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-staging-modality",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-staging-modality",
+                "status": "final",
+                "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "imaging"}]}],
+                "code": {
+                    "coding": [{"system": "http://loinc.org", "code": "85319-2", "display": "Staging modality"}],
+                    "text": "Staging modality"
+                },
+                "subject": {"reference": f"Patient/{patient_id}"},
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueString": staging_modality
+            }
+        })
+
+        # Measurable disease by RECIST (True if metastatic or T3/T4)
+        measurable_by_recist = metastasis_status == "Positive" or t_stage in ["T3", "T4"]
+        observations.append({
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-recist",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-recist",
+                "status": "final",
+                "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "imaging"}]}],
+                "code": {
+                    "coding": [{"system": "http://loinc.org", "code": "21908-9", "display": "Measurable disease RECIST"}],
+                    "text": "Measurable disease RECIST"
+                },
+                "subject": {"reference": f"Patient/{patient_id}"},
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueBoolean": measurable_by_recist
+            }
+        })
+
+        # Bone-only metastasis (True for ~15% of metastatic patients)
+        bone_only = metastasis_status == "Positive" and random.random() < 0.15
+        observations.append({
+            "fullUrl": f"http://example.org/Observation/obs-{patient_id}-bone-only",
+            "resource": {
+                "resourceType": "Observation",
+                "id": f"obs-{patient_id}-bone-only",
+                "status": "final",
+                "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "imaging"}]}],
+                "code": {
+                    "coding": [{"system": "http://loinc.org", "code": "44667-4", "display": "Bone only metastasis"}],
+                    "text": "Bone only metastasis"
+                },
+                "subject": {"reference": f"Patient/{patient_id}"},
+                "effectiveDateTime": diagnosis_date.strftime('%Y-%m-%d'),
+                "valueBoolean": bone_only
+            }
+        })
+
         return observations
 
     def generate_lab_observations(self, patient_id, lab_date):
@@ -527,8 +684,7 @@ class Command(BaseCommand):
         """Generate biomarker observations (HER2, ER, PR, Ki67, PD-L1)"""
         observations = []
         
-        # 15% chance of TNBC (all negative)
-        is_tnbc = random.random() < 0.15
+        is_tnbc = random.random() < getattr(self, 'tnbc_ratio', 0.15)
         
         if is_tnbc:
             her2 = "Negative"

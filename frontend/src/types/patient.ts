@@ -216,6 +216,13 @@ export interface PatientInfo {
   // Geographic Exposure
   no_geographic_exposure_risk?: boolean;
   geographic_exposure_risk_details?: string;
+
+  // Breast cancer staging
+  measurable_disease_by_recist_status?: boolean;
+  bone_only_metastasis_status?: boolean;
+
+  // CLL fields
+  clonal_bone_marrow_b_lymphocytes?: number;
 }
 
 export interface PatientMessage {

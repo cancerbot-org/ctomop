@@ -414,6 +414,13 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                     tumor_size = None
                     lymph_node_status = None
                     metastasis_status = None
+                    tumor_stage = None
+                    nodes_stage = None
+                    distant_metastasis_stage = None
+                    staging_modalities = None
+                    measurable_disease_by_recist_status = None
+                    bone_only_metastasis_status = None
+                    clonal_bone_marrow_b_lymphocytes = None
                     er_status = None
                     pr_status = None
                     her2_status = None
@@ -759,6 +766,27 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                                     metastasis_status = value_concept['text']
                                 elif value_concept.get('coding'):
                                     metastasis_status = value_concept['coding'][0].get('display')
+
+                        # TNM staging fields
+                        if obs_text == 'tumor stage' or loinc_code == '21905-5':
+                            tumor_stage = (observation.get('valueCodeableConcept') or {}).get('text')
+                        elif obs_text == 'nodes stage' or loinc_code == '21906-3':
+                            nodes_stage = (observation.get('valueCodeableConcept') or {}).get('text')
+                        elif obs_text == 'distant metastasis stage' or loinc_code == '21901-4':
+                            distant_metastasis_stage = (observation.get('valueCodeableConcept') or {}).get('text')
+                        elif obs_text == 'staging modality' or loinc_code == '85319-2':
+                            staging_modalities = observation.get('valueString')
+                        elif 'recist' in obs_text or loinc_code == '21908-9':
+                            val = observation.get('valueBoolean')
+                            if val is not None:
+                                measurable_disease_by_recist_status = val
+                        elif 'bone only metastasis' in obs_text or loinc_code == '44667-4':
+                            val = observation.get('valueBoolean')
+                            if val is not None:
+                                bone_only_metastasis_status = val
+                        elif 'clonal bone marrow b lymphocyte' in obs_text or loinc_code == '85319-5':
+                            if observation.get('valueQuantity'):
+                                clonal_bone_marrow_b_lymphocytes = observation['valueQuantity'].get('value')
                         
                         # Check for ER status
                         elif 'estrogen receptor' in obs_text or obs_text == 'er':
@@ -1092,6 +1120,13 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                         tumor_size=tumor_size,
                         lymph_node_status=lymph_node_status,
                         metastasis_status=metastasis_status,
+                        tumor_stage=tumor_stage,
+                        nodes_stage=nodes_stage,
+                        distant_metastasis_stage=distant_metastasis_stage,
+                        staging_modalities=staging_modalities,
+                        measurable_disease_by_recist_status=measurable_disease_by_recist_status,
+                        bone_only_metastasis_status=bone_only_metastasis_status,
+                        clonal_bone_marrow_b_lymphocytes=clonal_bone_marrow_b_lymphocytes,
                         estrogen_receptor_status=er_status,
                         progesterone_receptor_status=pr_status,
                         her2_status=her2_status,

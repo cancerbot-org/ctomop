@@ -669,6 +669,8 @@ const PatientDetail: React.FC = () => {
       {renderTextField('Tumor Size (cm)', 'tumor_size', false, 'number')}
       {renderSelectField('Lymph Node Status', 'lymph_node_status', POSITIVE_NEGATIVE_OPTIONS)}
       {renderSelectField('Metastasis Status', 'metastasis_status', POSITIVE_NEGATIVE_OPTIONS)}
+      {renderBooleanField('Measurable Disease by RECIST', 'measurable_disease_by_recist_status')}
+      {renderBooleanField('Bone-Only Metastasis', 'bone_only_metastasis_status')}
       
       <Grid item xs={12}>
         <Divider sx={{ my: 2 }} />
@@ -841,6 +843,7 @@ const PatientDetail: React.FC = () => {
       {renderTextField('LDH Level (U/L)', 'ldh_level', false, 'number')}
       {renderTextField('Beta-2 Microglobulin (mg/L)', 'beta2_microglobulin', false, 'number')}
       {renderSelectField('Bone Marrow Involvement', 'bone_marrow_involvement', YES_NO_OPTIONS)}
+      {renderTextField('Clonal Bone Marrow B Lymphocytes (%)', 'clonal_bone_marrow_b_lymphocytes', false, 'number')}
       {renderTextField('Number of Nodal Sites', 'number_of_nodal_sites', false, 'number')}
     </Grid>
   );
