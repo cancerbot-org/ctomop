@@ -817,9 +817,7 @@ class Command(BaseCommand):
         # Clonal bone marrow / B-lymphocyte counts — match by concept name
         for m in measurements:
             cname = m.measurement_concept.concept_name.lower() if m.measurement_concept else ''
-            if 'clonal' in cname and 'bone marrow' in cname and 'b' in cname and m.value_as_number:
-                data['clonal_bone_marrow_b_lymphocytes'] = float(m.value_as_number)
-            elif 'clonal b' in cname and 'lymphocyte' in cname and m.value_as_number:
+            if 'clonal b' in cname and 'lymphocyte' in cname and m.value_as_number:
                 data['clonal_b_lymphocyte_count'] = int(m.value_as_number)
 
         # Protein expressions (CD markers) — store as CSV string

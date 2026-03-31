@@ -444,9 +444,6 @@ class PatientInfo(models.Model):
     email = models.EmailField(max_length=255, null=True, blank=True)
     date_of_birth = models.DateField(null=True, blank=True)
     
-    # Disease Information
-    disease = models.CharField(max_length=100, null=True, blank=True)
-    
     # Demographics
     patient_age = models.IntegerField(help_text="What is the patient's age?", blank=True, null=True)
     gender = models.CharField(
@@ -539,7 +536,6 @@ class PatientInfo(models.Model):
     supportive_therapy_start_date = models.DateField(blank=True, null=True, help_text="Supportive Therapy Start Date")
     supportive_therapy_end_date = models.DateField(blank=True, null=True, help_text="Supportive Therapy End Date")
     supportive_therapy_intent = models.CharField(max_length=50, blank=True, null=True, help_text="Supportive Therapy Intent")
-    planned_therapies = models.TextField(blank=True, null=True, help_text="Planned standard of care therapies")
     relapse_count = models.IntegerField(blank=True, null=True)
     treatment_refractory_status = models.CharField(max_length=255, blank=True, null=True)
 
@@ -867,7 +863,6 @@ class PatientInfo(models.Model):
     absolute_lymphocyte_count = models.FloatField(blank=True, null=True)
     qtcf_value = models.FloatField(blank=True, null=True)
     serum_beta2_microglobulin_level = models.FloatField(blank=True, null=True)
-    clonal_bone_marrow_b_lymphocytes = models.FloatField(blank=True, null=True)
     clonal_b_lymphocyte_count = models.IntegerField(blank=True, null=True)
     bone_marrow_involvement = models.BooleanField(blank=True, null=True)
 
@@ -907,7 +902,25 @@ class PatientInfo(models.Model):
         return ", ".join(display_parts)
 
     def save(self, *args, **kwargs):
-        """Calculate BMI and update therapy-related computed fields when saving"""
+        """Calculate BMI, age, and update therapy-related computed fields when saving"""
+        # Compute age from date_of_birth, falling back to Person.year_of_birth
+        from datetime import date
+        today = date.today()
+        dob = self.date_of_birth
+        if dob is None and self.person_id:
+            p = self.person
+            if p.year_of_birth:
+                month = p.month_of_birth or 1
+                day = p.day_of_birth or 1
+                try:
+                    dob = date(p.year_of_birth, month, day)
+                except ValueError:
+                    dob = date(p.year_of_birth, 1, 1)
+        if dob:
+            self.patient_age = today.year - dob.year - (
+                (today.month, today.day) < (dob.month, dob.day)
+            )
+
         if self.weight and self.height:
             # Convert to metric units for calculation
             weight_kg = self.weight
