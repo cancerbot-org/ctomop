@@ -59,6 +59,24 @@ const ECOG_OPTIONS = ['0', '1', '2', '3', '4', '5'];
 const KARNOFSKY_OPTIONS = ['100', '90', '80', '70', '60', '50', '40', '30', '20', '10', '0'];
 const YES_NO_OPTIONS = ['Yes', 'No', 'Unknown'];
 const POSITIVE_NEGATIVE_OPTIONS = ['Positive', 'Negative', 'Unknown'];
+
+const NODES_STAGE_OPTIONS = [
+  'NX: Nodes cannot be assessed (e.g., previously removed)',
+  'N0: No lymph node involvement',
+  'N1: 1–3 axillary lymph nodes or small internal mammary nodes',
+  'N1mi: Micrometastasis (0.2–2 mm)',
+  'N1a: 1–3 axillary nodes (>2 mm)',
+  'N1b: Cancer cells in internal mammary sentinel nodes',
+  'N1c: 1–3 axillary nodes + internal mammary sentinel nodes',
+  'N2: 4–9 axillary nodes or internal mammary nodes without axillary nodes',
+  'N2a: 4–9 axillary nodes (>2 mm)',
+  'N2b: Internal mammary nodes only (no axillary)',
+  'N3: 10+ axillary, infraclavicular, or supraclavicular nodes; or both axillary + internal mammary',
+  'N3a: ≥10 axillary nodes (≥2 mm) or infraclavicular',
+  'N3b: 4–9 Axillary + mammary nodes',
+  'N3c: Supraclavicular nodes'
+];
+
 const ER_PR_OPTIONS = ['Positive', 'Negative', 'Borderline', 'Unknown'];
 const HER2_OPTIONS = ['Positive', 'Negative', 'Equivocal', 'Unknown'];
 const FLIPI_RISK_OPTIONS = ['Low', 'Intermediate', 'High'];
@@ -767,7 +785,7 @@ const PatientDetail: React.FC = () => {
       {renderTextField('Histologic Type', 'histologic_type', true)}
       {renderSelectField('Stage', 'stage', STAGE_OPTIONS)}
       {renderTextField('Tumor Size (cm)', 'tumor_size', false, 'number')}
-      {renderSelectField('Lymph Node Status', 'lymph_node_status', POSITIVE_NEGATIVE_OPTIONS)}
+      {renderSelectField('Nodes Stage', 'nodes_stage', NODES_STAGE_OPTIONS)}
       {renderSelectField('Metastasis Status', 'metastasis_status', POSITIVE_NEGATIVE_OPTIONS)}
       {renderBooleanField('Measurable Disease by RECIST', 'measurable_disease_by_recist_status')}
       {renderBooleanField('Bone-Only Metastasis', 'bone_only_metastasis_status')}

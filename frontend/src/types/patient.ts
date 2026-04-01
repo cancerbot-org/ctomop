@@ -221,6 +221,8 @@ export interface PatientInfo {
   // Breast cancer staging
   measurable_disease_by_recist_status?: boolean;
   bone_only_metastasis_status?: boolean;
+  tumor_size?: number;
+  nodes_stage?: string;
 
   // CLL fields
   clonal_bone_marrow_b_lymphocytes?: number;
