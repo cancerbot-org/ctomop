@@ -95,6 +95,12 @@ const TUMOR_STAGE_OPTIONS = [
   'T4d: Inflammatory carcinoma'
 ];
 
+const DISTANT_METASTASIS_STAGE_OPTIONS = [
+  'M0: No distant metastasis',
+  'M0(i+): No metastasis on scans, but cancer cells found in blood/bone marrow/distant nodes',
+  'M1: Distant metastasis present'
+];
+
 const ER_PR_OPTIONS = ['Positive', 'Negative', 'Borderline', 'Unknown'];
 const HER2_OPTIONS = ['Positive', 'Negative', 'Equivocal', 'Unknown'];
 const FLIPI_RISK_OPTIONS = ['Low', 'Intermediate', 'High'];
@@ -804,7 +810,7 @@ const PatientDetail: React.FC = () => {
       {renderSelectField('Stage', 'stage', STAGE_OPTIONS)}
       {renderSelectField('Tumor Stage', 'tumor_stage', TUMOR_STAGE_OPTIONS)}
       {renderSelectField('Nodes Stage', 'nodes_stage', NODES_STAGE_OPTIONS)}
-      {renderSelectField('Metastasis Status', 'metastasis_status', POSITIVE_NEGATIVE_OPTIONS)}
+      {renderSelectField('Distance Metastasis Stage', 'distant_metastasis_stage', DISTANT_METASTASIS_STAGE_OPTIONS)}
       {renderBooleanField('Measurable Disease by RECIST', 'measurable_disease_by_recist_status')}
       {renderBooleanField('Bone-Only Metastasis', 'bone_only_metastasis_status')}
       
