@@ -55,6 +55,21 @@ const US_STATES = [
 const ETHNICITY_OPTIONS = ['Caucasian/White', 'Hispanic/Latino', 'Black/African-American', 'Asian', 'Native American'];
 const DISEASE_OPTIONS = ['Breast Cancer', 'Follicular Lymphoma', 'Multiple Myeloma', 'Lung Cancer', 'Colon Cancer', 'Other'];
 const STAGE_OPTIONS = ['0', 'I', 'IA', 'IB', 'II', 'IIA', 'IIB', 'III', 'IIIA', 'IIIB', 'IIIC', 'IV', 'Unknown'];
+const HISTOLOGIC_TYPE_OPTIONS = [
+  'Unknown',
+  'Infiltrating ductal carcinoma (IDC)',
+  'Ductal carcinoma in situ (DCIS)',
+  'Infiltrating lobular carcinoma (ILC)',
+  'Lobular carcinoma in situ (LCIS)',
+  'Mixed ductal and lobular carcinoma',
+  'Mucinous (colloid) carcinoma',
+  'Tubular carcinoma',
+  'Medullary carcinoma',
+  'Papillary carcinoma',
+  'Metaplastic carcinoma',
+  'Paget disease of the nipple',
+  'Inflammatory carcinoma'
+];
 const ECOG_OPTIONS = ['0', '1', '2', '3', '4', '5'];
 const KARNOFSKY_OPTIONS = ['100', '90', '80', '70', '60', '50', '40', '30', '20', '10', '0'];
 const YES_NO_OPTIONS = ['Yes', 'No', 'Unknown'];
@@ -807,7 +822,7 @@ const PatientDetail: React.FC = () => {
       <Grid item xs={12}>
         <Typography variant="h6" gutterBottom>Tumor Characteristics</Typography>
       </Grid>
-      {renderTextField('Histologic Type', 'histologic_type', true)}
+      {renderSelectField('Histologic Type', 'histologic_type', HISTOLOGIC_TYPE_OPTIONS, true)}
       {renderSelectField('Stage', 'stage', STAGE_OPTIONS)}
       {renderSelectField('Tumor Stage', 'tumor_stage', TUMOR_STAGE_OPTIONS)}
       {renderSelectField('Nodes Stage', 'nodes_stage', NODES_STAGE_OPTIONS)}
@@ -1052,7 +1067,7 @@ const PatientDetail: React.FC = () => {
           <Grid container spacing={3}>
             {renderSelectField('Disease', 'disease', DISEASE_OPTIONS)}
             {renderSelectField('Stage', 'stage', STAGE_OPTIONS)}
-            {renderTextField('Histologic Type', 'histologic_type', true)}
+            {renderSelectField('Histologic Type', 'histologic_type', HISTOLOGIC_TYPE_OPTIONS, true)}
             <Grid item xs={12}>
               <Typography variant="body2" color="text.secondary">
                 Disease-specific fields are available for Breast Cancer, Follicular Lymphoma, and Multiple Myeloma.
@@ -1181,7 +1196,7 @@ const PatientDetail: React.FC = () => {
             
             {renderSelectField('Disease', 'disease', DISEASE_OPTIONS)}
             {renderSelectField('Stage', 'stage', STAGE_OPTIONS)}
-            {renderTextField('Histologic Type', 'histologic_type', true)}
+            {renderSelectField('Histologic Type', 'histologic_type', HISTOLOGIC_TYPE_OPTIONS, true)}
             {renderSelectField('ECOG Performance Status', 'ecog_performance_status', ECOG_OPTIONS)}
             {renderDateField('ECOG Assessment Date', 'ecog_assessment_date')}
             {renderSelectField('Karnofsky Performance Score', 'karnofsky_performance_score', KARNOFSKY_OPTIONS)}
