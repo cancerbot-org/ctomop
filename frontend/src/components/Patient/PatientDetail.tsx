@@ -77,6 +77,24 @@ const NODES_STAGE_OPTIONS = [
   'N3c: Supraclavicular nodes'
 ];
 
+const TUMOR_STAGE_OPTIONS = [
+  'Tx: Primary Tumor, cannot be assessed',
+  'T0: No tumor evidence',
+  'Tis: Non-invasive Carcinoma in situ (DCIS, LCIS, Paget’s without tumor)',
+  'T1: Invasive Tumor ≤ 2 cm',
+  'T1mi: Invasive Tumor ≤ 0.1 cm',
+  'T1a: 0.1 – 0.5 cm',
+  'T1b: 0.5 – 1 cm',
+  'T1c: 1 – 2 cm',
+  'T2: Invasive Tumor > 2 – 5 cm',
+  'T3: Invasive Tumor > 5 cm',
+  'T4: Invades chest wall or skin, or inflammatory',
+  'T4a: Invades chest wall',
+  'T4b: Invades skin (may be swelling/ulcer)',
+  'T4c: Invades both skin + chest wall',
+  'T4d: Inflammatory carcinoma'
+];
+
 const ER_PR_OPTIONS = ['Positive', 'Negative', 'Borderline', 'Unknown'];
 const HER2_OPTIONS = ['Positive', 'Negative', 'Equivocal', 'Unknown'];
 const FLIPI_RISK_OPTIONS = ['Low', 'Intermediate', 'High'];
@@ -784,7 +802,7 @@ const PatientDetail: React.FC = () => {
       </Grid>
       {renderTextField('Histologic Type', 'histologic_type', true)}
       {renderSelectField('Stage', 'stage', STAGE_OPTIONS)}
-      {renderTextField('Tumor Size (cm)', 'tumor_size', false, 'number')}
+      {renderSelectField('Tumor Stage', 'tumor_stage', TUMOR_STAGE_OPTIONS)}
       {renderSelectField('Nodes Stage', 'nodes_stage', NODES_STAGE_OPTIONS)}
       {renderSelectField('Metastasis Status', 'metastasis_status', POSITIVE_NEGATIVE_OPTIONS)}
       {renderBooleanField('Measurable Disease by RECIST', 'measurable_disease_by_recist_status')}

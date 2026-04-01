@@ -222,6 +222,7 @@ export interface PatientInfo {
   measurable_disease_by_recist_status?: boolean;
   bone_only_metastasis_status?: boolean;
   tumor_size?: number;
+  tumor_stage?: string;
   nodes_stage?: string;
 
   // CLL fields
