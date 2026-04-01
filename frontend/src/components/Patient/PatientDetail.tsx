@@ -52,7 +52,7 @@ const US_STATES = [
   'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV',
   'WI', 'WY', 'DC', 'PR', 'GU', 'VI'
 ];
-const ETHNICITY_OPTIONS = ['Caucasian/European', 'African/Black', 'Asian', 'Native American', "Other/Won't Say"];
+const ETHNICITY_OPTIONS = ['African/Black', 'Asian', 'Native American', "Other/Won't Say"];
 const DISEASE_OPTIONS = ['Breast Cancer', 'Follicular Lymphoma', 'Multiple Myeloma', 'Lung Cancer', 'Colon Cancer', 'Other'];
 const STAGE_OPTIONS = ['0', 'I', 'IA', 'IB', 'II', 'IIA', 'IIB', 'III', 'IIIA', 'IIIB', 'IIIC', 'IV', 'Unknown'];
 const HISTOLOGIC_TYPE_OPTIONS = [
