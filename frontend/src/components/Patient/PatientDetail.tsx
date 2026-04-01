@@ -15,6 +15,8 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
+  Checkbox,
+  ListItemText,
 } from '@mui/material';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save } from 'lucide-react';
@@ -97,58 +99,36 @@ const INTERPRETATION_OPTIONS = ['Pathogenic', 'Likely pathogenic', 'VUS', 'Likel
 
 // Disease-specific therapy options
 const BREAST_CANCER_FIRST_LINE = [
-  'AC-T',
-  'AC-T (Doxorubicin/Cyclophosphamide followed by Paclitaxel)',
-  'TC',
-  'TC (Docetaxel/Cyclophosphamide)',
-  'TAC (Docetaxel/Doxorubicin/Cyclophosphamide)',
-  'Paclitaxel/Trastuzumab/Pertuzumab',
-  'Paclitaxel/Trastuzumab/Pertuzumab (HER2+)',
-  'Docetaxel/Trastuzumab/Pertuzumab',
-  'TCH (Docetaxel/Carboplatin/Trastuzumab)',
-  'Tamoxifen',
-  'Letrozole',
-  'Anastrozole',
-  'Exemestane',
-  'CDK4/6 Inhibitor + Letrozole',
-  'CDK4/6 Inhibitor + Anastrozole',
-  'CDK4/6 Inhibitor + Fulvestrant',
-  'Palbociclib + Letrozole',
-  'Ribociclib + Letrozole',
-  'Abemaciclib + Letrozole',
-  'Fulvestrant',
-  'Hormone Therapy (Tamoxifen/Aromatase Inhibitor)',
-  'FEC (5-FU/Epirubicin/Cyclophosphamide)',
-  'CMF (Cyclophosphamide/Methotrexate/5-FU)',
-  'Paclitaxel',
-  'Docetaxel',
-  'Capecitabine',
-  'Doxorubicin',
-  'Other'
+  'Watchful Waiting (Active Surveillance)',
+  'Lumpectomy (Lumpectomy)',
+  'Mastectomy (Mastectomy)',
+  'Aromatase Inhibitor (Aromatase Inhibitor)',
+  'Trastuzumab (Herceptin) (Trastuzumab)',
+  'Pertuzumab (Perjeta) (Pertuzumab)',
+  'Genomic Testing (Genomic Testing)',
+  'Tamoxifen (Tamoxifen)',
+  'Letrozole (Letrozole)',
+  'Anastrozole (Arimidex) (Anastrozole)',
+  'Exemestane (Exemestane)',
+  'Lumpectomy + Radiation (Lumpectomy, Ipsilateral Breast Radiation, Adjuvant Radiotherapy)',
+  'Mastectomy + Radiation (Mastectomy, Ipsilateral Breast Radiation, Adjuvant Radiotherapy)',
+  'Axillary LND + Lumpectomy + Radiation (Lumpectomy, Axillary Lymph Node Dissection (ALND), Ipsilateral Breast Radiation, Adjuvant Radiotherapy)',
+  'Axillary LND + Mastectomy (Mastectomy, Axillary Lymph Node Dissection (ALND))',
+  'Axillary LND + Mastectomy + Radiation (Mastectomy, Axillary Lymph Node Dissection (ALND), Ipsilateral Breast Radiation, Adjuvant Radiotherapy)'
 ];
 
 const BREAST_CANCER_SECOND_LINE = [
-  'Capecitabine',
-  'T-DM1',
-  'T-DM1 (Trastuzumab emtansine)',
-  'T-DXd (Trastuzumab deruxtecan)',
-  'Eribulin',
-  'Gemcitabine/Carboplatin',
-  'Paclitaxel/Bevacizumab',
-  'Olaparib',
-  'Talazoparib',
-  'PARP Inhibitor (BRCA+)',
-  'Sacituzumab govitecan',
-  'Vinorelbine',
-  'Ixabepilone',
-  'Lapatinib + Capecitabine',
-  'Neratinib + Capecitabine',
-  'Fulvestrant',
-  'Everolimus + Exemestane',
-  'Alpelisib + Fulvestrant',
-  'Tucatinib/Trastuzumab/Capecitabine',
-  'Pertuzumab + Trastuzumab',
-  'Other'
+  'Fulvestrant (Faslodex) (Fulvestrant)',
+  'Exemestane + Everolimus (Exemestane, Everolimus)',
+  'Atezolizumab (Atezolizumab)',
+  'Sacituzumab Govitecan (Sacituzumab Govitecan)',
+  'Platinum-Based Chemotherapy (Platinum-Based Chemotherapy)',
+  'PARP Inhibitor (PARP Inhibitor)',
+  'Other Chemotherapy (Other Chemotherapy)',
+  'Capivasertib (Capivasertib)',
+  'Axillary LND + Lumpectomy + Radiation (Lumpectomy, Axillary Lymph Node Dissection (ALND), Ipsilateral Breast Radiation, Adjuvant Radiotherapy)',
+  'Axillary LND + Mastectomy (Mastectomy, Axillary Lymph Node Dissection (ALND))',
+  'Axillary LND + Mastectomy + Radiation (Mastectomy, Axillary Lymph Node Dissection (ALND), Ipsilateral Breast Radiation, Adjuvant Radiotherapy)'
 ];
 
 const BREAST_CANCER_LATER_LINE = [
@@ -229,6 +209,81 @@ const MYELOMA_LATER_LINE = [
   'CAR-T (Idecabtagene vicleucel/Ciltacabtagene autoleucel)',
   'Clinical Trial',
   'Other'
+];
+
+const SUPPORTIVE_THERAPIES_OPTIONS = [
+  'Adjuvant Radiotherapy (Adjuvant Radiotherapy)',
+  'systemic corticosteroids (e.g., prednisone) =< 5 mg/day (Systemic Corticosteroid =< 5 mg/day)',
+  'systemic corticosteroids (e.g., prednisone) > 5 mg/day (Systemic Corticosteroid > 5 mg/day)',
+  'systemic corticosteroids (e.g., prednisone) > 10 mg/day (Systemic Corticosteroid > 10 mg/day)',
+  'systemic corticosteroids (e.g., prednisone) > 20 mg/day (Systemic Corticosteroid > 20 mg/day)',
+  'mineralocorticoids (e.g., fludrocortisone) (Mineralocorticoid)',
+  'Inhaled corticosteroids (Inhaled corticosteroid)',
+  'Topical corticosteroids (Topical corticosteroid)',
+  'Intranasal corticosteroids (Intranasal corticosteroid)',
+  'Immunosuppressant (Immunosuppressant)',
+  'antiviral (Antiviral)',
+  'Warfarin - anticoagulant (Warfarin)',
+  'heparin - anticoagulant (Heparin)',
+  'Aspirin =< 81mg daily (Aspirin =< 81mg daily)',
+  'Aspirin > 81mg daily (Aspirin > 81mg daily)',
+  'Chronic Opioid Therapy (Analgesic Opioid Agent)',
+  'HIV antiretroviral therapy (HIV Antiretroviral)',
+  'Herbal supplements (e.g., echinacea, ginseng, ginkgo biloba, high-dose turmeric) (Herbal Supplement)',
+  'Local palliative radiotherapy (Palliative Radiotherapy)',
+  'Clarithromycin (Biaxin) - antibiotic (Clarithromycin)',
+  'Erythromycin - antibiotic (Erythromycin)',
+  'Ciprofloxacin (Cipro) - antibiotic (Ciprofloxacin)',
+  'Rifampin (Rifadin, Rimactane) - antibiotic (Rifampin)',
+  'Rifabutin (Mycobutin) - antibiotic (Rifabutin)',
+  'Itraconazole (Sporanox) - antifungal (Itraconazole)',
+  'Ketoconazole - antifungal (Ketoconazole)',
+  'Fluconazole (Diflucan) - antifungal (Fluconazole)',
+  'Voriconazole (Vfend) - antifungal (Voriconazole)',
+  'Posaconazole (Noxafil) - antifungal (Posaconazole)',
+  'Fluoxetine (Prozac) - antidepressant (Fluoxetine)',
+  'Paroxetine (Paxil) - antidepressant (Paroxetine)',
+  'Fluvoxamine (Luvox) - antidepressant (Fluvoxamine)',
+  'Sertraline (Zoloft) - antidepressant (Sertraline)',
+  'Bupropion (Wellbutrin) - antidepressant (Bupropion)',
+  'Carbamazepine (Tegretol) - anticonvulsant (Carbamazepine)',
+  'Phenytoin (Dilantin) - anticonvulsant (Phenytoin)',
+  'Phenobarbital - anticonvulsant (Phenobarbital)',
+  'Topiramate (Topamax) - anticonvulsant (Topiramate)',
+  "St. John's Wort (St. John's Wort)",
+  'Grapefruit juice (Grapefruit juice)',
+  'Pamidronate (Pamidronate)',
+  'Zoledronic Acid (Zoledronic Acid)',
+  'Denosumab (Xgeva) (Denosumab)',
+  'Granulocyte-Colony Stimulating factor (G-CSF) (Growth Factor)',
+  'Granulocyte-Macrophage Colony-Stimulating Factor (GM-CSF) (Growth Factor)',
+  'Erythropoiesis-Stimulating Agent (ESA) (Growth Factor)',
+  'LHRH/GnRH agonists (e.g., goserelin, leuprolide, triptorelin, buserelin) (LHRH/GnRH agonist)',
+  'Palbociclib (Ibrance) (Palbociclib)',
+  'Ribociclib (Kisqali) (Ribociclib)',
+  'Abemaciclib (Verzenio) (Abemaciclib)',
+  'HRT (Estrogen-containing medication) (Estrogen)',
+  'Contraceptives (Estrogen-containing medication) (Estrogen)',
+  'Tamoxifen Maintenance (Tamoxifen)',
+  'Anastrozole (Arimidex) Maintenance (Anastrozole)',
+  'Letrozole Maintenance (Letrozole)',
+  'Exemestane Maintenance (Exemestane)',
+  'IVIG (intravenous immunoglobulin) (IVIG (intravenous immunoglobulin))',
+  'Adjuvant Chemotherapy (Adjuvant Chemotherapy)',
+  'Neoadjuvant Chemotherapy (Neoadjuvant Chemotherapy)',
+  'Adjuvant Hormonal Therapy (Adjuvant Hormonal Therapy)',
+  'Neoadjuvant Hormonal Therapy (Neoadjuvant Hormonal Therapy)',
+  'Sentinel Lymph Node Biopsy (SLNB) (Sentinel Lymph Node Biopsy (SLNB))',
+  'Trastuzumab (Herceptin) Maintenance (Trastuzumab)',
+  'Pertuzumab (Perjeta) Maintenance (Pertuzumab)',
+  'Trastuzumab emtansine (T-DM1 / Kadcyla) Maintenance (Trastuzumab Emtansine)',
+  'Trastuzumab deruxtecan (T-DXd / Enhertu) Maintenance (Trastuzumab Deruxtecan)',
+  'Lapatinib (Tykerb) Maintenance (Lapatinib)',
+  'Neratinib (Nerlynx) Maintenance (Neratinib)',
+  'Advil / Motrin IB / Ibuprofen (Ibuprofen)',
+  'Aleve (Naproxen Sodium)',
+  'Voltaren (Diclofenac Sodium)',
+  'Cataflam (Diclofenac Potassium)'
 ];
 
 const PLANNED_THERAPIES = [
@@ -622,6 +677,51 @@ const PatientDetail: React.FC = () => {
             {displayOptions.map((option) => (
               <MenuItem key={option} value={option}>
                 {option}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </Grid>
+    );
+  };
+
+  const renderMultiSelectField = (label: string, field: string, options: string[], fullWidth: boolean = false, disabled: boolean = false) => {
+    const currentValueString = editedInfo?.[field] || '';
+    // Split by comma+space or comma, map to trimmed strings
+    const currentValueArray = currentValueString ? currentValueString.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+    
+    const displayOptions = [...options];
+    currentValueArray.forEach((val: string) => {
+      if (val && !displayOptions.includes(val)) {
+        displayOptions.unshift(val);
+      }
+    });
+
+    const handleChange = (event: any) => {
+      const {
+        target: { value },
+      } = event;
+      // On autofill we get a stringified value.
+      const valArray = typeof value === 'string' ? value.split(',') : value;
+      handleFieldChange(field, valArray.join(', '));
+    };
+    
+    return (
+      <Grid item xs={12} md={fullWidth ? 12 : 6}>
+        <FormControl fullWidth size="small">
+          <InputLabel>{label}</InputLabel>
+          <Select
+            multiple
+            value={currentValueArray}
+            label={label}
+            onChange={handleChange}
+            disabled={disabled}
+            renderValue={(selected) => selected.join(', ')}
+          >
+            {displayOptions.map((option) => (
+              <MenuItem key={option} value={option}>
+                <Checkbox checked={currentValueArray.indexOf(option) > -1} />
+                <ListItemText primary={option} />
               </MenuItem>
             ))}
           </Select>
@@ -1117,6 +1217,7 @@ const PatientDetail: React.FC = () => {
             </Grid>
             {renderDateField('Supportive Therapy Start Date', 'supportive_therapy_start_date')}
             {renderDateField('Supportive Therapy End Date', 'supportive_therapy_end_date')}
+            {renderMultiSelectField('Supportive Therapies', 'supportive_therapies', SUPPORTIVE_THERAPIES_OPTIONS, false)}
             {renderSelectField('Supportive Therapy Intent', 'supportive_therapy_intent', THERAPY_INTENT_OPTIONS)}
             
             <Grid item xs={12}>

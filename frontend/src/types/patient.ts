@@ -87,6 +87,7 @@ export interface PatientInfo {
   later_line_outcome?: string;  // UI uses this name
   
   // Supportive Therapy
+  supportive_therapies?: string;
   supportive_therapy_start_date?: string;
   supportive_therapy_end_date?: string;
   supportive_therapy_intent?: string;
