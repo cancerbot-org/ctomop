@@ -224,6 +224,7 @@ export interface PatientInfo {
   tumor_size?: number;
   tumor_stage?: string;
   nodes_stage?: string;
+  staging_modalities?: string;
   distant_metastasis_stage?: string;
 
   // CLL fields

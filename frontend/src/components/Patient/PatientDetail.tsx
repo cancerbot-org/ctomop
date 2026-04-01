@@ -101,6 +101,12 @@ const DISTANT_METASTASIS_STAGE_OPTIONS = [
   'M1: Distant metastasis present'
 ];
 
+const STAGING_MODALITIES_OPTIONS = [
+  'c → Clinical',
+  'p → Pathological',
+  'yp → Pathological after neoadjuvant therapy'
+];
+
 const ER_PR_OPTIONS = ['Positive', 'Negative', 'Borderline', 'Unknown'];
 const HER2_OPTIONS = ['Positive', 'Negative', 'Equivocal', 'Unknown'];
 const FLIPI_RISK_OPTIONS = ['Low', 'Intermediate', 'High'];
@@ -810,6 +816,7 @@ const PatientDetail: React.FC = () => {
       {renderSelectField('Stage', 'stage', STAGE_OPTIONS)}
       {renderSelectField('Tumor Stage', 'tumor_stage', TUMOR_STAGE_OPTIONS)}
       {renderSelectField('Nodes Stage', 'nodes_stage', NODES_STAGE_OPTIONS)}
+      {renderSelectField('Staging Modalities', 'staging_modalities', STAGING_MODALITIES_OPTIONS)}
       {renderSelectField('Distance Metastasis Stage', 'distant_metastasis_stage', DISTANT_METASTASIS_STAGE_OPTIONS)}
       {renderBooleanField('Measurable Disease by RECIST', 'measurable_disease_by_recist_status')}
       {renderBooleanField('Bone-Only Metastasis', 'bone_only_metastasis_status')}
