@@ -129,18 +129,13 @@ const MARITAL_STATUS_OPTIONS = ['Single', 'Married', 'Divorced', 'Widowed', 'Sep
 const INSURANCE_TYPE_OPTIONS = ['Private Insurance', 'Medicare', 'Medicaid', 'Veterans Affairs', 'Other Government', 'Self-pay', 'None'];
 
 // Genetic mutation options
-const GENE_OPTIONS = ['BRCA1', 'BRCA2', 'TP53', 'PIK3CA', 'PTEN', 'ATM', 'CHEK2', 'PALB2', 'CDH1', 'ERBB2'];
+const GENE_OPTIONS = ['BRCA1', 'BRCA2', 'TP53', 'PIK3CA', 'ESR1'];
 const MUTATION_OPTIONS: { [key: string]: string[] } = {
   'BRCA1': ['c.68_69delAG', 'c.5266dupC', 'c.181T>G', 'c.3756_3759del', '185delAG'],
   'BRCA2': ['c.5946delT', 'c.9097dupA', 'c.7617+1G>A', '6174delT', 'c.8537_8538del'],
   'TP53': ['R175H', 'R248Q', 'R273H', 'R248W', 'R282W'],
   'PIK3CA': ['E542K', 'E545K', 'H1047R', 'H1047L', 'E726K'],
-  'PTEN': ['R130*', 'R173C', 'R233*', 'R335*', 'c.209+1G>T'],
-  'ATM': ['c.5932G>T', 'c.6095G>A', 'c.8122G>A', 'c.7271T>G'],
-  'CHEK2': ['1100delC', 'I157T', 'R117G', 'IVS2+1G>A'],
-  'PALB2': ['c.3113G>A', 'c.1676del', 'c.509_510delGA', 'c.172_175delTTGT'],
-  'CDH1': ['c.1018A>G', 'c.1137G>A', 'c.283C>T', 'c.1901C>T'],
-  'ERBB2': ['L755S', 'V777L', 'G776delinsVC', 'D769H']
+  'ESR1': ['D538G', 'Y537S', 'Y537C', 'Y537N', 'E380Q']
 };
 const ORIGIN_OPTIONS = ['Germline', 'Somatic', 'Unknown'];
 const INTERPRETATION_OPTIONS = ['Pathogenic', 'Likely pathogenic', 'VUS', 'Likely benign', 'Benign'];
