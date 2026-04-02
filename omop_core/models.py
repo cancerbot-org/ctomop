@@ -982,9 +982,17 @@ class PatientInfo(models.Model):
         # Calculate relapse count based on outcomes
         # Count number of times treatment was followed by progression or new line
         relapse = 0
-        if self.first_line_outcome in ['Progressive Disease', 'Progressive Disease (PD)'] and self.second_line_therapy:
+        
+        relapse_triggers = [
+            'Progressive Disease', 'Progressive Disease (PD)',
+            'Complete Response', 'Complete Response (CR)',
+            'Stringent Complete Response (sCR)',
+            'Very Good Partial Response (VGPR)'
+        ]
+        
+        if self.first_line_outcome in relapse_triggers and self.second_line_therapy:
             relapse += 1
-        if self.second_line_outcome in ['Progressive Disease', 'Progressive Disease (PD)'] and self.later_therapy:
+        if self.second_line_outcome in relapse_triggers and self.later_therapy:
             relapse += 1
         if self.later_outcome in ['Progressive Disease', 'Progressive Disease (PD)']:
             relapse += 1
