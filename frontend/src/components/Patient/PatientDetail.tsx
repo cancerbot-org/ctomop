@@ -1235,7 +1235,7 @@ const PatientDetail: React.FC = () => {
           <Grid container spacing={3}>
             {renderSelectField('Prior Therapy', 'prior_therapy', YES_NO_OPTIONS, false, true)}
             {renderTextField('Number of Prior Lines', 'therapy_lines_count', false, 'number', true)}
-            {renderTextField('Relapse Count', 'relapse_count', false, 'number', true)}
+            {renderTextField('Relapse Count', 'relapse_count', false, 'number', false)}
             {renderSelectField('Refractory Status', 'refractory_status', REFRACTORY_STATUS_OPTIONS, true, true)}
             
             <Grid item xs={12}>

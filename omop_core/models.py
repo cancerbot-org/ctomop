@@ -979,7 +979,7 @@ class PatientInfo(models.Model):
         else:
             self.treatment_refractory_status = None
         
-        # Calculate relapse count based on outcomes
+# Calculate expected relapse count based on outcomes
         # Count number of times treatment was followed by progression or new line
         relapse = 0
         
@@ -996,5 +996,39 @@ class PatientInfo(models.Model):
             relapse += 1
         if self.later_outcome in ['Progressive Disease', 'Progressive Disease (PD)']:
             relapse += 1
+            
+        computed_relapse_count = relapse if relapse > 0 else None
         
-        self.relapse_count = relapse if relapse > 0 else None
+        if self.pk:
+            try:
+                old_instance = PatientInfo.objects.get(pk=self.pk)
+                
+                # Compute what the prior logical default would have been
+                old_relapse = 0
+                if old_instance.first_line_outcome in relapse_triggers and old_instance.second_line_therapy:
+                    old_relapse += 1
+                if old_instance.second_line_outcome in relapse_triggers and old_instance.later_therapy:
+                    old_relapse += 1
+                if old_instance.later_outcome in ['Progressive Disease', 'Progressive Disease (PD)']:
+                    old_relapse += 1
+                old_computed = old_relapse if old_relapse > 0 else None
+                
+                # Update if not manually overridden
+                # Scenario 1: New explicitly set value by user (self.relapse_count != old_instance.relapse_count). We keep the user's manual change.
+                # Scenario 2: Previous manual override (old_instance.relapse_count != old_computed). We don't overwrite their prior override.
+                # Scenario 3: Explicit clearing it via UI: (self.relapse_count is None and old_instance.relapse_count is not None). 
+                
+                if getattr(self, '_cleared_relapse_count', False) or self.relapse_count == '':
+                    # if they sent an empty string or explicitly cleared, populate newly
+                    self.relapse_count = computed_relapse_count
+                elif self.relapse_count == old_instance.relapse_count and old_instance.relapse_count == old_computed:
+                    self.relapse_count = computed_relapse_count
+                elif self.relapse_count is None:
+                     # fallback
+                     self.relapse_count = computed_relapse_count
+            except PatientInfo.DoesNotExist:
+                if self.relapse_count is None:
+                    self.relapse_count = computed_relapse_count
+        else:
+            if self.relapse_count is None:
+                self.relapse_count = computed_relapse_count
