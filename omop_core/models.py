@@ -968,11 +968,11 @@ class PatientInfo(models.Model):
             last_outcome = self.first_line_outcome
         
         if last_outcome:
-            if last_outcome == 'Progressive Disease':
+            if last_outcome in ['Progressive Disease', 'Progressive Disease (PD)']:
                 self.treatment_refractory_status = 'Refractory'
-            elif last_outcome in ['Complete Response', 'Partial Response']:
+            elif last_outcome in ['Complete Response', 'Partial Response', 'Complete Response (CR)', 'Stringent Complete Response (sCR)', 'Very Good Partial Response (VGPR)', 'Partial Response (PR)', 'Minimal Residual Disease (MRD) Negativity']:
                 self.treatment_refractory_status = 'Responsive'
-            elif last_outcome == 'Stable Disease':
+            elif last_outcome in ['Stable Disease', 'Stable Disease (SD)']:
                 self.treatment_refractory_status = 'Stable'
             else:
                 self.treatment_refractory_status = 'Unknown'
@@ -982,11 +982,11 @@ class PatientInfo(models.Model):
         # Calculate relapse count based on outcomes
         # Count number of times treatment was followed by progression or new line
         relapse = 0
-        if self.first_line_outcome == 'Progressive Disease' and self.second_line_therapy:
+        if self.first_line_outcome in ['Progressive Disease', 'Progressive Disease (PD)'] and self.second_line_therapy:
             relapse += 1
-        if self.second_line_outcome == 'Progressive Disease' and self.later_therapy:
+        if self.second_line_outcome in ['Progressive Disease', 'Progressive Disease (PD)'] and self.later_therapy:
             relapse += 1
-        if self.later_outcome == 'Progressive Disease':
+        if self.later_outcome in ['Progressive Disease', 'Progressive Disease (PD)']:
             relapse += 1
         
         self.relapse_count = relapse if relapse > 0 else None

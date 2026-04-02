@@ -127,7 +127,16 @@ const HER2_OPTIONS = ['Positive', 'Negative', 'Equivocal', 'Unknown'];
 const FLIPI_RISK_OPTIONS = ['Low', 'Intermediate', 'High'];
 const ISS_STAGE_OPTIONS = ['Stage I', 'Stage II', 'Stage III'];
 const CYTOGENETIC_RISK_OPTIONS = ['Standard Risk', 'High Risk', 'Very High Risk'];
-const THERAPY_OUTCOME_OPTIONS = ['Complete Response', 'Partial Response', 'Stable Disease', 'Progressive Disease', 'Unknown'];
+const THERAPY_OUTCOME_OPTIONS = [
+  'Complete Response (CR)',
+  'Stringent Complete Response (sCR)',
+  'Very Good Partial Response (VGPR)',
+  'Partial Response (PR)',
+  'Minimal Residual Disease (MRD) Negativity',
+  'Stable Disease (SD)',
+  'Progressive Disease (PD)',
+  'Unknown'
+];
 const SMOKING_STATUS_OPTIONS = ['Never Smoker', 'Former Smoker', 'Current Smoker', 'Unknown'];
 const ALCOHOL_USE_OPTIONS = ['None', 'Occasional', 'Moderate', 'Heavy', 'Unknown'];
 const EXERCISE_FREQUENCY_OPTIONS = ['None', 'Rarely', '1-2 times/week', '3-4 times/week', '5+ times/week', 'Daily', 'Unknown'];
