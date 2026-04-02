@@ -686,14 +686,17 @@ const PatientDetail: React.FC = () => {
   }
 
   const renderTextField = (label: string, field: string, fullWidth: boolean = false, type: string = 'text', disabled: boolean = false) => {
-    return (
-      <Grid item xs={12} md={fullWidth ? 12 : 6}>
-        <TextField
-          fullWidth
-          label={label}
-          type={type}
-          value={editedInfo?.[field] || ''}
-          onChange={(e) => handleFieldChange(field, e.target.value)}
+      // For number fields, 0 should show as '0', not empty string
+      const fieldValue = editedInfo?.[field];
+      const displayValue = fieldValue === 0 ? 0 : (fieldValue || '');
+      
+      return (
+        <Grid item xs={12} md={fullWidth ? 12 : 6}>
+          <TextField
+            fullWidth
+            label={label}
+            type={type}
+            value={displayValue}
           variant="outlined"
           size="small"
           disabled={disabled}
