@@ -697,13 +697,14 @@ const PatientDetail: React.FC = () => {
             label={label}
             type={type}
             value={displayValue}
-          variant="outlined"
-          size="small"
-          disabled={disabled}
-        />
-      </Grid>
-    );
-  };
+            onChange={(e) => handleFieldChange(field, e.target.value)}
+            variant="outlined"
+            size="small"
+            disabled={disabled}
+          />
+        </Grid>
+      );
+    };
 
   const renderDateField = (label: string, field: string, fullWidth: boolean = false) => {
     return (
