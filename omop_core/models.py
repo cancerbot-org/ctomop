@@ -979,22 +979,19 @@ class PatientInfo(models.Model):
         else:
             self.treatment_refractory_status = None
         
-# Calculate expected relapse count based on outcomes
-        # Count number of times treatment was followed by progression or new line
+        # Calculate expected relapse count based on outcomes
+        # Count number of times a successful treatment was followed by a new line
         relapse = 0
         
-        relapse_triggers = [
-            'Progressive Disease', 'Progressive Disease (PD)',
+        success_outcomes = [
             'Complete Response', 'Complete Response (CR)',
             'Stringent Complete Response (sCR)',
             'Very Good Partial Response (VGPR)'
         ]
         
-        if self.first_line_outcome in relapse_triggers and self.second_line_therapy:
+        if self.first_line_outcome in success_outcomes and self.second_line_therapy:
             relapse += 1
-        if self.second_line_outcome in relapse_triggers and self.later_therapy:
-            relapse += 1
-        if self.later_outcome in ['Progressive Disease', 'Progressive Disease (PD)']:
+        if self.second_line_outcome in success_outcomes and self.later_therapy:
             relapse += 1
             
         computed_relapse_count = relapse if relapse > 0 else None
@@ -1005,11 +1002,9 @@ class PatientInfo(models.Model):
                 
                 # Compute what the prior logical default would have been
                 old_relapse = 0
-                if old_instance.first_line_outcome in relapse_triggers and old_instance.second_line_therapy:
+                if old_instance.first_line_outcome in success_outcomes and old_instance.second_line_therapy:
                     old_relapse += 1
-                if old_instance.second_line_outcome in relapse_triggers and old_instance.later_therapy:
-                    old_relapse += 1
-                if old_instance.later_outcome in ['Progressive Disease', 'Progressive Disease (PD)']:
+                if old_instance.second_line_outcome in success_outcomes and old_instance.later_therapy:
                     old_relapse += 1
                 old_computed = old_relapse if old_relapse > 0 else None
                 
