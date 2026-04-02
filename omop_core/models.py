@@ -994,7 +994,7 @@ class PatientInfo(models.Model):
         if self.second_line_outcome in success_outcomes and self.later_therapy:
             relapse += 1
             
-        computed_relapse_count = relapse if relapse > 0 else None
+        computed_relapse_count = relapse
         
         if self.pk:
             try:
@@ -1006,7 +1006,7 @@ class PatientInfo(models.Model):
                     old_relapse += 1
                 if old_instance.second_line_outcome in success_outcomes and old_instance.later_therapy:
                     old_relapse += 1
-                old_computed = old_relapse if old_relapse > 0 else None
+                old_computed = old_relapse
                 
                 # Update if not manually overridden
                 # Scenario 1: New explicitly set value by user (self.relapse_count != old_instance.relapse_count). We keep the user's manual change.
