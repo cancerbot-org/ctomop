@@ -115,9 +115,11 @@ class Command(BaseCommand):
                 "fullUrl": f"http://example.org/Condition/condition-{i}",
                 "resource": condition
             })
-            
+            # Extract stage to enforce M0/M1 consistency in tumor characteristics
+            cancer_stage = condition['stage'][0]['summary']['coding'][0]['code']
+
             # Generate tumor characteristics (size, lymph nodes, metastasis)
-            for obs in self.generate_tumor_characteristics(i, diagnosis_date):
+            for obs in self.generate_tumor_characteristics(i, diagnosis_date, cancer_stage):
                 bundle["entry"].append(obs)
             
             # Generate lab observations
@@ -280,19 +282,32 @@ class Command(BaseCommand):
 
     def generate_condition(self, patient_id, diagnosis_date):
         """Generate breast cancer condition with stage and histologic type"""
-        histologic_types = [
-            "Invasive ductal carcinoma",
-            "Invasive lobular carcinoma",
-            "Ductal carcinoma in situ",
-            "Medullary carcinoma",
-            "Tubular carcinoma",
-            "Mucinous carcinoma"
+        # Stage → valid histologic types (issue #8 rules)
+        HISTOLOGIC_STAGE0 = [
+            'Ductal carcinoma in situ (DCIS)',
+            'Lobular carcinoma in situ (LCIS)',
         ]
-        
-        stages = ["I", "IA", "IB", "II", "IIA", "IIB", "III", "IIIA", "IIIB", "IIIC", "IV"]
-        
-        histologic_type = random.choice(histologic_types)
+        HISTOLOGIC_I_II = [
+            'Infiltrating ductal carcinoma (IDC)',
+            'Infiltrating lobular carcinoma (ILC)',
+            'Mixed ductal and lobular carcinoma',
+            'Mucinous (colloid) carcinoma',
+            'Tubular carcinoma',
+            'Medullary carcinoma',
+            'Papillary carcinoma',
+            'Metaplastic carcinoma',
+        ]
+        HISTOLOGIC_III_IV = HISTOLOGIC_I_II + ['Inflammatory carcinoma']
+
+        stages = ['0', 'I', 'IA', 'IB', 'II', 'IIA', 'IIB', 'III', 'IIIA', 'IIIB', 'IIIC', 'IV']
         stage = random.choice(stages)
+
+        if stage == '0':
+            histologic_type = random.choice(HISTOLOGIC_STAGE0)
+        elif stage in ('I', 'IA', 'IB', 'II', 'IIA', 'IIB'):
+            histologic_type = random.choice(HISTOLOGIC_I_II)
+        else:  # III, IIIA, IIIB, IIIC, IV
+            histologic_type = random.choice(HISTOLOGIC_III_IV)
         
         return {
             "resourceType": "Condition",
@@ -349,7 +364,7 @@ class Command(BaseCommand):
             }]
         }
 
-    def generate_tumor_characteristics(self, patient_id, diagnosis_date):
+    def generate_tumor_characteristics(self, patient_id, diagnosis_date, stage=None):
         """Generate tumor characteristics (size, lymph nodes, metastasis)"""
         observations = []
         
@@ -361,10 +376,12 @@ class Command(BaseCommand):
         lymph_node_weights = [40, 55, 5]  # 40% positive, 55% negative, 5% unknown
         lymph_node_status = random.choices(lymph_node_choices, weights=lymph_node_weights)[0]
         
-        # Metastasis status (Positive/Negative/Unknown)
-        metastasis_choices = ["Positive", "Negative", "Unknown"]
-        metastasis_weights = [25, 70, 5]  # 25% metastatic, 70% non-metastatic, 5% unknown
-        metastasis_status = random.choices(metastasis_choices, weights=metastasis_weights)[0]
+        # Metastasis status must be consistent with cancer stage:
+        # Stage IV → always Positive (M1); all other stages → never Positive (M0)
+        if stage == 'IV':
+            metastasis_status = 'Positive'
+        else:
+            metastasis_status = random.choices(['Negative', 'Unknown'], weights=[95, 5])[0]
         
         # Tumor size observation
         tumor_obs = {
@@ -475,11 +492,55 @@ class Command(BaseCommand):
         }
         observations.append(met_obs)
 
-        # TNM: Tumor stage (T1-T4)
-        t_stage = random.choices(
-            ["T1", "T2", "T3", "T4"],
-            weights=[30, 35, 25, 10]
-        )[0]
+        # TNM: Tumor stage — pick a valid (T, N) combo for this stage (issue #8)
+        # Maps stage → valid (T_category, N_category) pairs
+        STAGE_TNM_VALID = {
+            '0':    [('Tis', 'N0')],
+            'IA':   [('T0', 'N1mi'), ('T1', 'N0'), ('T1', 'N1mi')],
+            'IB':   [('T1', 'N1mi'), ('T0', 'N1'), ('T1', 'N1'), ('T2', 'N0'), ('T2', 'N1'), ('T3', 'N0')],
+            'I':    [('T0', 'N1mi'), ('T1', 'N0'), ('T1', 'N1mi'), ('T0', 'N1'), ('T1', 'N1'), ('T2', 'N0'), ('T3', 'N0')],
+            'IIA':  [('T0', 'N1'), ('T1', 'N1'), ('T2', 'N0')],
+            'IIB':  [('T2', 'N1'), ('T3', 'N0')],
+            'II':   [('T0', 'N1'), ('T1', 'N1'), ('T2', 'N0'), ('T2', 'N1'), ('T3', 'N0')],
+            'IIIA': [('T0', 'N2'), ('T2', 'N2'), ('T3', 'N1'), ('T3', 'N2')],
+            'IIIB': [('T4', 'N0'), ('T4', 'N1'), ('T4', 'N2')],
+            'IIIC': [('T1', 'N3'), ('T2', 'N3'), ('T3', 'N3'), ('T4', 'N3')],
+            'III':  [('T0', 'N2'), ('T2', 'N2'), ('T3', 'N1'), ('T3', 'N2'),
+                     ('T4', 'N0'), ('T4', 'N1'), ('T4', 'N2'), ('T2', 'N3'), ('T4', 'N3')],
+            'IV':   [('T1', 'N0'), ('T1', 'N1'), ('T2', 'N0'), ('T2', 'N1'), ('T3', 'N0'),
+                     ('T3', 'N1'), ('T4', 'N0'), ('T4', 'N1'), ('T4', 'N3')],
+        }
+        T_FULL = {
+            'Tis': "Tis: Non-invasive Carcinoma in situ (DCIS, LCIS, Paget\u2019s without tumor)",
+            'T0':  "T0: No tumor evidence",
+            'T1':  random.choice(["T1: Invasive Tumor \u2264 2 cm", "T1a: 0.1 \u2013 0.5 cm",
+                                   "T1b: 0.5 \u2013 1 cm", "T1c: 1 \u2013 2 cm"]),
+            'T2':  "T2: Invasive Tumor > 2 \u2013 5 cm",
+            'T3':  "T3: Invasive Tumor > 5 cm",
+            'T4':  random.choice(["T4: Invades chest wall or skin, or inflammatory",
+                                   "T4a: Invades chest wall", "T4b: Invades skin (may be swelling/ulcer)",
+                                   "T4c: Invades both skin + chest wall", "T4d: Inflammatory carcinoma"]),
+        }
+        N_FULL = {
+            'N0':   "N0: No lymph node involvement",
+            'N1mi': "N1mi: Micrometastasis (0.2\u20132 mm)",
+            'N1':   random.choice(["N1: 1\u20133 axillary lymph nodes or small internal mammary nodes",
+                                    "N1a: 1\u20133 axillary nodes (>2 mm)",
+                                    "N1b: Cancer cells in internal mammary sentinel nodes",
+                                    "N1c: 1\u20133 axillary nodes + internal mammary sentinel nodes"]),
+            'N2':   random.choice(["N2: 4\u20139 axillary nodes or internal mammary nodes without axillary nodes",
+                                    "N2a: 4\u20139 axillary nodes (>2 mm)",
+                                    "N2b: Internal mammary nodes only (no axillary)"]),
+            'N3':   random.choice(["N3: 10+ axillary, infraclavicular, or supraclavicular nodes; or both axillary + internal mammary",
+                                    "N3a: \u226510 axillary nodes (\u22652 mm) or infraclavicular",
+                                    "N3b: 4\u20139 Axillary + mammary nodes",
+                                    "N3c: Supraclavicular nodes"]),
+        }
+        valid_combos = STAGE_TNM_VALID.get(stage, STAGE_TNM_VALID['IV'])
+        t_cat, n_cat = random.choice(valid_combos)
+        t_stage = T_FULL[t_cat]
+        n_stage = N_FULL[n_cat]
+
         observations.append({
             "fullUrl": f"http://example.org/Observation/obs-{patient_id}-tumor-stage",
             "resource": {
@@ -496,12 +557,6 @@ class Command(BaseCommand):
                 "valueCodeableConcept": {"text": t_stage}
             }
         })
-
-        # TNM: Nodes stage (N0-N3)
-        n_stage = random.choices(
-            ["N0", "N1", "N2", "N3"],
-            weights=[40, 30, 20, 10]
-        )[0]
         observations.append({
             "fullUrl": f"http://example.org/Observation/obs-{patient_id}-nodes-stage",
             "resource": {
@@ -519,8 +574,12 @@ class Command(BaseCommand):
             }
         })
 
-        # TNM: Distant metastasis stage (M0/M1)
-        m_stage = "M1" if metastasis_status == "Positive" else "M0"
+        # TNM: Distant metastasis stage — label matches UI dropdown values
+        # Stage IV -> M1; all other stages -> M0 (enforces issue #7 rule)
+        if stage == 'IV':
+            m_stage = 'M1: Distant metastasis present'
+        else:
+            m_stage = 'M0: No distant metastasis'
         observations.append({
             "fullUrl": f"http://example.org/Observation/obs-{patient_id}-distant-metastasis-stage",
             "resource": {
@@ -558,7 +617,7 @@ class Command(BaseCommand):
         })
 
         # Measurable disease by RECIST (True if metastatic or T3/T4)
-        measurable_by_recist = metastasis_status == "Positive" or t_stage in ["T3", "T4"]
+        measurable_by_recist = metastasis_status == "Positive" or t_cat in ["T3", "T4"]
         observations.append({
             "fullUrl": f"http://example.org/Observation/obs-{patient_id}-recist",
             "resource": {

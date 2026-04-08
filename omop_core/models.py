@@ -958,26 +958,37 @@ class PatientInfo(models.Model):
         # Set prior_therapy based on whether any lines exist
         self.prior_therapy = 'Yes' if lines_count > 0 else 'No'
         
-        # Determine refractory status from last line outcome
-        last_outcome = None
-        if self.later_therapy and self.later_outcome:
-            last_outcome = self.later_outcome
-        elif self.second_line_therapy and self.second_line_outcome:
-            last_outcome = self.second_line_outcome
-        elif self.first_line_therapy and self.first_line_outcome:
-            last_outcome = self.first_line_outcome
-        
-        if last_outcome:
-            if last_outcome in ['Progressive Disease', 'Progressive Disease (PD)']:
-                self.treatment_refractory_status = 'Refractory'
-            elif last_outcome in ['Complete Response', 'Partial Response', 'Complete Response (CR)', 'Stringent Complete Response (sCR)', 'Very Good Partial Response (VGPR)', 'Partial Response (PR)', 'Minimal Residual Disease (MRD) Negativity']:
-                self.treatment_refractory_status = 'Responsive'
-            elif last_outcome in ['Stable Disease', 'Stable Disease (SD)']:
-                self.treatment_refractory_status = 'Stable'
-            else:
-                self.treatment_refractory_status = 'Unknown'
+        # Determine refractory status by counting lines with a negative outcome.
+        # Negative outcomes: Stable Disease (SD) or Progressive Disease (PD).
+        # Rules (issue #8):
+        #   0 negative lines → Not Refractory
+        #   1 negative line  → Primary Refractory
+        #   2 negative lines → Secondary Refractory
+        #   3+ negative lines → Multi-Refractory
+        #   No therapy at all → Unknown
+        NEGATIVE_OUTCOMES = {
+            'Stable Disease', 'Stable Disease (SD)',
+            'Progressive Disease', 'Progressive Disease (PD)',
+        }
+        has_any_therapy = bool(self.first_line_therapy or self.second_line_therapy or self.later_therapy)
+        neg_count = 0
+        if self.first_line_therapy and self.first_line_outcome in NEGATIVE_OUTCOMES:
+            neg_count += 1
+        if self.second_line_therapy and self.second_line_outcome in NEGATIVE_OUTCOMES:
+            neg_count += 1
+        if self.later_therapy and self.later_outcome in NEGATIVE_OUTCOMES:
+            neg_count += 1
+
+        if not has_any_therapy:
+            self.treatment_refractory_status = 'Unknown'
+        elif neg_count == 0:
+            self.treatment_refractory_status = 'Not Refractory'
+        elif neg_count == 1:
+            self.treatment_refractory_status = 'Primary Refractory'
+        elif neg_count == 2:
+            self.treatment_refractory_status = 'Secondary Refractory'
         else:
-            self.treatment_refractory_status = None
+            self.treatment_refractory_status = 'Multi-Refractory'
         
         # Calculate expected relapse count based on outcomes
         # Count number of times a successful treatment was followed by a new line
