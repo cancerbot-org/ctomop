@@ -1003,6 +1003,27 @@ class Command(BaseCommand):
             imwg = False
         patient_info.measurable_disease_imwg = imwg
 
+        # measurable_disease_iwcll — IWCLL 2008 criteria:
+        #   True if ANY of: largest lymph node ≥1.5 cm, ALC ≥5×10⁹/L,
+        #   splenomegaly present, or hepatomegaly present.
+        #   False if all values are available but none meet criteria.
+        #   None if no relevant data available.
+        alc = patient_info.absolute_lymphocyte_count
+        lns = patient_info.largest_lymph_node_size
+        spleen = patient_info.splenomegaly
+        liver = patient_info.hepatomegaly
+
+        has_any_iwcll_data = any(v is not None for v in (alc, lns, spleen, liver))
+        if has_any_iwcll_data:
+            patient_info.measurable_disease_iwcll = bool(
+                (alc is not None and float(alc) >= 5.0)
+                or (lns is not None and float(lns) >= 1.5)
+                or spleen is True
+                or liver is True
+            )
+        else:
+            patient_info.measurable_disease_iwcll = None
+
         # tp53_disruption — any TP53 pathogenic mutation in genetic_mutations
         mutations = patient_info.genetic_mutations or []
         patient_info.tp53_disruption = any(
