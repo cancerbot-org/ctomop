@@ -954,9 +954,16 @@ class PatientInfo(models.Model):
             lines_count += 1
         
         self.therapy_lines_count = lines_count
-        
-        # Set prior_therapy based on whether any lines exist
-        self.prior_therapy = 'Yes' if lines_count > 0 else 'No'
+
+        # Set prior_therapy using the vocabulary expected by EXACT and CB matchers
+        if lines_count == 0:
+            self.prior_therapy = 'None'
+        elif lines_count == 1:
+            self.prior_therapy = 'One line'
+        elif lines_count == 2:
+            self.prior_therapy = 'Two lines'
+        else:
+            self.prior_therapy = 'More than two lines of therapy'
         
         # Determine refractory status by counting lines with a negative outcome.
         # Negative outcomes: Stable Disease (SD) or Progressive Disease (PD).
