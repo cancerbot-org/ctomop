@@ -256,7 +256,7 @@ class DrugExposure(models.Model):
     drug_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='drug_exposures', db_column='drug_concept_id')
     drug_exposure_start_date = models.DateField()
     drug_exposure_start_datetime = models.DateTimeField(null=True, blank=True)
-    drug_exposure_end_date = models.DateField()
+    drug_exposure_end_date = models.DateField(null=True, blank=True)
     drug_exposure_end_datetime = models.DateTimeField(null=True, blank=True)
     verbatim_end_date = models.DateField(null=True, blank=True)
     drug_type_concept = models.ForeignKey(Concept, on_delete=models.PROTECT, related_name='drug_type_exposures', db_column='drug_type_concept_id')
@@ -867,6 +867,17 @@ class PatientInfo(models.Model):
     clonal_bone_marrow_b_lymphocytes = models.FloatField(blank=True, null=True, help_text="Clonal B lymphocytes in bone marrow biopsy (%)")
     bone_marrow_involvement = models.BooleanField(blank=True, null=True)
 
+    # HealthTree parity fields
+    diagnosis_date = models.DateField(blank=True, null=True, help_text="Date of initial diagnosis (from ConditionOccurrence)")
+    condition_clinical_status = models.CharField(max_length=50, blank=True, null=True, help_text="Clinical status: active/remission/relapse")
+    disease_slug = models.CharField(max_length=100, blank=True, null=True, help_text="Machine-readable disease ID e.g. 'multiple-myeloma'")
+    validated = models.BooleanField(blank=True, null=True, help_text="Clinician validation flag")
+    validated_by = models.CharField(max_length=100, blank=True, null=True, help_text="Name of clinician who validated")
+    validation_date = models.DateField(blank=True, null=True, help_text="Date validated by clinician")
+    phone_number = models.CharField(max_length=20, blank=True, null=True, help_text="Patient phone number")
+    facility_name = models.CharField(max_length=255, blank=True, null=True, help_text="Treating institution name")
+    prior_procedures = models.JSONField(blank=True, null=True, default=list, help_text="List of prior procedures from ProcedureOccurrence")
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1045,3 +1056,40 @@ class PatientInfo(models.Model):
         else:
             if self.relapse_count is None:
                 self.relapse_count = computed_relapse_count
+
+
+# =============================================================================
+# HealthTree Parity — Document Storage
+# =============================================================================
+
+class PatientDocument(models.Model):
+    """Scanned/uploaded medical documents. File binary lives in external storage; URL stored here."""
+    DOC_TYPE_CHOICES = [
+        ('FISH', 'FISH'),
+        ('GEP', 'GEP'),
+        ('NGS', 'NGS'),
+        ('CYTOMETRY', 'Flow Cytometry'),
+        ('CYTOGENETICS', 'Cytogenetics'),
+        ('LAB_RESULTS', 'Lab Results'),
+        ('FULL_MEDICAL_RECORDS', 'Full Medical Records'),
+        ('MRD', 'MRD'),
+        ('BONE_MARROW', 'Bone Marrow'),
+        ('CONSENT', 'Consent'),
+        ('IMAGING', 'Imaging'),
+        ('OTHER', 'Other'),
+    ]
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='documents')
+    doc_type = models.CharField(max_length=50, choices=DOC_TYPE_CHOICES)
+    title = models.CharField(max_length=255, blank=True, null=True)
+    file_url = models.URLField(blank=True, null=True)
+    file_name = models.CharField(max_length=255, blank=True, null=True)
+    verified = models.BooleanField(default=False)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'patient_document'
+
+    def __str__(self):
+        return f"PatientDocument {self.doc_type} for Person {self.person_id}"
+
+

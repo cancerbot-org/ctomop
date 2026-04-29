@@ -7,14 +7,24 @@ from django.contrib.auth import logout, login, authenticate
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.utils import timezone
-from omop_core.models import Person, PatientInfo, Concept
+from omop_core.models import (
+    Person, PatientInfo, Concept,
+    ConditionOccurrence, DrugExposure, Measurement, Observation, ProcedureOccurrence,
+    PatientDocument,
+)
+from omop_oncology.models import Episode, EpisodeEvent
+from omop_core.services.patient_info_service import refresh_patient_info
 from datetime import datetime
 import csv
 import json
 import logging
 from io import StringIO
 from .serializers import (
-    UserSerializer, PatientInfoSerializer, PatientListSerializer
+    UserSerializer, PatientInfoSerializer, PatientListSerializer,
+    ConditionOccurrenceSerializer, DrugExposureSerializer, MeasurementSerializer,
+    ObservationSerializer, ProcedureOccurrenceSerializer,
+    EpisodeSerializer, EpisodeEventSerializer,
+    PatientDocumentSerializer,
 )
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
@@ -395,15 +405,17 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                             if not type_concept:
                                 type_concept = breast_cancer_concept
                             
-                            ConditionOccurrence.objects.create(
+                            _co = ConditionOccurrence(
                                 condition_occurrence_id=condition_id,
                                 person=person,
                                 condition_concept=breast_cancer_concept,
                                 condition_start_date=condition_date.date(),
                                 condition_start_datetime=condition_date,
                                 condition_type_concept=type_concept,
-                                condition_source_value=disease
+                                condition_source_value=disease,
                             )
+                            _co._skip_patient_info_refresh = True
+                            _co.save()
                     
                     # Process observations and create Measurement records
                     from omop_core.models import Measurement
@@ -930,7 +942,7 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                             if not type_concept:
                                 type_concept = measurement_concept
                             
-                            Measurement.objects.create(
+                            _m = Measurement(
                                 measurement_id=measurement_id,
                                 person=person,
                                 measurement_concept=measurement_concept,
@@ -940,8 +952,10 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                                 value_as_number=value_number,
                                 value_as_string=value_string,
                                 measurement_source_value=obs_name[:50],
-                                unit_source_value=unit[:50] if unit else None
+                                unit_source_value=unit[:50] if unit else None,
                             )
+                            _m._skip_patient_info_refresh = True
+                            _m.save()
                             measurement_id += 1
                     
                     # Extract therapy information from MedicationStatement resources
@@ -1097,175 +1111,269 @@ class PatientInfoViewSet(viewsets.ModelViewSet):
                             elif later_end_date and disc_date == str(later_end_date):
                                 later_discontinuation_reason = disc_obs['value']
                     
-                    # Create PatientInfo with address, ethnicity, vital signs, therapy, and lab values
-                    patient_info = PatientInfo.objects.create(
-                        person=person,
-                        date_of_birth=birth_date,
-                        disease=disease,
-                        stage=stage,
-                        histologic_type=histologic_type,
-                        country=country,
-                        region=region,
-                        city=city,
-                        postal_code=postal_code,
-                        ethnicity=ethnicity,
-                        weight=weight,
-                        weight_units='kg' if weight else None,
-                        height=height,
-                        height_units='cm' if height else None,
-                        systolic_blood_pressure=systolic_bp,
-                        diastolic_blood_pressure=diastolic_bp,
-                        heartrate=heart_rate,
-                        ecog_performance_status=ecog,
-                        tumor_size=tumor_size,
-                        lymph_node_status=lymph_node_status,
-                        metastasis_status=metastasis_status,
-                        tumor_stage=tumor_stage,
-                        nodes_stage=nodes_stage,
-                        distant_metastasis_stage=distant_metastasis_stage,
-                        staging_modalities=staging_modalities,
-                        measurable_disease_by_recist_status=measurable_disease_by_recist_status,
-                        bone_only_metastasis_status=bone_only_metastasis_status,
-                        clonal_bone_marrow_b_lymphocytes=clonal_bone_marrow_b_lymphocytes,
-                        estrogen_receptor_status=er_status,
-                        progesterone_receptor_status=pr_status,
-                        her2_status=her2_status,
-                        ki67_proliferation_index=ki67_index,
-                        pd_l1_tumor_cels=pdl1_percentage,
-                        genetic_mutations=genetic_mutations,
-                        first_line_therapy=first_line_therapy,
-                        first_line_date=first_line_date,
-                        first_line_start_date=first_line_start_date,
-                        first_line_end_date=first_line_end_date,
-                        first_line_intent=first_line_intent,
-                        first_line_discontinuation_reason=first_line_discontinuation_reason,
-                        first_line_outcome=first_line_outcome,
-                        second_line_therapy=second_line_therapy,
-                        second_line_date=second_line_date,
-                        second_line_start_date=second_line_start_date,
-                        second_line_end_date=second_line_end_date,
-                        second_line_intent=second_line_intent,
-                        second_line_discontinuation_reason=second_line_discontinuation_reason,
-                        second_line_outcome=second_line_outcome,
-                        later_therapy=later_therapy,
-                        later_date=later_date,
-                        later_start_date=later_start_date,
-                        later_end_date=later_end_date,
-                        later_intent=later_intent,
-                        later_discontinuation_reason=later_discontinuation_reason,
-                        later_outcome=later_outcome,
-                        # Blood counts (Blood tab)
-                        hemoglobin_g_dl=hemoglobin_g_dl,
-                        hematocrit_percent=hematocrit_percent,
-                        wbc_count_thousand_per_ul=wbc_count,
-                        rbc_million_per_ul=rbc_count,
-                        platelet_count_thousand_per_ul=platelet_count,
-                        anc_thousand_per_ul=anc_count,
-                        alc_thousand_per_ul=alc_count,
-                        amc_thousand_per_ul=amc_count,
-                        # Kidney function (Blood tab)
-                        serum_calcium_mg_dl=serum_calcium,
-                        serum_creatinine_mg_dl=serum_creatinine,
-                        creatinine_clearance_ml_min=creatinine_clearance,
-                        egfr_ml_min_173m2=egfr,
-                        bun_mg_dl=bun,
-                        # Electrolytes (Blood tab)
-                        sodium_meq_l=sodium,
-                        potassium_meq_l=potassium,
-                        calcium_mg_dl=calcium,
-                        magnesium_mg_dl=magnesium,
-                        # Liver function (Blood tab)
-                        bilirubin_total_mg_dl=bilirubin_total,
-                        alt_u_l=alt,
-                        ast_u_l=ast,
-                        alkaline_phosphatase_u_l=alkaline_phosphatase,
-                        albumin_g_dl=albumin,
-                        # Cardiac & Other (Blood tab)
-                        troponin_ng_ml=troponin,
-                        bnp_pg_ml=bnp,
-                        glucose_mg_dl=glucose,
-                        hba1c_percent=hba1c,
-                        ldh_u_l=ldh,
-                        # Coagulation (Blood tab)
-                        inr=inr,
-                        pt_seconds=pt,
-                        ptt_seconds=ptt,
-                        # Tumor markers (Blood tab)
-                        cea_ng_ml=cea,
-                        ca19_9_u_ml=ca19_9,
-                        psa_ng_ml=psa,
-                        # Labs tab - Chemistry Panel (duplicate mapping for old field names)
-                        serum_creatinine_level=serum_creatinine,
-                        serum_calcium_level=serum_calcium,
-                        blood_urea_nitrogen=bun,
-                        egfr=egfr,
-                        serum_sodium=sodium,
-                        serum_potassium=potassium,
-                        albumin_level=albumin,
-                        total_protein=total_protein,
-                        creatinine_clearance_rate=creatinine_clearance_rate,
-                        # Labs tab - Liver Function Tests
-                        liver_enzyme_levels_ast=ast,
-                        liver_enzyme_levels_alt=alt,
-                        liver_enzyme_levels_alp=alkaline_phosphatase,
-                        serum_bilirubin_level_total=bilirubin_total,
-                        serum_bilirubin_level_direct=bilirubin_direct,
-                        # Labs tab - Other Markers
-                        ldh_level=ldh,
-                        beta2_microglobulin=beta2_microglobulin,
-                        c_reactive_protein=c_reactive_protein,
-                        esr=esr,
-                        # Behavior tab - Lifestyle
-                        smoking_status=smoking_status,
-                        pack_years=pack_years,
-                        alcohol_use=alcohol_use,
-                        drinks_per_week=drinks_per_week,
-                        exercise_frequency=exercise_frequency,
-                        exercise_minutes_per_week=exercise_minutes_per_week,
-                        diet_type=diet_type,
-                        # Behavior tab - Sleep & Wellbeing
-                        sleep_hours_per_night=sleep_hours_per_night,
-                        sleep_quality=sleep_quality,
-                        stress_level=stress_level,
-                        social_support=social_support,
-                        # Behavior tab - Socioeconomic
-                        employment_status=employment_status,
-                        education_level=education_level,
-                        marital_status=marital_status,
-                        insurance_type=insurance_type,
-                        number_of_dependents=number_of_dependents,
-                        annual_household_income=annual_household_income,
-                        # Cancer Assessment Fields
-                        ecog_assessment_date=ecog_assessment_date,
-                        test_methodology=test_methodology,
-                        test_date=test_date,
-                        test_specimen_type=test_specimen_type,
-                        report_interpretation=report_interpretation,
-                        oncotype_dx_score=oncotype_dx_score,
-                        androgen_receptor_status=androgen_receptor_status,
-                        # Treatment Fields
-                        therapy_intent=therapy_intent,
-                        reason_for_discontinuation=reason_for_discontinuation,
-                        # Additional Lab Values
-                        ldh=ldh_new if ldh_new is not None else ldh,
-                        alkaline_phosphatase=alkaline_phosphatase,
-                        magnesium=magnesium,
-                        phosphorus=phosphorus,
-                        # Reproductive Health
-                        pregnancy_test_date=pregnancy_test_date,
-                        pregnancy_test_result_value=pregnancy_test_result_value,
-                        contraceptive_use=contraceptive_use if contraceptive_use is not None else False,
-                        # Consent and Support
-                        consent_capability=consent_capability if consent_capability is not None else True,
-                        caregiver_availability_status=caregiver_availability_status if caregiver_availability_status is not None else True,
-                        # Mental Health and Substance Use
-                        no_mental_health_disorder_status=no_mental_health_disorder_status if no_mental_health_disorder_status is not None else True,
-                        no_substance_use_status=no_substance_use_status if no_substance_use_status is not None else True,
-                        substance_use_details=substance_use_details,
-                        # Geographic Exposure
-                        no_geographic_exposure_risk=no_geographic_exposure_risk if no_geographic_exposure_risk is not None else True,
-                        geographic_exposure_risk_details=geographic_exposure_risk_details,
-                    )
+                    # --- Write DrugExposure records for each therapy line ---
+                    last_drug = DrugExposure.objects.all().order_by('-drug_exposure_id').first()
+                    drug_exposure_id = last_drug.drug_exposure_id + 1 if last_drug else 1
+                    last_episode = Episode.objects.all().order_by('-episode_id').first()
+                    episode_id_counter = last_episode.episode_id + 1 if last_episode else 1
+
+                    for lot_num, lot_data in sorted(therapy_lines.items()):
+                        try:
+                            lot_start = None
+                            lot_end = None
+                            if lot_data.get('start_date'):
+                                lot_start = datetime.strptime(lot_data['start_date'][:10], '%Y-%m-%d').date()
+                            if lot_data.get('end_date'):
+                                lot_end = datetime.strptime(lot_data['end_date'][:10], '%Y-%m-%d').date()
+
+                            regimen_concept = Concept.objects.filter(
+                                concept_name__icontains=lot_data.get('regimen', ''),
+                                domain__domain_id='Drug',
+                            ).first() if lot_data.get('regimen') else None
+                            # Fall back to any Drug domain concept when named one not found
+                            if regimen_concept is None:
+                                regimen_concept = Concept.objects.filter(
+                                    domain__domain_id='Drug'
+                                ).first()
+                            drug_type_concept = Concept.objects.filter(concept_id=32869).first()  # EHR prescription
+                            # Fall back to regimen_concept if type concept not found
+                            if drug_type_concept is None and regimen_concept is not None:
+                                drug_type_concept = regimen_concept
+
+                            _de = DrugExposure(
+                                drug_exposure_id=drug_exposure_id,
+                                person=person,
+                                drug_concept=regimen_concept,
+                                drug_exposure_start_date=lot_start,
+                                drug_exposure_end_date=lot_end,
+                                drug_type_concept=drug_type_concept,
+                                drug_source_value=(lot_data.get('regimen') or '')[:50],
+                            )
+                            _de._skip_patient_info_refresh = True
+                            _de.save()
+
+                            # Create Episode for this LOT
+                            # OMOP standard concepts for LOT episodes
+                            ep_concept = Concept.objects.filter(concept_id=32531).first()  # Treatment Regimen
+                            if ep_concept is None:
+                                ep_concept = regimen_concept
+                            ep_obj_concept = regimen_concept  # drug that is the object of this episode
+                            ep_type_concept = Concept.objects.filter(concept_id=32817).first()  # EHR
+                            if ep_type_concept is None:
+                                ep_type_concept = regimen_concept
+
+                            _ep = Episode(
+                                episode_id=episode_id_counter,
+                                person=person,
+                                episode_concept=ep_concept,
+                                episode_object_concept=ep_obj_concept,
+                                episode_type_concept=ep_type_concept,
+                                episode_start_date=lot_start or datetime.now().date(),
+                                episode_end_date=lot_end,
+                                episode_number=lot_num,
+                                episode_source_value=f'LOT-{lot_num}',
+                            )
+                            _ep.save()
+
+                            # Link drug exposure to episode
+                            # OMOP concept 1147094 = drug_exposure.drug_exposure_id field
+                            ee_field_concept = Concept.objects.filter(concept_id=1147094).first()
+                            if ee_field_concept is None:
+                                ee_field_concept = regimen_concept
+                            EpisodeEvent.objects.create(
+                                episode_id=_ep.episode_id,
+                                event_id=drug_exposure_id,
+                                episode_event_field_concept=ee_field_concept,
+                            )
+
+                            drug_exposure_id += 1
+                            episode_id_counter += 1
+                        except Exception as _e:
+                            logger.warning(f"Could not write DrugExposure/Episode for LOT {lot_num}: {_e}")
+
+                    # --- OMOP-first: refresh PatientInfo from OMOP tables ---
+                    patient_info = refresh_patient_info(person)
+
+                    # --- Patch fields from FHIR that aren't yet in OMOP tables ---
+                    # These fields come from FHIR parsing but are not (yet) stored in OMOP.
+                    # Once full OMOP write coverage is achieved, this patch block can be removed.
+                    _patch = {}
+                    if birth_date:
+                        _patch['date_of_birth'] = birth_date
+                    if disease:
+                        _patch['disease'] = disease
+                    if stage:
+                        _patch['stage'] = stage
+                    if histologic_type:
+                        _patch['histologic_type'] = histologic_type
+                    if country:
+                        _patch['country'] = country
+                    if region:
+                        _patch['region'] = region
+                    if city:
+                        _patch['city'] = city
+                    if postal_code:
+                        _patch['postal_code'] = postal_code
+                    if ethnicity:
+                        _patch['ethnicity'] = ethnicity
+                    if weight:
+                        _patch.update({'weight': weight, 'weight_units': 'kg'})
+                    if height:
+                        _patch.update({'height': height, 'height_units': 'cm'})
+                    if systolic_bp:
+                        _patch['systolic_blood_pressure'] = systolic_bp
+                    if diastolic_bp:
+                        _patch['diastolic_blood_pressure'] = diastolic_bp
+                    if heart_rate:
+                        _patch['heartrate'] = heart_rate
+                    if ecog is not None:
+                        _patch['ecog_performance_status'] = ecog
+                    if tumor_size:
+                        _patch['tumor_size'] = tumor_size
+                    if lymph_node_status:
+                        _patch['lymph_node_status'] = lymph_node_status
+                    if metastasis_status:
+                        _patch['metastasis_status'] = metastasis_status
+                    if tumor_stage:
+                        _patch['tumor_stage'] = tumor_stage
+                    if nodes_stage:
+                        _patch['nodes_stage'] = nodes_stage
+                    if distant_metastasis_stage:
+                        _patch['distant_metastasis_stage'] = distant_metastasis_stage
+                    if staging_modalities:
+                        _patch['staging_modalities'] = staging_modalities
+                    if measurable_disease_by_recist_status is not None:
+                        _patch['measurable_disease_by_recist_status'] = measurable_disease_by_recist_status
+                    if bone_only_metastasis_status is not None:
+                        _patch['bone_only_metastasis_status'] = bone_only_metastasis_status
+                    if clonal_bone_marrow_b_lymphocytes is not None:
+                        _patch['clonal_bone_marrow_b_lymphocytes'] = clonal_bone_marrow_b_lymphocytes
+                    if er_status:
+                        _patch['estrogen_receptor_status'] = er_status
+                    if pr_status:
+                        _patch['progesterone_receptor_status'] = pr_status
+                    if her2_status:
+                        _patch['her2_status'] = her2_status
+                    if ki67_index is not None:
+                        _patch['ki67_proliferation_index'] = ki67_index
+                    if pdl1_percentage is not None:
+                        _patch['pd_l1_tumor_cels'] = pdl1_percentage
+                    if genetic_mutations:
+                        _patch['genetic_mutations'] = genetic_mutations
+                    # Therapy lines (denormalized PatientInfo fields)
+                    if first_line_therapy:
+                        _patch.update({
+                            'first_line_therapy': first_line_therapy,
+                            'first_line_date': first_line_date,
+                            'first_line_start_date': first_line_start_date,
+                            'first_line_end_date': first_line_end_date,
+                            'first_line_intent': first_line_intent,
+                            'first_line_discontinuation_reason': first_line_discontinuation_reason,
+                            'first_line_outcome': first_line_outcome,
+                        })
+                    if second_line_therapy:
+                        _patch.update({
+                            'second_line_therapy': second_line_therapy,
+                            'second_line_date': second_line_date,
+                            'second_line_start_date': second_line_start_date,
+                            'second_line_end_date': second_line_end_date,
+                            'second_line_intent': second_line_intent,
+                            'second_line_discontinuation_reason': second_line_discontinuation_reason,
+                            'second_line_outcome': second_line_outcome,
+                        })
+                    if later_therapy:
+                        _patch.update({
+                            'later_therapy': later_therapy,
+                            'later_date': later_date,
+                            'later_start_date': later_start_date,
+                            'later_end_date': later_end_date,
+                            'later_intent': later_intent,
+                            'later_discontinuation_reason': later_discontinuation_reason,
+                            'later_outcome': later_outcome,
+                        })
+                    # Labs & other FHIR-derived fields not yet written to OMOP
+                    _patch.update({k: v for k, v in {
+                        'hemoglobin_g_dl': hemoglobin_g_dl,
+                        'hematocrit_percent': hematocrit_percent,
+                        'wbc_count_thousand_per_ul': wbc_count,
+                        'rbc_million_per_ul': rbc_count,
+                        'platelet_count_thousand_per_ul': platelet_count,
+                        'anc_thousand_per_ul': anc_count,
+                        'alc_thousand_per_ul': alc_count,
+                        'amc_thousand_per_ul': amc_count,
+                        'serum_calcium_mg_dl': serum_calcium,
+                        'serum_creatinine_mg_dl': serum_creatinine,
+                        'creatinine_clearance_ml_min': creatinine_clearance,
+                        'egfr_ml_min_173m2': egfr,
+                        'bun_mg_dl': bun,
+                        'sodium_meq_l': sodium,
+                        'potassium_meq_l': potassium,
+                        'calcium_mg_dl': calcium,
+                        'magnesium_mg_dl': magnesium,
+                        'bilirubin_total_mg_dl': bilirubin_total,
+                        'alt_u_l': alt,
+                        'ast_u_l': ast,
+                        'alkaline_phosphatase_u_l': alkaline_phosphatase,
+                        'albumin_g_dl': albumin,
+                        'troponin_ng_ml': troponin,
+                        'bnp_pg_ml': bnp,
+                        'glucose_mg_dl': glucose,
+                        'hba1c_percent': hba1c,
+                        'ldh_u_l': ldh,
+                        'inr': inr,
+                        'pt_seconds': pt,
+                        'ptt_seconds': ptt,
+                        'cea_ng_ml': cea,
+                        'ca19_9_u_ml': ca19_9,
+                        'psa_ng_ml': psa,
+                        'beta2_microglobulin': beta2_microglobulin,
+                        'c_reactive_protein': c_reactive_protein,
+                        'esr': esr,
+                        'smoking_status': smoking_status,
+                        'pack_years': pack_years,
+                        'alcohol_use': alcohol_use,
+                        'drinks_per_week': drinks_per_week,
+                        'exercise_frequency': exercise_frequency,
+                        'exercise_minutes_per_week': exercise_minutes_per_week,
+                        'diet_type': diet_type,
+                        'sleep_hours_per_night': sleep_hours_per_night,
+                        'sleep_quality': sleep_quality,
+                        'stress_level': stress_level,
+                        'social_support': social_support,
+                        'employment_status': employment_status,
+                        'education_level': education_level,
+                        'marital_status': marital_status,
+                        'insurance_type': insurance_type,
+                        'number_of_dependents': number_of_dependents,
+                        'annual_household_income': annual_household_income,
+                        'ecog_assessment_date': ecog_assessment_date,
+                        'test_methodology': test_methodology,
+                        'test_date': test_date,
+                        'test_specimen_type': test_specimen_type,
+                        'report_interpretation': report_interpretation,
+                        'oncotype_dx_score': oncotype_dx_score,
+                        'androgen_receptor_status': androgen_receptor_status,
+                        'therapy_intent': therapy_intent,
+                        'reason_for_discontinuation': reason_for_discontinuation,
+                        'ldh': ldh_new if ldh_new is not None else ldh,
+                        'alkaline_phosphatase': alkaline_phosphatase,
+                        'magnesium': magnesium,
+                        'phosphorus': phosphorus,
+                        'pregnancy_test_date': pregnancy_test_date,
+                        'pregnancy_test_result_value': pregnancy_test_result_value,
+                        'contraceptive_use': contraceptive_use if contraceptive_use is not None else False,
+                        'consent_capability': consent_capability if consent_capability is not None else True,
+                        'caregiver_availability_status': caregiver_availability_status if caregiver_availability_status is not None else True,
+                        'no_mental_health_disorder_status': no_mental_health_disorder_status if no_mental_health_disorder_status is not None else True,
+                        'no_substance_use_status': no_substance_use_status if no_substance_use_status is not None else True,
+                        'substance_use_details': substance_use_details,
+                        'no_geographic_exposure_risk': no_geographic_exposure_risk if no_geographic_exposure_risk is not None else True,
+                        'geographic_exposure_risk_details': geographic_exposure_risk_details,
+                    }.items() if v is not None})
+                    # Apply patch to PatientInfo (suppress signal-triggering save)
+                    for _field, _val in _patch.items():
+                        setattr(patient_info, _field, _val)
+                    patient_info.save()
                     
                     created_count += 1
                     logger.info(f"Successfully imported patient {fhir_patient_id} ({person.person_id}) with {measurement_id - (last_measurement.measurement_id + 1 if last_measurement else 1)} measurements (dates converted to timezone-aware UTC)")
@@ -1409,3 +1517,82 @@ def auth_test(request):
         return Response({'status': 'ok', 'step': step, 'user': str(user)})
     except Exception as e:
         return Response({'status': 'error', 'step': step, 'error': str(e), 'traceback': tb.format_exc()}, status=500)
+
+# =============================================================================
+# OMOP clinical event ViewSets
+# =============================================================================
+
+class _OmopFilterMixin:
+    """Shared queryset filtering by person_id query param."""
+    def get_queryset(self):
+        qs = super().get_queryset()
+        person_id = self.request.query_params.get('person_id')
+        if person_id:
+            qs = qs.filter(person_id=person_id)
+        return qs
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ConditionOccurrenceViewSet(_OmopFilterMixin, viewsets.ModelViewSet):
+    serializer_class = ConditionOccurrenceSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = ConditionOccurrence.objects.all()
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class DrugExposureViewSet(_OmopFilterMixin, viewsets.ModelViewSet):
+    serializer_class = DrugExposureSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = DrugExposure.objects.all()
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class MeasurementViewSet(_OmopFilterMixin, viewsets.ModelViewSet):
+    serializer_class = MeasurementSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Measurement.objects.all()
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ObservationViewSet(_OmopFilterMixin, viewsets.ModelViewSet):
+    serializer_class = ObservationSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Observation.objects.all()
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ProcedureOccurrenceViewSet(_OmopFilterMixin, viewsets.ModelViewSet):
+    serializer_class = ProcedureOccurrenceSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = ProcedureOccurrence.objects.all()
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class EpisodeViewSet(_OmopFilterMixin, viewsets.ModelViewSet):
+    serializer_class = EpisodeSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Episode.objects.all()
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class EpisodeEventViewSet(viewsets.ModelViewSet):
+    serializer_class = EpisodeEventSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        episode_id = self.request.query_params.get('episode_id')
+        qs = EpisodeEvent.objects.all()
+        if episode_id:
+            qs = qs.filter(episode_id=episode_id)
+        return qs
+
+
+# =============================================================================
+# HealthTree parity ViewSets
+# =============================================================================
+
+@method_decorator(csrf_exempt, name='dispatch')
+class PatientDocumentViewSet(_OmopFilterMixin, viewsets.ModelViewSet):
+    serializer_class = PatientDocumentSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = PatientDocument.objects.all()

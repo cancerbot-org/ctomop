@@ -1,6 +1,11 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from omop_core.models import PatientInfo, Person
+from omop_core.models import (
+    PatientInfo, Person,
+    ConditionOccurrence, DrugExposure, Measurement, Observation, ProcedureOccurrence,
+    PatientDocument,
+)
+from omop_oncology.models import Episode, EpisodeEvent
 from datetime import date
 
 
@@ -86,3 +91,58 @@ class PatientInfoSerializer(serializers.ModelSerializer):
         if 'treatment_refractory_status' in validated_data:
             instance.treatment_refractory_status = validated_data.pop('treatment_refractory_status')
         return super().update(instance, validated_data)
+
+# ---------------------------------------------------------------------------
+# OMOP clinical event serializers
+# ---------------------------------------------------------------------------
+
+class ConditionOccurrenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConditionOccurrence
+        fields = '__all__'
+
+
+class DrugExposureSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DrugExposure
+        fields = '__all__'
+
+
+class MeasurementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Measurement
+        fields = '__all__'
+
+
+class ObservationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Observation
+        fields = '__all__'
+
+
+class ProcedureOccurrenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProcedureOccurrence
+        fields = '__all__'
+
+
+class EpisodeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Episode
+        fields = '__all__'
+
+
+class EpisodeEventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EpisodeEvent
+        fields = '__all__'
+
+
+# ---------------------------------------------------------------------------
+# HealthTree parity serializers
+# ---------------------------------------------------------------------------
+
+class PatientDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PatientDocument
+        fields = '__all__'

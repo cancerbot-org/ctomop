@@ -42,3 +42,82 @@ api.interceptors.response.use(
 );
 
 export default api;
+// ---------------------------------------------------------------------------
+// OMOP write API helpers
+// ---------------------------------------------------------------------------
+
+export const omopApi = {
+  // OMOP clinical event tables (filter by ?person_id=N)
+  conditions: {
+    list: (personId: number) => api.get(`/conditions/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/conditions/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/conditions/${id}/`, data),
+    delete: (id: number) => api.delete(`/conditions/${id}/`),
+  },
+  drugExposures: {
+    list: (personId: number) => api.get(`/drug-exposures/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/drug-exposures/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/drug-exposures/${id}/`, data),
+    delete: (id: number) => api.delete(`/drug-exposures/${id}/`),
+  },
+  measurements: {
+    list: (personId: number) => api.get(`/measurements/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/measurements/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/measurements/${id}/`, data),
+    delete: (id: number) => api.delete(`/measurements/${id}/`),
+  },
+  observations: {
+    list: (personId: number) => api.get(`/observations/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/observations/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/observations/${id}/`, data),
+  },
+  procedures: {
+    list: (personId: number) => api.get(`/procedures/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/procedures/', data),
+  },
+  episodes: {
+    list: (personId: number) => api.get(`/episodes/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/episodes/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/episodes/${id}/`, data),
+  },
+
+  // HealthTree parity tables
+  patientConditions: {
+    list: (personId: number) => api.get(`/patient-conditions/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/patient-conditions/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/patient-conditions/${id}/`, data),
+    delete: (id: number) => api.delete(`/patient-conditions/${id}/`),
+  },
+  therapyLines: {
+    list: (personId: number) => api.get(`/therapy-lines/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/therapy-lines/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/therapy-lines/${id}/`, data),
+    delete: (id: number) => api.delete(`/therapy-lines/${id}/`),
+  },
+  medications: {
+    list: (therapyLineId: number) => api.get(`/medications/?therapy_line_id=${therapyLineId}`),
+    create: (data: Record<string, unknown>) => api.post('/medications/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/medications/${id}/`, data),
+    delete: (id: number) => api.delete(`/medications/${id}/`),
+  },
+  patientProcedures: {
+    list: (personId: number) => api.get(`/patient-procedures/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/patient-procedures/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/patient-procedures/${id}/`, data),
+    delete: (id: number) => api.delete(`/patient-procedures/${id}/`),
+  },
+  documents: {
+    list: (personId: number) => api.get(`/documents/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/documents/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/documents/${id}/`, data),
+    delete: (id: number) => api.delete(`/documents/${id}/`),
+  },
+  sideEffects: {
+    list: (personId: number) => api.get(`/side-effects/?person_id=${personId}`),
+    create: (data: Record<string, unknown>) => api.post('/side-effects/', data),
+    update: (id: number, data: Record<string, unknown>) => api.patch(`/side-effects/${id}/`, data),
+  },
+  trialMatches: {
+    list: (personId: number) => api.get(`/trial-matches/?person_id=${personId}`),
+  },
+};
