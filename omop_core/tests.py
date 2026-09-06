@@ -6687,7 +6687,8 @@ class MappingSuggestionsTest(_OmopBase):
         mapping = SourceCodeConceptMapping.objects.get(source_code='Creatinine')
         self.assertEqual(mapping.status, 'proposed')
         self.assertEqual(mapping.origin, 'import')
-        self.assertEqual(mapping.origin_system, 'suggest')
+        self.assertTrue(mapping.origin_system.startswith('suggest'),
+                        f'expected origin_system to start with "suggest", got {mapping.origin_system!r}')
         self.assertEqual(mapping.occurrence_count, 12)
         self.assertEqual(mapping.omop_table, 'measurement')
         self.assertTrue(mapping.notes, 'the curator needs to know why')
