@@ -1040,7 +1040,17 @@ export default function CodeMappingPage() {
         </div>
 
         <div className="mb-4 flex justify-end">
-          <section aria-label="Suggestion accuracy" className="flex divide-x rounded-md border border-slate-200 bg-slate-50 text-right text-xs">
+          <section aria-label="Suggestion accuracy" className="flex flex-wrap divide-x rounded-md border border-slate-200 bg-slate-50 text-right text-xs">
+            {([
+              ['Approved', selectedAccuracy?.approved],
+              ['Rejected', selectedAccuracy?.rejected],
+              ['Other destination', selectedAccuracy?.overridden],
+            ] as const).map(([label, value]) => (
+              <div key={label} className="px-3 py-2">
+                <div className="font-medium text-slate-500">{label}</div>
+                <div className="text-sm font-semibold text-slate-900">{value ?? 0}</div>
+              </div>
+            ))}
             {([['Precision', selectedAccuracy?.precision], ['Recall', selectedAccuracy?.recall], ['F1', selectedAccuracy?.f1]] as const).map(([label, value]) => (
               <div key={label} className="px-3 py-2">
                 <div className="font-medium text-slate-500">{label}</div>
@@ -1048,7 +1058,7 @@ export default function CodeMappingPage() {
               </div>
             ))}
             <a href="/code-mappings/accuracy" className="px-3 py-2 text-left font-medium text-slate-700 underline hover:text-slate-950">
-              {selectedAccuracy?.model_version ? `Model ${selectedAccuracy.model_version}` : "Accuracy history"}
+              History
             </a>
           </section>
         </div>
