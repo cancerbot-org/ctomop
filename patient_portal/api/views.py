@@ -8872,14 +8872,22 @@ def _upsert_source_code_mapping(concept, data, user, mapping=None):
     # Preserve the first curator disposition of a machine suggestion.  The
     # proposed target is immutable evidence; target_concept may later be edited
     # as part of normal curation and must not rewrite model-quality history.
-    if (
-        was_proposed
-        and mapping.suggested_target_concept_id
-        and not mapping.suggestion_outcome
-    ):
+    # Older staging rows can still carry the pre-versioning ``Suggest``
+    # provenance if a deployment missed the data migration.  Do not make a
+    # curator's current review depend on that historical repair: capture the
+    # target that was on the proposed row and version it atomically here.
+    is_suggestion = mapping is not None and mapping.origin_system.lower().startswith('suggest')
+    if was_proposed and is_suggestion and not mapping.suggestion_outcome:
+        original_target_id = mapping.suggested_target_concept_id or mapping.target_concept_id
+        if not mapping.suggestion_model_version:
+            values['suggestion_model_version'] = 'v0.1'
+        if mapping.origin_system.lower() == 'suggest':
+            values['origin_system'] = 'suggest v0.1'
+        if original_target_id and not mapping.suggested_target_concept_id:
+            values['suggested_target_concept_id'] = original_target_id
         if status_value == 'approved':
             values['suggestion_outcome'] = (
-                'accepted' if concept and concept.concept_id == mapping.suggested_target_concept_id
+                'accepted' if concept and concept.concept_id == original_target_id
                 else 'overridden'
             )
         elif status_value == 'rejected':
