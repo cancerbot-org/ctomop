@@ -26,7 +26,7 @@ export default function CodeMappingAccuracyPage() {
     {error && <p className="mt-4 text-sm text-red-700">{error}</p>}
     <div className="mt-5 overflow-hidden rounded-md border border-slate-200 bg-white"><table className="w-full text-left text-sm">
       <thead className="bg-slate-100 text-xs uppercase text-slate-600"><tr>{["Model", "Suggestions", "Approved", "Rejected", "Other destination", "Precision", "Recall", "F1"].map(h => <th key={h} className="px-3 py-3">{h}</th>)}</tr></thead>
-      <tbody>{models.map(model => <tr key={model.model_version} className="border-t border-slate-200"><td className="px-3 py-3 font-medium">{model.model_version}</td><td className="px-3 py-3">{model.suggestions}</td><td className="px-3 py-3">{model.approved}</td><td className="px-3 py-3">{model.rejected}</td><td className="px-3 py-3">{model.overridden}</td><td className="px-3 py-3">{metric(model.precision)}</td><td className="px-3 py-3">{metric(model.recall)}</td><td className="px-3 py-3">{metric(model.f1)}</td></tr>)}</tbody>
+      <tbody>{models.map(model => <tr key={model.model_version} className="border-t border-slate-200"><td className="px-3 py-3 font-medium">Suggest {model.model_version}</td><td className="px-3 py-3">{model.suggestions}</td><td className="px-3 py-3">{model.approved}</td><td className="px-3 py-3">{model.rejected}</td><td className="px-3 py-3">{model.overridden}</td><td className="px-3 py-3">{metric(model.precision)}</td><td className="px-3 py-3">{metric(model.recall)}</td><td className="px-3 py-3">{metric(model.f1)}</td></tr>)}</tbody>
     </table></div>
   </main></div>;
 }
