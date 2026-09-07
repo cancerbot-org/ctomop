@@ -20163,6 +20163,7 @@ class CodeMappingApiTest(TestCase):
         self.assertIn('NDC', {v['vocabulary_id'] for v in by_domain['Drug']})
         self.assertNotIn('NDC', {v['vocabulary_id'] for v in by_domain['Measurement']})
         self.assertIn('LOINC', {v['vocabulary_id'] for v in by_domain['Measurement']})
+        self.assertIn('CIEL', {v['vocabulary_id'] for v in by_domain['Measurement']})
 
     def test_reference_destination_vocabularies_carry_tabs(self):
         self.client.force_authenticate(user=self.staff)
