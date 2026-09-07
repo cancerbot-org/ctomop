@@ -11,6 +11,7 @@ import logging
 import math
 import statistics
 from collections import defaultdict
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import date, datetime, timedelta
 from django.db import models
 from django.db.models import DateTimeField, Q
@@ -21,6 +22,7 @@ from omop_core.models import (
     Person, PatientRecord, ConditionOccurrence, Concept, ConceptAncestor,
     Measurement, Observation, DrugExposure, Location, ProcedureOccurrence,
     Death, ConceptRelationship, PERSON_YEAR_PLACEHOLDERS,
+    format_language_skills,
 )
 from omop_core.services.concept_cache import concept_by_id as _cc_by_id, concept_by_loinc as _cc_by_loinc
 from omop_core.services.mappings import (
@@ -229,6 +231,11 @@ _OMOP_DERIVED_FIELDS = [
 PATIENT_RECORD_OMOP_MAPPED_FIELDS = frozenset(_OMOP_DERIVED_FIELDS) | frozenset({
     'date_of_birth', 'gender', 'race', 'ethnicity', 'languages_skills',
     'country', 'region', 'city', 'postal_code', 'latitude', 'longitude',
+    # Flattened language capabilities (#827). Derived from PersonLanguageSkill
+    # by _flatten_language_capabilities, so they are read-only over the API:
+    # a PATCH would be silently overwritten by the next refresh.
+    'english_speak', 'english_read', 'english_write', 'english_understand',
+    'spanish_speak', 'spanish_read', 'spanish_write', 'spanish_understand',
     # These are populated by section extractors but are not cleared before a
     # refresh (mostly because they carry structured / negative findings). They
     # nevertheless originate from OMOP facts and must not become writable
@@ -525,6 +532,21 @@ _ASSERTION_FIELDS = {
     '75618-3': ('no_mental_health_disorder_status', 'inverse_boolean'),
     '74204-0': ('no_substance_use_status', 'inverse_boolean'),
     '82593-5': ('no_geographic_exposure_risk', 'inverse_boolean'),
+    # Locally minted (#785, migrations 0180/0181). No Athena code says which
+    # drug class the disease is refractory to, so these are the curated answer
+    # to that question. _get_cll_data still infers the same fields from drug
+    # exposures; a row here supersedes that — see _CURATED_REFRACTORY_CODES.
+    'hko:btk-inhibitor-refractory': ('btk_inhibitor_refractory', 'boolean'),
+    'hko:bcl2-inhibitor-refractory': ('bcl2_inhibitor_refractory', 'boolean'),
+}
+
+# The curated codes above, by the field each answers. _get_cll_data runs after
+# _get_assertion_data in the extractor list and assigns field by field, so
+# without this check its drug-exposure inference would overwrite an explicitly
+# curated answer on every refresh.
+_CURATED_REFRACTORY_CODES = {
+    'btk_inhibitor_refractory': 'hko:btk-inhibitor-refractory',
+    'bcl2_inhibitor_refractory': 'hko:bcl2-inhibitor-refractory',
 }
 
 _ASSERTION_DETAIL_FIELDS = {
@@ -836,6 +858,7 @@ def refresh_patient_record(person: Person) -> PatientRecord:
         patient_info.derivation_version = DERIVATION_VERSION
         patient_info.derived_at = timezone.now()
 
+        _clear_overflowing_decimal_fields(patient_info)
         patient_info.save()
         # PatientRecord.save retains a few legacy calculations (notably BMI).
         # Reapply active formulas with a direct update so an approved formula is
@@ -854,9 +877,88 @@ def refresh_patient_record(person: Person) -> PatientRecord:
         return patient_info
 
 
+def _clear_overflowing_decimal_fields(patient_info: PatientRecord) -> None:
+    """Leave an oversized derived decimal unset instead of losing the refresh.
+
+    PostgreSQL reports only a generic numeric overflow at save time. Checking
+    the integer portion against each model column's declared precision lets the
+    remaining derived fields persist and identifies the bad projection value in
+    logs. Values are checked after rounding to the column's stored scale, since
+    a near-limit fraction can otherwise round up into an overflow.
+    """
+    for field in PatientRecord._meta.concrete_fields:
+        if not isinstance(field, models.DecimalField):
+            continue
+        value = getattr(patient_info, field.attname)
+        if value is None:
+            continue
+        try:
+            decimal_value = Decimal(str(value))
+            stored_value = decimal_value.quantize(
+                Decimal(1).scaleb(-field.decimal_places),
+                rounding=ROUND_HALF_UP,
+            )
+        except (InvalidOperation, ValueError):
+            continue
+        integer_digits = field.max_digits - field.decimal_places
+        if not stored_value.is_finite() or stored_value.adjusted() + 1 > integer_digits:
+            logger.warning(
+                'Skipping overflowing derived value for person_id=%s field=%s value=%r '
+                '(max_digits=%s decimal_places=%s)',
+                patient_info.person_id, field.name, value,
+                field.max_digits, field.decimal_places,
+            )
+            setattr(patient_info, field.attname, None)
+
+
 # ---------------------------------------------------------------------------
 # Section extractors — each returns a dict of {field_name: value}
 # ---------------------------------------------------------------------------
+
+
+# Alias -> the SNOMED code for that language. An alias table in server code, not
+# a name lookup: resolution is still by (vocabulary_id, concept_code), which is
+# the rule in docs/vocabularies.md and the defect in #812. The aliases match the
+# prefixes on the flattened PatientRecord columns so the two cannot drift apart.
+LANGUAGE_ALIASES = {
+    'english': '297487008',
+    'spanish': '297510001',
+}
+
+
+def _flatten_language_capabilities(capabilities_by_code):
+    """Unroll {language: [capability, ...]} into the eight boolean columns.
+
+    Three-valued, and the third value carries the weight. A language absent from
+    the summary was never asked about, so its four columns stay None; a language
+    present was asked about, so capabilities it does not list are False. That
+    line is drawn per language rather than per person on purpose: knowing
+    somebody speaks English says nothing about whether anyone asked them about
+    Spanish, and treating it as an answer would manufacture negatives that a
+    trial filter would then act on.
+
+    Returns every one of the eight keys on every call, including None ones, so
+    that clearing a person's languages resets the columns instead of leaving
+    stale True values behind.
+
+    Keyed on concept_code, not concept_name. Matching on the name meant a SNOMED
+    release renaming "English language" blanked all four English columns while
+    the rows sat there intact -- silently, and in the direction that makes a
+    patient look unasked rather than erroring. LANGUAGE_ALIASES is the same
+    table set_language_skills writes through, so the reader and the writer
+    identify a language the same way.
+    """
+    from omop_core.models import SKILL_LEVEL_CHOICES
+
+    capabilities = [value for value, _label in SKILL_LEVEL_CHOICES]
+    flattened = {}
+    for prefix, concept_code in LANGUAGE_ALIASES.items():
+        held = capabilities_by_code.get(concept_code)
+        for capability in capabilities:
+            flattened[f'{prefix}_{capability}'] = (
+                None if held is None else capability in held
+            )
+    return flattened
 
 def _get_demographics(person: Person, snapshot: OmopSnapshot = None) -> dict:
     data = {}
@@ -900,13 +1002,21 @@ def _get_demographics(person: Person, snapshot: OmopSnapshot = None) -> dict:
     elif person.ethnicity_source_value and person.ethnicity_source_value != 'unknown':
         data['ethnicity'] = person.ethnicity_source_value
 
-    lang_skills = person.language_skills.select_related('language_concept').all()
-    if lang_skills.exists():
-        parts = [
-            f'{ls.language_concept.concept_name}: {ls.skill_level}'
-            for ls in lang_skills
-        ]
-        data['languages_skills'] = ', '.join(parts)
+    # One entry per language with its capabilities grouped, not one per row.
+    # Since #810 a person holds a row per capability, so the old per-row join
+    # repeated the language name up to four times: "English language: speak,
+    # English language: read, ...". Shares its formatter with
+    # PatientRecord.get_languages_display so the two cannot disagree.
+    # Fetched once and shared: the display string keys on concept_name and the
+    # flattened columns key on concept_code, and querying for each put this
+    # derivation over its query budget.
+    language_rows = list(
+        person.language_skills.select_related('language_concept').all())
+    language_summary = person.get_language_skills_summary(language_rows)
+    if language_summary:
+        data['languages_skills'] = format_language_skills(language_summary)
+    data.update(_flatten_language_capabilities(
+        person.get_language_capabilities_by_code(language_rows)))
 
     data.update({
         'email': person.email,
@@ -947,7 +1057,16 @@ def _get_location_data(person: Person, snapshot: OmopSnapshot = None) -> dict:
 # Keyed by lowercased concept name; only exact matches are remapped, so
 # unrelated conditions pass through untouched.
 _DISEASE_ALIASES = {
-    'myeloma': 'multiple myeloma',
+    'myeloma': 'Multiple Myeloma',
+    'myeloma (disorder)': 'Multiple Myeloma',
+    'multiple myeloma': 'Multiple Myeloma',
+    'multiple myeloma (disorder)': 'Multiple Myeloma',
+    'follicular lymphoma': 'Follicular Lymphoma',
+    'follicular lymphoma (disorder)': 'Follicular Lymphoma',
+    'chronic lymphocytic leukemia': 'Chronic Lymphocytic Leukemia',
+    'chronic lymphocytic leukemia (disorder)': 'Chronic Lymphocytic Leukemia',
+    'mantle cell lymphoma': 'Mantle Cell Lymphoma',
+    'mantle cell lymphoma (disorder)': 'Mantle Cell Lymphoma',
     # Breast cancer — all common OMOP/SNOMED surface forms → single canonical title
     'breast cancer': 'Breast Cancer',
     'breast cancer (disorder)': 'Breast Cancer',
@@ -1170,7 +1289,10 @@ def _get_treatment_data(person: Person, snapshot: OmopSnapshot = None) -> dict:
     if current_meds:
         data['concomitant_medications'] = ', '.join(current_meds)
 
-    # Try Episode-based therapy line grouping first
+    # Therapy-line projections have one durable source of truth: persisted
+    # Episode/EpisodeEvent groups.  Refresh must not invent an in-memory line
+    # from DrugExposure rows; ARTEMIS (or another episode producer) owns that
+    # transformation and persists it before this read model is refreshed.
     try:
         from omop_oncology.models import Episode
         episodes = Episode.objects.filter(person=person).select_related(
@@ -1180,24 +1302,9 @@ def _get_treatment_data(person: Person, snapshot: OmopSnapshot = None) -> dict:
     except Exception:
         pass
 
-    # No Episodes persisted yet — derive from the single LOT inference engine in
-    # read-only (dry_run) mode, so the same grouping algorithm the enrich/import
-    # steps use to *persist* Episodes also drives derivation. No OMOP rows are
-    # written here; refresh_patient_record stays read-only.
-    if not drug_exposures:
-        return data
-
-    from omop_core.services.lot_inference_service import infer_lot_for_person
-    # The snapshot already has the rows LOT inference needs. Reuse them rather
-    # than querying DrugExposure and ProcedureOccurrence a second time.
-    lots = infer_lot_for_person(
-        person,
-        force=True,
-        dry_run=True,
-        exposures=drug_exposures,
-        procedures=snapshot.procedures,
-    )
-    _apply_inferred_lots(data, lots, drug_exposures=drug_exposures)
+    # Deliberately leave all first-/second-/later-line fields absent when no
+    # persisted episode exists.  refresh_patient_record clears those fields
+    # first, so this also removes stale projections after an Episode is deleted.
     return data
 
 
@@ -1564,6 +1671,10 @@ def _get_treatment_data_from_episodes(person, data, episodes, drug_exposures, sn
 
     for episode in episodes:
         event_ids = ee_by_episode.get(episode.episode_id, [])
+        # An Episode only represents a therapy line once its backing events are
+        # persisted.  Do not project a dangling header row into PatientRecord.
+        if not event_ids:
+            continue
         drugs_in_episode = [de_by_id[eid] for eid in event_ids if eid in de_by_id]
 
         drug_name_set = {
@@ -2127,10 +2238,11 @@ def _get_biomarker_data(person: Person, snapshot: OmopSnapshot = None) -> dict:
     def _receptor_status(measurement):
         """Return a normalized receptor status from a Measurement row.
 
-        Recognizes positive/negative/equivocal explicitly; any other non-empty
-        value is preserved (upper-cased) rather than dropped, so clinically
-        meaningful results such as a HER2 'Equivocal' (IHC 2+) reading are not
-        silently lost. Returns None only when no value is present at all.
+        Returns LOINC answer list LL2160-7 display names: ``Positive``,
+        ``Negative``, ``Equivocal``.  Any other non-empty value is preserved
+        (title-cased) rather than dropped, so clinically meaningful results
+        such as a HER2 'Equivocal' (IHC 2+) reading are not silently lost.
+        Returns None only when no value is present at all.
         """
         raw = None
         if measurement.value_as_concept:
@@ -2143,12 +2255,12 @@ def _get_biomarker_data(person: Person, snapshot: OmopSnapshot = None) -> dict:
             return None
         s = raw.strip().lower()
         if 'positive' in s:
-            return 'POSITIVE'
+            return 'Positive'
         if 'negative' in s:
-            return 'NEGATIVE'
+            return 'Negative'
         if 'equivocal' in s:
-            return 'EQUIVOCAL'
-        return raw.strip().upper()
+            return 'Equivocal'
+        return raw.strip().title()
 
     er_measurement = next((m for m in measurements if _measurement_code(m) == '16112-5'), None)
     if er_measurement:
@@ -2170,9 +2282,9 @@ def _get_biomarker_data(person: Person, snapshot: OmopSnapshot = None) -> dict:
 
     if 'estrogen_receptor_status' in data and 'progesterone_receptor_status' in data and 'her2_status' in data:
         data['tnbc_status'] = (
-            data['estrogen_receptor_status'] == 'NEGATIVE'
-            and data['progesterone_receptor_status'] == 'NEGATIVE'
-            and data['her2_status'] == 'NEGATIVE'
+            data['estrogen_receptor_status'] == 'Negative'
+            and data['progesterone_receptor_status'] == 'Negative'
+            and data['her2_status'] == 'Negative'
         )
 
     def _first_m(concept_code):
@@ -3396,9 +3508,14 @@ def _get_cll_data(person: Person, snapshot: OmopSnapshot = None) -> dict:
         for o in observations
     )
 
-    if had_btk:
+    # A curated assertion answers the question directly. The inference is a
+    # fallback for records that have none: it means "took the drug and
+    # progressed at some point", not "this drug failed", so it must not
+    # overwrite a clinician's explicit answer on the next derivation.
+    curated_codes = {_observation_code(o) for o in observations}
+    if had_btk and _CURATED_REFRACTORY_CODES['btk_inhibitor_refractory'] not in curated_codes:
         data['btk_inhibitor_refractory'] = has_progression
-    if had_bcl2:
+    if had_bcl2 and _CURATED_REFRACTORY_CODES['bcl2_inhibitor_refractory'] not in curated_codes:
         data['bcl2_inhibitor_refractory'] = has_progression
 
     # ALC doubling time — filter from snapshot by LOINC concept code 731-0
@@ -3648,7 +3765,7 @@ def _compute_derived_fields(patient_info: PatientRecord) -> None:
     if er is not None or pr is not None:
         if (er and 'positive' in er.lower()) or (pr and 'positive' in pr.lower()):
             patient_info.hr_status = 'HR+'
-        elif er == 'NEGATIVE' and pr == 'NEGATIVE':
+        elif er == 'Negative' and pr == 'Negative':
             patient_info.hr_status = 'HR-'
 
     # Metastatic status — True when M stage is M1
@@ -4054,3 +4171,121 @@ def _compute_lymphocyte_doubling_time(alc_points):
     months = days / 30.44
     ldt = months * math.log(2) / math.log(float(last_alc) / float(first_alc))
     return max(1, int(round(ldt)))
+
+
+# ---------------------------------------------------------------------------
+# Language skills (#808)
+# ---------------------------------------------------------------------------
+
+class LanguageSkillError(ValueError):
+    """A language-skills payload the caller must fix."""
+
+
+def set_language_skills(person, skills_by_alias):
+    """Replace a person's capabilities for each language named.
+
+    ``skills_by_alias`` maps an alias in LANGUAGE_ALIASES to the list of
+    capabilities the person has in it. Replace, not merge: the listed
+    capabilities become exactly what is stored for that language.
+
+    A language absent from the payload is left alone. That is what keeps "not
+    asked" distinguishable from "asked and has none" for the *other* language --
+    a caller setting English must not silently assert something about Spanish.
+
+    An empty list clears the language back to unknown rather than recording that
+    the person has no capability in it. The data model has no way to say the
+    second: capability lives in the presence of a row, so no rows means no
+    answer, and the flattened columns derive NULL either way. Storing a sentinel
+    row to carry the difference would put a value in language_concept that is
+    not a language.
+
+    Returns the number of rows created and removed. Raises LanguageSkillError
+    for an unknown alias, an unknown capability, or a missing language concept.
+    """
+    unknown_aliases = [a for a in skills_by_alias if a not in LANGUAGE_ALIASES]
+    if unknown_aliases:
+        raise LanguageSkillError(
+            f"unknown language {unknown_aliases[0]!r}; expected one of "
+            f"{sorted(LANGUAGE_ALIASES)}")
+
+    return set_language_skills_by_code(
+        person,
+        {LANGUAGE_ALIASES[alias]: capabilities
+         for alias, capabilities in skills_by_alias.items()},
+        labels={LANGUAGE_ALIASES[alias]: alias for alias in skills_by_alias},
+    )
+
+
+def set_language_skills_by_code(person, skills_by_code, labels=None):
+    """Replace a person's capabilities, addressing each language by SNOMED code.
+
+    The general form. set_language_skills is the two-language alias wrapper the
+    API uses; management commands and anything reaching the other 876 SNOMED
+    languages come through here.
+
+    ``labels`` optionally maps a code to a friendlier name for error messages,
+    so the API can say "english" where the CLI says the code.
+
+    Atomic, and deliberately so: replacing a language is a delete followed by a
+    create, and a payload naming two languages used to write the first before
+    rejecting the second. The caller got a 400 describing a write that had
+    half-happened, and a failure between the delete and the create left
+    capabilities removed and not restored.
+    """
+    from django.db import transaction
+
+    from omop_core.models import Concept, PersonLanguageSkill, SKILL_LEVEL_CHOICES
+
+    labels = labels or {}
+    valid_capabilities = {value for value, _label in SKILL_LEVEL_CHOICES}
+    created = removed = 0
+
+    with transaction.atomic():
+        for concept_code, capabilities in skills_by_code.items():
+            label = labels.get(concept_code, concept_code)
+
+            if not isinstance(capabilities, (list, tuple)):
+                raise LanguageSkillError(
+                    f"{label}: expected a list of capabilities, got "
+                    f"{type(capabilities).__name__}")
+
+            unknown = [c for c in capabilities if c not in valid_capabilities]
+            if unknown:
+                raise LanguageSkillError(
+                    f"{label}: unknown capabilities {unknown}; expected any of "
+                    f"{sorted(valid_capabilities)}")
+
+            # By (vocabulary_id, concept_code) and constrained to the Language
+            # domain. Never by concept_name: docs/vocabularies.md:216, and the
+            # defect this replaces (#812) matched names across every loaded
+            # vocabulary, so "English" could resolve to anything so named.
+            concept = Concept.objects.filter(
+                vocabulary_id='SNOMED', concept_code=concept_code,
+                domain_id='Language',
+            ).first()
+            if concept is None:
+                # SNOMED loads separately from migrations. Refusing beats writing
+                # the row against a concept that is not there.
+                raise LanguageSkillError(
+                    f"{label}: SNOMED concept {concept_code} is not a loaded "
+                    f"Language-domain concept, so it cannot be recorded")
+
+            wanted = set(capabilities)
+            existing = {
+                row.skill_level: row
+                for row in PersonLanguageSkill.objects.filter(
+                    person=person, language_concept=concept)
+            }
+
+            for capability in sorted(set(existing) - wanted):
+                existing[capability].delete()
+                removed += 1
+            for capability in sorted(wanted - set(existing)):
+                # Not bulk_create: save() resolves skill_concept and makes the
+                # person's first language their primary one, and bulk_create runs
+                # neither.
+                PersonLanguageSkill.objects.create(
+                    person=person, language_concept=concept, skill_level=capability)
+                created += 1
+
+    return created, removed

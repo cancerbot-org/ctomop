@@ -292,9 +292,9 @@ export default function PatientDetail({
           d.ecog_performance_status = String(d.ecog_performance_status);
 
         if (d.estrogen_receptor_status && d.progesterone_receptor_status && d.her2_status) {
-          const erNeg = ["Negative", "ER-"].includes(d.estrogen_receptor_status);
-          const prNeg = ["Negative", "PR-"].includes(d.progesterone_receptor_status);
-          const her2Neg = ["Negative", "HER2-"].includes(d.her2_status);
+          const erNeg = d.estrogen_receptor_status === "Negative";
+          const prNeg = d.progesterone_receptor_status === "Negative";
+          const her2Neg = d.her2_status === "Negative";
           d.tnbc_status = erNeg && prNeg && her2Neg;
         }
 
@@ -482,6 +482,21 @@ export default function PatientDetail({
   }, [doSave]);
 
    
+  // Re-read the record from the server. Used where an edit lands somewhere the
+  // form does not own -- wearable imports, and language skills, whose eight
+  // flattened columns are derived from PersonLanguageSkill rows rather than
+  // patched directly.
+  const reloadPatientInfo = useCallback(() => {
+    if (!personId) return;
+    api.get(`/patient-info/${personId}/`)
+      .then((res) => {
+        const d = res.data.patient_info;
+        setPatientInfo(d);
+        setEditedInfo(d);
+      })
+      .catch(() => {});
+  }, [personId]);
+
   const handleFieldChange = useCallback((field: string, value: unknown) => {
     const base = pendingDataRef.current?.info ?? editedInfoRef.current;
     const updated = { ...base, [field]: value };
@@ -490,7 +505,7 @@ export default function PatientDetail({
       const er = String(field === "estrogen_receptor_status" ? value : updated.estrogen_receptor_status ?? "");
       const pr = String(field === "progesterone_receptor_status" ? value : updated.progesterone_receptor_status ?? "");
       const her2 = String(field === "her2_status" ? value : updated.her2_status ?? "");
-      const neg = (v: string) => ["Negative", "ER-", "PR-", "HER2-"].includes(v);
+      const neg = (v: string) => v === "Negative";
       if (neg(er) && neg(pr) && neg(her2)) updated.tnbc_status = true;
       else if (er || pr || her2) updated.tnbc_status = false;
     }
@@ -670,8 +685,8 @@ export default function PatientDetail({
     0: "Keep patient details up to date for accurate personalisation.",
     1: "Disease-specific clinical information and genetic details.",
     2: "Therapy history, treatment lines, and planned therapies.",
-    3: "Blood counts, electrolytes, coagulation, and cardiac markers.",
-    4: "Chemistry panel, liver function tests, and other lab markers.",
+    3: "Blood counts and differential.",
+    4: "Chemistry, liver function, coagulation, cardiac and tumour markers.",
     ...(allergiesIdx >= 0 ? { [allergiesIdx]: "Known allergies and intolerances from your health records." } : {}),
     [behaviorIdx]: "Lifestyle, socioeconomic, and behavioural health factors.",
     [wearablesIdx]: "30 day summaries derived from synced OMOP data.",
@@ -821,7 +836,6 @@ export default function PatientDetail({
                     editedName={editedName}
                     onNameChange={handleNameChange}
                     onZipcodeChange={handleZipcodeChange}
-                    diseaseType={getDiseaseType()}
                   />
                 )}
                 {activeTab === 1 && (
@@ -860,8 +874,8 @@ export default function PatientDetail({
                 {activeTab === 3 && <BloodTab formData={editedInfo} onChange={handleFieldChange} />}
                 {activeTab === 4 && <LabsTab formData={editedInfo} onChange={handleFieldChange} />}
                 {allergiesIdx >= 0 && activeTab === allergiesIdx && <AllergyList user={user ?? null} />}
-                {activeTab === behaviorIdx && <BehaviorTab formData={editedInfo} onChange={handleFieldChange} />}
-                {activeTab === wearablesIdx && <WearableTab formData={editedInfo} onChange={handleFieldChange} onRefresh={() => { if (personId) { api.get(`/patient-info/${personId}/`).then(res => { const d = res.data.patient_info; setPatientInfo(d); setEditedInfo(d); }).catch(() => {}); } }} />}
+                {activeTab === behaviorIdx && <BehaviorTab formData={editedInfo} onChange={handleFieldChange} onRefresh={reloadPatientInfo} />}
+                {activeTab === wearablesIdx && <WearableTab formData={editedInfo} onChange={handleFieldChange} onRefresh={reloadPatientInfo} />}
                 {surveysIdx >= 0 && activeTab === surveysIdx && <PatientSurveys user={user ?? null} />}
                 {omopIdx >= 0 && activeTab === omopIdx && personId && <PatientOmopTab personId={personId} />}
                 {activeCustomTab && (

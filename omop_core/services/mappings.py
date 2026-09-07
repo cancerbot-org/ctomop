@@ -90,6 +90,18 @@ LAB_FIELD_ALIAS_TO_CANONICAL = {
     'ldh':                  'ldh_u_l',
 }
 
+# Additional LOINC tests that are clinically equivalent to a PatientRecord
+# field, but whose primary write-through owner is another legacy field.  These
+# are deliberately separate from LAB_FIELD_ALIAS_TO_CANONICAL: that dictionary
+# routes writes, whereas this one permits a curator to record the equivalent
+# concept on a second read-model field without creating a second write path.
+LAB_FIELD_CONCEPT_ALIASES = {
+    # 1952-1 "Beta-2-Microglobulin [Mass/volume] in Serum or Plasma" is the
+    # broadly used serum assay.  ``beta2_microglobulin`` owns its legacy lab
+    # write-through; this CLL-facing field may also be curated against it.
+    'serum_beta2_microglobulin_level': {'1952-1'},
+}
+
 # Common unit options for fields where multiple units are used in US clinical
 # practice. The first entry is the US default. Used by the mapping UI to
 # render a unit dropdown.
@@ -229,6 +241,7 @@ THERAPY_LINE_FIELDS = frozenset(
 # remap_generic_lab_fallback for the repair.
 CONCEPT_GENERIC_LAB       = 0         # No matching concept (OMOP CDM sentinel)
 CONCEPT_LAB_TYPE          = 32856     # Lab (measurement type)
+CONCEPT_PATIENT_REPORTED_TYPE = 32865 # Patient self-report (measurement type)
 CONCEPT_EHR_TYPE          = 32817     # EHR (condition type)
 CONCEPT_TREATMENT_REGIMEN = 32531     # Treatment Regimen (episode concept)
 CONCEPT_DRUG_EXPOSURE_FIELD = 1147094  # drug_exposure_id field concept (EpisodeEvent)
@@ -319,10 +332,57 @@ WEARABLE_ARTIFACT_BOUNDS = {
 # Do not reintroduce a fallback here. The previous code used 32883 ('Survey')
 # and fell back to 32856 ('Lab'), mislabelling every wearable row's provenance
 # (#441).
-WEARABLE_TYPE_CONCEPT_ID = 32865
+WEARABLE_TYPE_CONCEPT_ID = CONCEPT_PATIENT_REPORTED_TYPE
 
 # Minimum valid days required to emit a metric (else field stays None)
 WEARABLE_MIN_VALID_DAYS = 7
+
+
+def resolve_wearable_mappings(device_type):
+    """Build metric_key → Concept from approved SourceCodeConceptMapping rows.
+
+    For Apple uploads, the SCCM source_code is the HK identifier (e.g.,
+    HKQuantityTypeIdentifierStepCount); we reverse-map through _APPLE_TYPE_MAP
+    to get the internal metric_key.
+
+    For Garmin uploads, the SCCM source_code IS the metric_key (e.g., 'steps').
+
+    There is intentionally no code-to-concept fallback. An absent SCCM row is
+    a mapping/configuration gap, not permission for the importer to revive a
+    second, invisible mapping registry in Python.
+
+    Returns:
+        dict mapping metric_key → Concept (or None if unresolvable)
+    """
+    from omop_core.models import SourceCodeConceptMapping
+
+    source_vocab = 'Apple' if device_type == 'apple' else 'Garmin'
+
+    # Query all approved mappings for this device vocabulary.
+    approved = SourceCodeConceptMapping.objects.filter(
+        source_vocabulary_id=source_vocab,
+        status='approved',
+    ).select_related('target_concept')
+
+    db_mappings = {}
+    if device_type == 'apple':
+        # Build reverse map: HK identifier → metric_key
+        from omop_core.services.wearable_parsers import _APPLE_TYPE_MAP
+        hk_to_metric = {hk_id: mkey for hk_id, mkey in _APPLE_TYPE_MAP.items()}
+        # Also handle sleep (category type, not in _APPLE_TYPE_MAP quantity map)
+        hk_to_metric['HKCategoryTypeIdentifierSleepAnalysis'] = 'sleep_duration'
+
+        for row in approved:
+            metric_key = hk_to_metric.get(row.source_code)
+            if metric_key and row.target_concept:
+                db_mappings[metric_key] = row.target_concept
+    else:
+        # Garmin: source_code == metric_key
+        for row in approved:
+            if row.target_concept:
+                db_mappings[row.source_code] = row.target_concept
+
+    return db_mappings
 
 # Activity trend thresholds: % change between first-half and second-half means
 WEARABLE_TREND_IMPROVING_PCT = 10.0
@@ -372,9 +432,11 @@ def get_gender_concept(gender_str):
 #                      test_methodology and oncotype_dx_score of one 85337-4
 #                      report, and ecog_assessment_date is the date of the
 #                      ecog_performance_status observation
-#   genuinely          btk_inhibitor_refractory and bcl2_inhibitor_refractory
-#   ambiguous          both read SNOMED 182842009; the code alone cannot say
-#                      which drug failed
+#   resolved (#785)    btk_inhibitor_refractory and bcl2_inhibitor_refractory
+#                      both read SNOMED 182842009, which cannot say which drug
+#                      class failed. Migrations 0180/0181 mint a source concept
+#                      per class and map it; the SNOMED entries below remain the
+#                      read path for records written before that.
 #
 # field → (concept_code, vocabulary_id, attributed_from_extractor)
 DERIVED_FIELD_TO_CODE = {
@@ -481,7 +543,10 @@ SUGGESTED_FIELD_CODES: dict[str, tuple[str, str]] = {
     'hiv_status':                    ('86406008',  'SNOMED'),
     'hepatitis_b_status':            ('66071002',  'SNOMED'),
     'hepatitis_c_status':            ('50711007',  'SNOMED'),
-    'preexisting_conditions':        ('161615003', 'SNOMED'),
+    # Aligned with the mapping migration 0182 seeds (#723). _build_suggestion
+    # runs unconditionally, so a different code here would show a suggestion
+    # permanently disagreeing with the field's own recorded mapping.
+    'preexisting_conditions':        ('102478008', 'SNOMED'),
     # Treatment
     'refractory_status':             ('182854000', 'SNOMED'),
     'relapse_count':                 ('263855007', 'SNOMED'),
@@ -564,7 +629,7 @@ SUGGESTED_FIELD_CODES: dict[str, tuple[str, str]] = {
     # Genomics / molecular
     'genetic_mutations':             ('55232-3',   'LOINC'),   # Genetic analysis summary panel
     'molecular_markers':             ('55232-3',   'LOINC'),   # Genetic analysis summary panel
-    'cytogenic_markers':             ('55232-3',   'LOINC'),   # Genetic analysis summary panel
+    'cytogenic_markers':             ('D002869',   'MeSH'),    # Chromosome Aberrations (#803)
     'protein_expressions':           ('85337-4',   'LOINC'),   # Gene expression panel
 
     # Demographics / profile
@@ -576,7 +641,8 @@ SUGGESTED_FIELD_CODES: dict[str, tuple[str, str]] = {
     'phone_number':                  ('42077-8',   'LOINC'),   # Phone number
     'email':                         ('76435-7',   'LOINC'),   # Telecom email
     'facility_name':                 ('69476-0',   'LOINC'),   # Facility name
-    'languages_skills':              ('46253-1',   'LOINC'),   # Preferred language
+    # Aligned with migration 0182 (#774); see the note on preexisting_conditions.
+    'languages_skills':              ('61909002',  'SNOMED'),  # Language
 
     # Behavioral
     'consent_capability':            ('405193005', 'SNOMED'),  # Ability to consent

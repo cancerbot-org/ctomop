@@ -692,6 +692,63 @@ If `remoteEntry.js` returns 500 on staging, check that `WHITENOISE_ROOT` points 
 
 ---
 
+## Copying Field Mappings Between Instances
+
+`copy_field_mappings` moves the field-mapping curation from another PRomop
+instance into this one. The curation is manual reviewer work, so it is copied
+rather than redone.
+
+```bash
+SOURCE_DATABASE_URL="postgresql://..." \
+  .venv/bin/python manage.py copy_field_mappings --dry-run
+SOURCE_DATABASE_URL="postgresql://..." \
+  .venv/bin/python manage.py copy_field_mappings
+```
+
+Destination is `DATABASE_URL`. The source is opened as a second connection
+registered at runtime (not in `settings.DATABASES`, so the test runner does not
+try to build a test database for it) and, on PostgreSQL, in a
+`default_transaction_read_only` session — the command never writes to the source.
+
+By default the command copies the two datasets loaded by the field-mapping
+screen: `FieldConceptMapping` and `FieldSynonym`. Existing rows with the same
+natural key are always overwritten. Related field-curation tables can be
+included explicitly with `--tables`:
+
+| Table | Natural key |
+|---|---|
+| `FieldConceptMapping` | `field_name` |
+| `CustomPatientField` | `field_name` (its mapping is `PROTECT`, so mappings are written first) |
+| `FieldChoice` + `FieldChoiceCode` | `(field_name, display)`; codes are replaced wholesale |
+| `FieldFormula` | `field_name` |
+| `FieldSynonym` | `(field_name, synonym_text)` |
+
+`--dry-run` rolls back, and `--prune` also deletes local rows the source lacks
+(off by default, so a copy is additive). Everything runs in one transaction
+against the local database. To migrate the entire related curation set, pass
+`--tables mappings custom_fields choices formulas synonyms`.
+
+Two things deliberately do not survive the trip:
+
+- **Row IDs.** Matching is on the natural key — the two instances number rows
+  independently.
+- **`reviewer` / `created_by`.** These point at `Identity` rows whose IDs mean a
+  different person on each instance, so they are cleared. A wrong attribution is
+  worse than none.
+
+The concept FK is **re-resolved by `(vocabulary_id, concept_code)`**, not copied
+as an id. Athena concept ids are stable across instances, but locally minted
+concepts (`Concept.source == 'HealthKey'`) are numbered per instance, so the
+same id can name a different concept on the target. A concept the target has
+not loaded leaves the mapping's concept null and logs a warning; the rest of the
+mapping still lands.
+
+Logic lives in `omop_core/services/field_curation_transfer.py`, split into
+`read_payload(using)` and `apply_payload(payload)` so the round trip is testable
+without a second test database (`tests/test_copy_field_mappings.py`).
+
+---
+
 ## Deployment
 
 - **`start.sh`** runs `python manage.py migrate` on every deploy — so migrations pushed to `main` are auto-applied on next Render deploy.
@@ -751,11 +808,68 @@ A client that defers must derive afterwards:
 
 ```
 POST /api/v1/patient-records/{person_id}/refresh/
+  202 {"person_id": 123, "task_id": "..."}
+
+GET /api/v1/derivation-status/{task_id}/
+  200 {"task_id": "...", "state": "PENDING|STARTED|SUCCESS|FAILURE", "error": null}
 ```
 
-Admin or service-token only. It does not swallow a failing derivation, unlike
-the signal path in `omop_core/signals.py`, because a 2xx over a record that did
-not re-derive would be a lie on an endpoint that exists only to derive.
+Both are admin or service-token only.
+
+`202`, not `200`: the derivation is queued on Celery and the record is not
+rebuilt yet when the POST returns. Poll the status endpoint for the outcome.
+`state` is Celery's own, and a derivation that fails reports `FAILURE` with the
+error rather than a success over a stale record — the signal path in
+`omop_core/signals.py` swallows failures, this does not.
+
+Result state lives in the Redis result backend and expires after
+`CELERY_RESULT_EXPIRES` (default 24h). An id past that, or one that was never
+issued, reads as `PENDING`, which is also what Celery reports for an id it has
+never seen.
+
+### Running the derivation
+
+`omop_core/services/derivation_jobs.py` picks how:
+
+| `CELERY_BROKER_URL` | Dispatcher | Behaviour |
+|---|---|---|
+| set | `CeleryDispatcher` | enqueues on transaction commit, worker derives |
+| empty | `InlineDispatcher` | derives in the request, before the `202` |
+
+There is deliberately no separate setting for the choice: a dispatcher that can
+disagree with the broker leaves every job queued with nothing consuming it.
+Inline is what a developer machine with no Redis gets — the wire contract is
+the same, so a client needs one path either way. Inline lets a failing
+derivation propagate instead of recording it, because the caller is still
+holding the request, so an id is only ever issued for a derivation that
+already succeeded. That is why the id itself (`inline-<signed uuid>`) is the
+completion record: a registry would be process-local, and under several
+gunicorn workers the poll would land on a process that never saw the POST. It
+is signed with SECRET_KEY so only an id the deployment issued reads SUCCESS,
+and it verifies on any worker.
+Because it holds the request, it caps the derivation with a 25s
+`statement_timeout` — the queued path gets that bound from
+`CELERY_TASK_TIME_LIMIT` instead.
+
+Tests swap in `FakeDispatcher` through `use_dispatcher(...)`; nothing needs to
+patch Celery or run it eager.
+
+Run a worker with:
+
+```bash
+celery -A ctomop worker --loglevel=info
+```
+
+The task is idempotent — derivation clears and rebuilds every field — so a
+duplicate call is extra load, not a correctness problem. That is why nothing
+deduplicates, and why `CELERY_TASK_ACKS_LATE` is safe.
+
+`CELERY_BROKER_VISIBILITY_TIMEOUT` (default 1800) must stay above
+`CELERY_TASK_TIME_LIMIT` (default 900) or Redis decides a still-running task
+was lost and hands the same job to a second worker.
+
+Only `refresh/` is async. The signal path and the bulk write still derive
+inline.
 
 ---
 

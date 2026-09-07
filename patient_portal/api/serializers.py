@@ -4,7 +4,6 @@ from omop_core.models import (
     PatientRecord, Concept, FieldConceptMapping, FieldSynonym, Person,
     ConditionOccurrence, DrugExposure, Measurement, Observation, ProcedureOccurrence,
     PatientDocument, PatientTrialEnrollment, ProvenanceRecord,
-    Survey, PatientSurveyResponse,
     StemCellTransplant, SctEligibility, PostTransformationOutcome,
     Organization, OrgTrust, OrgInvitation, GroupAccess,
     InterchangeAgreement,
@@ -57,20 +56,79 @@ class UserSerializer(serializers.ModelSerializer):
         return has_org_admin_access(obj)
 
     def get_org_accesses(self, obj):
+        """Return active org access along with the path that granted it.
+
+        Invitations create ``GroupAccess`` rows, while a trusted email domain
+        grants access without one.  Keeping both paths in this response lets
+        the profile explain why an organization appears in a user's access
+        list.
+        """
         now = timezone.now()
         from django.db.models import Q
+        pending_invitations = OrgInvitation.objects.filter(
+            email__iexact=obj.email,
+            confirmed_at__isnull=True,
+            cancelled_at__isnull=True,
+            expires_at__gt=now,
+            org__is_active=True,
+        ).select_related('org').order_by('org__name')
+        pending_invitation_org_ids = set(pending_invitations.values_list('org_id', flat=True))
         grants = GroupAccess.objects.filter(
             identity=obj,
         ).filter(
             Q(expires_at__isnull=True) | Q(expires_at__gt=now)
         ).select_related('org', 'group__organization').order_by('role')
-        result = []
+        accesses = {}
         for g in grants:
-            if g.org:
-                result.append({'org_name': g.org.name, 'org_slug': g.org.slug, 'role': g.role, 'expires_at': g.expires_at})
-            elif g.group and g.group.organization:
-                result.append({'org_name': g.group.organization.name, 'org_slug': g.group.organization.slug, 'role': g.role, 'expires_at': g.expires_at})
-        return result
+            org = g.org or (g.group and g.group.organization)
+            if not org or not org.is_active:
+                continue
+            access = accesses.setdefault(org.id, {
+                'org_name': org.name,
+                'org_slug': org.slug,
+                'role': g.role,
+                'expires_at': g.expires_at,
+                'access_via': [],
+            })
+            invitation_source = (
+                'invitation_pending'
+                if org.id in pending_invitation_org_ids
+                else 'invitation'
+            )
+            if invitation_source not in access['access_via']:
+                access['access_via'].append(invitation_source)
+
+        for invitation in pending_invitations:
+            org = invitation.org
+            access = accesses.setdefault(org.id, {
+                'org_name': org.name,
+                'org_slug': org.slug,
+                'role': invitation.role,
+                'expires_at': invitation.expires_at,
+                'access_via': [],
+            })
+            if 'invitation_pending' not in access['access_via']:
+                access['access_via'].append('invitation_pending')
+
+        email = (obj.email or '').lower()
+        domain = email.rsplit('@', 1)[1] if '@' in email else ''
+        if domain:
+            trusted_orgs = Organization.objects.filter(
+                is_active=True,
+                trusts_granted__trusted_domain__iexact=domain,
+            ).distinct().order_by('name')
+            for org in trusted_orgs:
+                access = accesses.setdefault(org.id, {
+                    'org_name': org.name,
+                    'org_slug': org.slug,
+                    'role': None,
+                    'expires_at': None,
+                'access_via': [],
+                })
+                if 'trusted_domain' not in access['access_via']:
+                    access['access_via'].append('trusted_domain')
+
+        return sorted(accesses.values(), key=lambda access: access['org_name'].lower())
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
@@ -779,6 +837,19 @@ class MeasurementSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {'measurement_id': {'required': False}}
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        from omop_core.services.field_write_service import coerce_assertion_value
+        source_value = attrs.get('measurement_source_value')
+        num, string, error = coerce_assertion_value(
+            source_value, attrs.get('value_as_number'), attrs.get('value_as_string'),
+        )
+        if error:
+            raise serializers.ValidationError({'value_as_string': error})
+        attrs['value_as_number'] = num
+        attrs['value_as_string'] = string
+        return attrs
+
 
 class ObservationSerializer(serializers.ModelSerializer):
     class Meta:
@@ -794,6 +865,19 @@ class ObservationSerializer(serializers.ModelSerializer):
             'is_erroneous', 'erroneous_reason',
         ]
         extra_kwargs = {'observation_id': {'required': False}}
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        from omop_core.services.field_write_service import coerce_assertion_value
+        source_value = attrs.get('observation_source_value')
+        num, string, error = coerce_assertion_value(
+            source_value, attrs.get('value_as_number'), attrs.get('value_as_string'),
+        )
+        if error:
+            raise serializers.ValidationError({'value_as_string': error})
+        attrs['value_as_number'] = num
+        attrs['value_as_string'] = string
+        return attrs
 
 
 class ProcedureOccurrenceSerializer(serializers.ModelSerializer):
@@ -861,67 +945,6 @@ class ProvenanceRecordSerializer(serializers.ModelSerializer):
         fields = ['id', 'source', 'source_user_id', 'target_patient_id',
                   'modification_reason', 'created_at', 'record_type', 'object_id', 'organization']
 
-
-class SurveySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Survey
-        fields = ['id', 'external_id', 'name', 'title', 'description',
-                  'status', 'disease', 'pages', 'estimated_minutes', 'created_at', 'updated_at']
-        read_only_fields = ['created_at', 'updated_at']
-
-    def validate_pages(self, value):
-        if not isinstance(value, list):
-            raise serializers.ValidationError('pages must be a list.')
-        return value
-
-
-class PatientSurveyResponseSerializer(serializers.ModelSerializer):
-    survey_title = serializers.CharField(source='survey.title', read_only=True)
-    survey_name = serializers.CharField(source='survey.name', read_only=True)
-
-    class Meta:
-        model = PatientSurveyResponse
-        fields = ['id', 'person', 'survey', 'survey_title', 'survey_name',
-                  'values', 'values_dates', 'percent_complete',
-                  'started_at', 'completed_at', 'consent_date', 'consent_signature',
-                  'created_at', 'updated_at']
-        read_only_fields = ['created_at', 'updated_at']
-
-    def validate_percent_complete(self, value):
-        if not (0 <= value <= 100):
-            raise serializers.ValidationError('percent_complete must be between 0 and 100.')
-        return value
-
-    def validate_values(self, value):
-        if not isinstance(value, dict):
-            raise serializers.ValidationError('values must be a dict.')
-        return value
-
-    def validate_values_dates(self, value):
-        if not isinstance(value, dict):
-            raise serializers.ValidationError('values_dates must be a dict.')
-        return value
-
-    def validate_completed_at(self, value):
-        if self.instance and self.instance.completed_at is not None and value is None:
-            raise serializers.ValidationError('Cannot re-open a completed survey.')
-        return value
-
-    def update(self, instance, validated_data):
-        # Strip immutable identity fields — person and survey are set on create only.
-        validated_data.pop('person', None)
-        validated_data.pop('survey', None)
-        # Merge incoming values/values_dates into existing dicts (autosave support).
-        for field in ('values', 'values_dates'):
-            if field in validated_data:
-                current = getattr(instance, field) or {}
-                validated_data[field] = {**current, **validated_data[field]}
-        return super().update(instance, validated_data)
-
-
-# ---------------------------------------------------------------------------
-# Patient consent serializer
-# ---------------------------------------------------------------------------
 
 class PatientConsentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -1052,13 +1075,18 @@ class FieldConceptMappingSerializer(serializers.ModelSerializer):
     def validate_concept_code(self, value):
         if not value:
             return value
-        from omop_core.services.mappings import LAB_FIELD_TO_LOINC
+        from omop_core.services.mappings import (
+            LAB_FIELD_CONCEPT_ALIASES,
+            LAB_FIELD_TO_LOINC,
+        )
         vocab_id = self.initial_data.get('vocabulary_id', '')
         field_name = self.initial_data.get(
             'field_name', getattr(self.instance, 'field_name', ''),
         )
         # Check collision with LAB_FIELD_TO_LOINC (hardcoded LOINC mappings).
         if vocab_id == 'LOINC':
+            if value in LAB_FIELD_CONCEPT_ALIASES.get(field_name, set()):
+                return value
             for _field, (code, _unit, _display) in LAB_FIELD_TO_LOINC.items():
                 if code == value and _field != field_name:
                     raise serializers.ValidationError(
@@ -1408,3 +1436,51 @@ class FieldFormulaSerializer(serializers.ModelSerializer):
         if not result.valid:
             raise serializers.ValidationError(result.errors)
         return value
+
+
+class PrologSurveySerializer(serializers.Serializer):
+    """A PROlog instrument, in the shape `/surveys/` used to return.
+
+    `id` is the version's primary key and `name` its slug, so a reader keyed on
+    those keeps working; `pages` is gone, because a PROlog definition is a
+    validated document rather than a bag of inputs, and `definition` carries it
+    whole for anyone who wants it.
+    """
+
+    id = serializers.IntegerField(read_only=True)
+    name = serializers.CharField(source='survey.slug', read_only=True)
+    slug = serializers.CharField(source='survey.slug', read_only=True)
+    version = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    title = serializers.SerializerMethodField()
+    definition = serializers.JSONField(read_only=True)
+
+    def get_title(self, obj):
+        definition = obj.definition or {}
+        titles = definition.get('title') or {}
+        return titles.get(definition.get('default_language', 'en')) or obj.survey.slug
+
+
+class PrologSurveyResponseSerializer(serializers.Serializer):
+    """One PROlog response and its answers.
+
+    `person` is the participant it is bound to, so a reader that filtered the
+    retired endpoint by person still recognises it. `values` is the answers as a
+    question-key map, which is the shape the retired feature returned — it is
+    derived here, not stored.
+    """
+
+    id = serializers.UUIDField(read_only=True)
+    person = serializers.IntegerField(source='participant_id', read_only=True)
+    survey = serializers.CharField(source='survey_version.survey.slug', read_only=True)
+    survey_version = serializers.CharField(source='survey_version.version', read_only=True)
+    language = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    started_at = serializers.DateTimeField(read_only=True)
+    completed_at = serializers.DateTimeField(source='submitted_at', read_only=True)
+    values = serializers.SerializerMethodField()
+
+    def get_values(self, obj):
+        # `.all()` on purpose: it reads the viewset's prefetch cache, where a
+        # filtered queryset would issue a query per row.
+        return {a.question_key: a.value for a in obj.answers.all()}
