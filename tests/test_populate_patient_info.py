@@ -192,6 +192,18 @@ class TestCllMeasurements:
         data = _cmd().get_cll_data(person)
         assert data['largest_lymph_node_size'] == pytest.approx(3.2)
 
+    def test_largest_lymph_node_size_uses_cancer_modifier_concept(self):
+        person = PersonFactory()
+        concept = ConceptFactory(
+            concept_id=36769292,
+            concept_code='largest-lymph-node-dimension',
+            concept_name='Dimension of Largest Lymph Node',
+            vocabulary=VocabularyFactory(vocabulary_id='Cancer Modifier'),
+        )
+        MeasurementFactory(person=person, measurement_concept=concept, value_as_number=2.7)
+
+        assert _cmd().get_cll_data(person)['largest_lymph_node_size'] == pytest.approx(2.7)
+
     def test_code_only_21889_is_not_treated_as_lymph_node(self):
         person = PersonFactory()
         concept = _loinc_concept('21889-1', 'Size Tumor')
