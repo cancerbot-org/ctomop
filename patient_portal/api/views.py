@@ -26,7 +26,7 @@ from django.core.validators import validate_email
 from omop_core.models import (
     Organization,
     Person, PatientRecord, Concept, ConceptClass, Domain, ProvenanceRecord, Vocabulary,
-    SourceCodeConceptMapping,
+    SourceCodeConceptMapping, UmlsSourceCode,
     ConditionOccurrence, DrugExposure, Measurement, MeasurementOwnership,
     Observation, ProcedureOccurrence, VisitOccurrence, VisitDetail, Location, Death,
     PatientDocument, PatientTrialEnrollment, PatientGroupMembership,
@@ -79,6 +79,7 @@ from omop_core.mapping.code_resolution import (
 from omop_core.mapping.suggestions import (
     ALL_STRATEGIES,
     DEFAULT_MIN_OCCURRENCES,
+    VOCAB_TO_UMLS_ROOT,
     suggest_one_mapping,
     suggest_mappings,
 )
@@ -9232,6 +9233,53 @@ def code_mapping_suggest_one(request):
         return Response({'detail': 'source_code, omop_table, and valid strategies are required.'}, status=status.HTTP_400_BAD_REQUEST)
     return Response(suggest_one_mapping(source_code, str(request.data.get('source_vocabulary_id') or ''), omop_table,
         source_description=str(request.data.get('source_code_description') or ''), strategies=strategies))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def code_mapping_check_umls(request):
+    """Look up a source code in the locally loaded UMLS release.
+
+    The check intentionally uses the source vocabulary's UMLS root source,
+    rather than a text search, so it confirms the exact code a curator entered.
+    An OMOP source concept is returned when that vocabulary is loaded too.
+    """
+    if not _can_manage_field_mappings(request.user):
+        return Response({'detail': 'Organization admin access required.'}, status=status.HTTP_403_FORBIDDEN)
+
+    source_code = str(request.data.get('source_code') or '').strip()
+    source_vocabulary_id = str(request.data.get('source_vocabulary_id') or '').strip()
+    if not source_code or not source_vocabulary_id:
+        return Response(
+            {'detail': 'source_code and source_vocabulary_id are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    umls_root = VOCAB_TO_UMLS_ROOT.get(source_vocabulary_id)
+    if not umls_root:
+        return Response({'found': False})
+
+    source_row = (
+        UmlsSourceCode.objects
+        .filter(root_source=umls_root, code=source_code)
+        .order_by('-is_preferred', 'name')
+        .first()
+    )
+    if source_row is None:
+        return Response({'found': False})
+
+    source_concept = (
+        Concept.objects
+        .filter(vocabulary_id=source_vocabulary_id, concept_code__iexact=source_code)
+        .order_by('concept_id')
+        .first()
+    )
+    return Response({
+        'found': True,
+        'source_code_description': source_row.name[:255],
+        'source_concept_id': source_concept.concept_id if source_concept else None,
+        'umls_source_name': source_row.name,
+    })
 
 
 @api_view(['GET'])
