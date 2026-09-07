@@ -9296,12 +9296,8 @@ def code_mapping_check_umls(request):
     if source_row is None:
         return Response({'found': False})
 
-    source_concept = (
-        Concept.objects
-        .filter(vocabulary_id=source_vocabulary_id, concept_code__iexact=source_code)
-        .order_by('concept_id')
-        .first()
-    )
+    from omop_core.mapping.suggestions import _find_source_concept
+    source_concept = _find_source_concept(source_vocabulary_id, source_code)
     return Response({
         'found': True,
         'source_code_description': source_row.name[:255],
