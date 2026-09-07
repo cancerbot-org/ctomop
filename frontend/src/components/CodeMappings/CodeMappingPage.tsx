@@ -109,6 +109,7 @@ interface RepointResult {
 interface SuggestionAccuracy {
   model_version?: string | null;
   accepted: number;
+  approved: number;
   overridden: number;
   rejected: number;
   reviewed: number;
