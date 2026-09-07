@@ -719,6 +719,13 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             'strategy_used': strategy_used,
             'umls_cui': umls_cui,
         }
+        from omop_core.services.athena_mapping_guard import (
+            ATHENA_DUPLICATE_MESSAGE, athena_supplies_mapping,
+        )
+        if chosen and athena_supplies_mapping(src_vocab_id, source_value[:SOURCE_CODE_MAX], chosen['concept_id']):
+            entry.update(created=False, suggested=None, note=ATHENA_DUPLICATE_MESSAGE)
+            results.append(entry)
+            continue
         if dry_run:
             results.append(entry)
             continue
@@ -798,5 +805,10 @@ def suggest_one_mapping(source_code, source_vocabulary_id, omop_table, *, source
             candidates = hits
             chosen, note = rank_candidates(source_code, hits, source_description=description)
             strategy_used = STRATEGY_LEXICAL if chosen else None
+    from omop_core.services.athena_mapping_guard import (
+        ATHENA_DUPLICATE_MESSAGE, athena_supplies_mapping,
+    )
+    if chosen and athena_supplies_mapping(source_vocabulary_id, source_code, chosen['concept_id']):
+        chosen, note = None, ATHENA_DUPLICATE_MESSAGE
     return {'suggested': chosen, 'note': note or 'No candidate concept found by any enabled strategy.',
             'strategy_used': strategy_used, 'umls_cui': umls_cui, 'candidates_considered': len(candidates)}

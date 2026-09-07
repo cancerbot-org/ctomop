@@ -8811,6 +8811,18 @@ def _upsert_source_code_mapping(concept, data, user, mapping=None):
     # transition that does, which is a far easier property to reason about.
     status_value = 'proposed' if mapping is None else (requested_status or mapping.status)
 
+    # Check before changing mappings, scoring suggestions, or repointing facts.
+    # Rejected rows may still be dismissed, and Athena rows do not conflict
+    # with themselves when a curator edits their metadata.
+    from omop_core.services.athena_mapping_guard import (
+        ATHENA_DUPLICATE_MESSAGE, athena_supplies_mapping,
+    )
+    if status_value in ('proposed', 'approved') and athena_supplies_mapping(
+        source_vocabulary_id, source_code, concept.pk if concept else None,
+        exclude_id=mapping.pk if mapping else None,
+    ):
+        raise serializers.ValidationError({'detail': ATHENA_DUPLICATE_MESSAGE})
+
     # Role enforcement: only staff/org-admin can approve or change an approved mapping.
     if not _can_approve_mappings(user):
         if status_value == 'approved':

@@ -139,9 +139,14 @@ const loincHit = {
   suggested_unit: "mg/dL",
 };
 
-function renderPage(rows = [proposedRow, approvedRow]) {
+type TestMappingRow = Omit<typeof proposedRow, "status"> & {
+  status: "proposed" | "approved" | "rejected" | "unmapped";
+  mapping_origin?: "athena" | "healthkey";
+};
+
+function renderPage(rows: TestMappingRow[] = [proposedRow, approvedRow]) {
   mockGet.mockImplementation((url: string) => {
-    if (url === "/v1/code-mappings/") return Promise.resolve({ data: rows });
+    if (url === "/v1/code-mappings/") return Promise.resolve({ data: [...rows] });
     if (url === "/v1/code-mappings/reference/") return Promise.resolve({ data: reference });
     if (url === "/v1/concepts/search/") {
       return Promise.resolve({ data: { results: [loincHit] } });
@@ -182,6 +187,111 @@ describe("CodeMappingPage", () => {
     mockPost.mockResolvedValue({ data: {} });
     mockPatch.mockResolvedValue({ data: {} });
     mockDelete.mockResolvedValue({ data: {} });
+  });
+
+  describe("duplicate source-code errors", () => {
+    const proposed = { ...proposedRow, mapping_id: 101, source_vocabulary_id: "ICD10", source_code: "A02.0" };
+    const mapped = { ...approvedRow, mapping_id: 102, source_code: "A02.0" };
+    const athena = { ...mapped, mapping_id: 103, mapping_origin: "athena" as const };
+
+    it("flags all three sections and reveals exact rows despite search and collapsed sections", async () => {
+      const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+      renderPage([proposed, mapped, athena]);
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveClass("text-red-800", "bg-red-50");
+      expect(alert).toHaveTextContent("1 duplicate source code on this tab");
+      expect(within(alert).getAllByRole("link")).toHaveLength(3);
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Search mappings" }), { target: { value: "no-match" } });
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      fireEvent.click(within(alert).getByRole("link", { name: /Athena Mapped.*#103/ }));
+      expect(screen.getByRole("textbox", { name: "Search mappings" })).toHaveValue("");
+      await waitFor(() => expect(document.getElementById("code-mapping-103")).toHaveFocus());
+      expect(scroll).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+
+      fireEvent.click(within(alert).getByRole("link", { name: /— Mapped.*#102/ }));
+      await waitFor(() => expect(document.getElementById("code-mapping-102")).toHaveFocus());
+      fireEvent.click(within(alert).getByRole("link", { name: /Unmapped.*#101/ }));
+      await waitFor(() => expect(document.getElementById("code-mapping-101")).toHaveFocus());
+
+      fireEvent.click(screen.getByRole("button", { name: /Athena Mapped \(1\)/ }));
+      fireEvent.click(within(alert).getByRole("link", { name: /Athena Mapped.*#103/ }));
+      await waitFor(() => expect(document.getElementById("code-mapping-103")).toHaveFocus());
+      scroll.mockRestore();
+    });
+
+    it("includes hidden rejected duplicates and reveals them on navigation", async () => {
+      renderPage([proposed, { ...mapped, status: "rejected" }]);
+      const alert = await screen.findByRole("alert");
+      expect(document.getElementById("code-mapping-102")).not.toBeInTheDocument();
+      fireEvent.click(within(alert).getByRole("link", { name: /rejected.*#102/ }));
+      await waitFor(() => expect(document.getElementById("code-mapping-102")).toHaveFocus());
+    });
+
+    it("normalizes case and whitespace without conflating meaningful punctuation", async () => {
+      renderPage([proposed, { ...mapped, source_code: " a02.0 " }, { ...athena, source_code: "A020" }]);
+      const alert = await screen.findByRole("alert");
+      expect(within(alert).getAllByRole("link")).toHaveLength(2);
+    });
+
+    it("does not flag distinct codes, blanks, or the same code in unrelated vocabularies on Overall", async () => {
+      renderPage([proposed, { ...mapped, source_vocabulary_id: "LOINC" },
+        { ...proposed, mapping_id: 104, source_code: "" }, { ...mapped, mapping_id: 105, source_code: " " }]);
+      await screen.findByRole("tab", { name: /Overall/ });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("tab", { name: /Overall/ }));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("keeps real duplicate groups separate on Overall and scopes other tabs", async () => {
+      renderPage([proposed, mapped, { ...proposed, mapping_id: 104, source_vocabulary_id: "LOINC" }]);
+      await screen.findByRole("alert");
+      fireEvent.click(screen.getByRole("tab", { name: /LOINC/ }));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("tab", { name: /Overall/ }));
+      const alert = screen.getByRole("alert");
+      expect(within(alert).getAllByRole("link")).toHaveLength(2);
+      fireEvent.click(within(alert).getByRole("link", { name: /Unmapped.*#101/ }));
+      await waitFor(() => expect(document.getElementById("code-mapping-101")).toHaveFocus());
+    });
+
+    it("detects duplicates within a section and clears the error after curator deletion", async () => {
+      const rows: TestMappingRow[] = [proposed, { ...mapped, status: "proposed" }];
+      renderPage(rows);
+      const alert = await screen.findByRole("alert");
+      fireEvent.click(within(alert).getByRole("link", { name: /#102/ }));
+      const row = document.getElementById("code-mapping-102")!;
+      fireEvent.click(within(row).getByRole("button", { name: "Edit A02.0" }));
+      mockDelete.mockImplementationOnce(() => {
+        rows.splice(1, 1);
+        return Promise.resolve({ data: {} });
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(mockDelete).toHaveBeenCalledWith("/v1/code-mappings/102/"));
+      await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+      expect(await screen.findByRole("button", { name: "Edit A02.0" })).toBeInTheDocument();
+    });
+  });
+
+  it("shows the exact Athena duplicate error when table approval is blocked", async () => {
+    const message = "This source and destination map is already supplied by Athena";
+    mockPatch.mockRejectedValueOnce({ response: { data: { detail: message } } });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Approve M-PROTEIN, SERUM" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows the exact Athena duplicate error inside the edit dialog", async () => {
+    const message = "This source and destination map is already supplied by Athena";
+    mockPatch.mockRejectedValueOnce({ response: { data: { detail: message } } });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit M-PROTEIN, SERUM" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update Mapping" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toBe(message);
+    expect(mockPatch).toHaveBeenCalledWith("/v1/code-mappings/7/", expect.any(Object));
   });
 
   it("puts the source code first without repeating the selected source-system tab", async () => {
