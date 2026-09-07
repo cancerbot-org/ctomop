@@ -106,7 +106,7 @@ class TestLaterTherapies:
         data = _cmd().get_treatment_data(person)
         assert 'later_therapies' not in data
 
-    def test_three_or_more_drugs_populate_later_therapies(self):
+    def test_persisted_lines_populate_later_therapies(self):
         person = PersonFactory()
         # Four distinct single agents spaced a quarter apart so LOT inference
         # segments them into four separate lines (gaps exceed the 28-day
@@ -124,9 +124,19 @@ class TestLaterTherapies:
                 drug_exposure_start_date=start,
                 drug_exposure_end_date=end,
             )
+        # Reading must not infer episodes. Persist them explicitly first.
+        assert 'later_therapies' not in _cmd().get_treatment_data(person)
+        from omop_core.services.lot_inference_service import infer_lot_for_person
+        from omop_core.services.mappings import (
+            CONCEPT_DRUG_EXPOSURE_FIELD, CONCEPT_TREATMENT_REGIMEN,
+        )
+        ConceptFactory(concept_id=CONCEPT_TREATMENT_REGIMEN, concept_name='Treatment Regimen')
+        ConceptFactory(concept_id=CONCEPT_DRUG_EXPOSURE_FIELD, concept_name='drug_exposure_id')
+        infer_lot_for_person(person)
         data = _cmd().get_treatment_data(person)
         assert 'later_therapies' in data
         assert isinstance(data['later_therapies'], list)
+        assert len(data['later_therapies']) == 2
         for entry in data['later_therapies']:
             assert 'therapy' in entry
             assert 'startDate' in entry
