@@ -12,11 +12,12 @@ import TherapyLineDialog from './TherapyLineDialog';
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
+const mockPatch = vi.fn();
 vi.mock('@/api/axios', () => ({
   default: {
     get: (...a: unknown[]) => mockGet(...a),
     post: (...a: unknown[]) => mockPost(...a),
-    patch: vi.fn(),
+    patch: (...a: unknown[]) => mockPatch(...a),
   },
 }));
 
@@ -42,6 +43,13 @@ beforeEach(() => {
       episode_id: 98, line_number: 1, created: true,
       drug_exposure_ids: [168, 169], drugs_created: 2,
       patient_info: { therapy_lines_count: 1, first_line_therapy: 'Rd' },
+    },
+  });
+  mockPatch.mockResolvedValue({
+    data: {
+      episode_id: 98, line_number: 1, created: false,
+      drug_exposure_ids: [169], drugs_created: 0,
+      patient_info: { therapy_lines_count: 1, first_line_therapy: 'Dex' },
     },
   });
 });
@@ -112,6 +120,7 @@ describe('TherapyLineDialog', () => {
       start_date: '2025-03-01',
       end_date: null,
       outcome: null,
+      regimen_concept_id: null,
       drugs: [{ concept_id: 19026972, source_value: 'lenalidomide' }],
     });
     // Nothing about episodes, type concepts or primary keys.
@@ -189,5 +198,202 @@ describe('TherapyLineDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: /record line/i }));
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
     expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('pre-populates regimen dropdown filtered by disease and line', async () => {
+    // With a diseaseCode, the dialog loads regimens for that disease+line on mount.
+    mockGet.mockResolvedValue({ data: [{ code: 'rd', title: 'Rd', concept_id: 35806112 }] });
+    render(
+      <TherapyLineDialog
+        personId={262}
+        defaultLineNumber={1}
+        diseaseCode="C3242"
+        onClose={onClose}
+        onAuthored={onAuthored}
+      />,
+    );
+
+    await waitFor(() => expect(mockGet).toHaveBeenCalled());
+    const regimenCall = mockGet.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('therapy-regimens'),
+    );
+    expect(regimenCall).toBeDefined();
+    expect((regimenCall![1] as { params: Record<string, unknown> }).params).toMatchObject({
+      disease: 'C3242',
+      round: 'first_line_therapy',
+    });
+    // Dropdown is rendered with the regimen option.
+    await waitFor(() => expect(screen.getByLabelText('Select regimen')).toBeInTheDocument());
+    expect(screen.getByText('Rd')).toBeInTheDocument();
+  });
+
+  it('falls back to search mode when diseaseCode is undefined', async () => {
+    // Without a diseaseCode, the dropdown cannot be populated — the dialog shows
+    // a link to search all regimens instead.
+    mockGet.mockResolvedValue({ data: [{ code: 'rd', title: 'Rd', concept_id: 35806112 }] });
+    render(
+      <TherapyLineDialog
+        personId={262}
+        defaultLineNumber={1}
+        onClose={onClose}
+        onAuthored={onAuthored}
+      />,
+    );
+
+    // Click the "Search all regimens" link to enter search mode.
+    fireEvent.click(screen.getByText(/search all regimens/i));
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fireEvent.change(screen.getByLabelText('Search regimens'), { target: { value: 'Rd' } });
+    await act(async () => { vi.advanceTimersByTime(400); });
+    vi.useRealTimers();
+
+    await waitFor(() => expect(mockGet).toHaveBeenCalled());
+    const regimenCall = mockGet.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('therapy-regimens'),
+    );
+    expect(regimenCall).toBeDefined();
+    expect((regimenCall![1] as { params: Record<string, unknown> }).params).not.toHaveProperty('disease');
+  });
+
+  it('pre-selects existing regimen by concept_id when editing', async () => {
+    const rd = { code: 'rd', title: 'Rd', concept_id: 35806112 };
+    mockGet.mockResolvedValue({ data: [rd] });
+    render(
+      <TherapyLineDialog
+        personId={262}
+        defaultLineNumber={1}
+        diseaseCode="C3242"
+        line={{
+          episode_id: 98,
+          line: 1,
+          regimen: 'Rd',
+          regimen_concept_id: 35806112,
+          drugs: [LENALIDOMIDE],
+        }}
+        onClose={onClose}
+        onAuthored={onAuthored}
+      />,
+    );
+    // The selected-regimen chip should appear (not the dropdown select).
+    await waitFor(() => expect(screen.getByText('Rd')).toBeInTheDocument());
+    expect(screen.queryByLabelText('Select regimen')).not.toBeInTheDocument();
+  });
+
+  it('shows synthetic regimen entry when existing regimen not in disease list', async () => {
+    // The line has a regimen that is NOT in the available list for this disease+round.
+    mockGet.mockResolvedValue({ data: [{ code: 'vd', title: 'Vd', concept_id: 999 }] });
+    render(
+      <TherapyLineDialog
+        personId={262}
+        defaultLineNumber={1}
+        diseaseCode="C3242"
+        line={{
+          episode_id: 98,
+          line: 1,
+          regimen: 'Rd',
+          regimen_concept_id: 35806112,
+          drugs: [LENALIDOMIDE],
+        }}
+        onClose={onClose}
+        onAuthored={onAuthored}
+      />,
+    );
+    // The regimen chip should still show the current value even though it's not in the list.
+    await waitFor(() => expect(screen.getByText('Rd')).toBeInTheDocument());
+    // The HemOnc concept_id should be shown alongside the name.
+    expect(screen.getByText(/35806112/)).toBeInTheDocument();
+  });
+
+  it('preserves regimen_concept_id on no-op save when editing', async () => {
+    // A clinician opening an edit dialog and saving without changes must not
+    // silently erase the stored regimen concept_id (#865).
+    const rd = { code: 'rd', title: 'Rd', concept_id: 35806112 };
+    mockGet.mockResolvedValue({ data: [rd] });
+    render(
+      <TherapyLineDialog
+        personId={262}
+        defaultLineNumber={1}
+        diseaseCode="C3242"
+        line={{
+          episode_id: 98,
+          line: 1,
+          regimen: 'Rd',
+          regimen_concept_id: 35806112,
+          drugs: [LENALIDOMIDE],
+        }}
+        onClose={onClose}
+        onAuthored={onAuthored}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText('Rd')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /update line/i }));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    const [, body] = mockPatch.mock.calls.at(-1)!;
+    expect((body as { regimen_concept_id: number }).regimen_concept_id).toBe(35806112);
+  });
+
+  it('restores regimen when no diseaseCode is available', async () => {
+    // When the patient has no identified disease, the dialog cannot populate the
+    // disease+round dropdown — but it should still show the current regimen.
+    render(
+      <TherapyLineDialog
+        personId={262}
+        defaultLineNumber={1}
+        line={{
+          episode_id: 98,
+          line: 1,
+          regimen: 'VRD',
+          regimen_concept_id: 12345,
+          drugs: [LENALIDOMIDE],
+        }}
+        onClose={onClose}
+        onAuthored={onAuthored}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText('VRD')).toBeInTheDocument());
+  });
+
+  it('edits an existing line by patching its episode', async () => {
+    render(
+      <TherapyLineDialog
+        personId={262}
+        defaultLineNumber={2}
+        line={{
+          episode_id: 98,
+          line: 1,
+          start_date: '2025-01-15',
+          end_date: '2025-06-15',
+          outcome: 'Partial Response',
+          drugs: [LENALIDOMIDE],
+        }}
+        onClose={onClose}
+        onAuthored={onAuthored}
+      />,
+    );
+
+    expect(screen.getByLabelText(/line number/i)).toHaveValue(1);
+    expect(screen.getByLabelText(/line number/i)).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /remove lenalidomide/i }));
+    await addDrug('dexamethasone', 'dexa');
+    fireEvent.click(screen.getByRole('button', { name: /update line/i }));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    const [url, body] = mockPatch.mock.calls.at(-1)!;
+    expect(url).toBe('/v1/therapy-lines/98/');
+    expect(body).toEqual({
+      person: 262,
+      line_number: 1,
+      start_date: '2025-01-15',
+      end_date: '2025-06-15',
+      outcome: 'Partial Response',
+      regimen_concept_id: null,
+      drugs: [{ concept_id: 1518254, source_value: 'dexamethasone' }],
+    });
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(onAuthored).toHaveBeenCalledWith({
+      therapy_lines_count: 1, first_line_therapy: 'Dex',
+    });
   });
 });

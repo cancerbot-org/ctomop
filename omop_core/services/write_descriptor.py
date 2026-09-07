@@ -17,10 +17,11 @@ writable with a reason, rather than omitted. A client that only sees writable
 fields cannot tell "you may not edit this" from "I forgot to send it".
 """
 
-from omop_core.models import Concept, PatientRecord
+from omop_core.models import Concept, FieldChoice, PatientRecord
 from omop_core.services.demographics import choices as demographic_choices
 from omop_core.services.mappings import (
-    CONCEPT_EHR_TYPE, CONCEPT_LAB_TYPE, DERIVED_FIELD_TO_CODE, LAB_FIELD_TO_LOINC,
+    CONCEPT_EHR_TYPE, CONCEPT_LAB_TYPE, CONCEPT_PATIENT_REPORTED_TYPE,
+    DERIVED_FIELD_TO_CODE, LAB_FIELD_TO_LOINC,
 )
 from omop_core.services.patient_record_service import (
     PATIENT_RECORD_OMOP_MAPPED_FIELDS,
@@ -71,6 +72,17 @@ _THERAPY_PREFIXES = (
     'treatment_refractory', 'reason_for_disc', 'washout', 'last_treatment',
 )
 
+# Line projections are not writable PatientRecord facts.  ARTEMIS (or another
+# episode producer) writes the Episode/EpisodeEvent evidence; refresh reads it
+# back.  This list deliberately includes every current first/second/later line
+# column, rather than only the therapy name, so the UI cannot offer a stale
+# direct editor for a date, intent, outcome, or derived concept id.
+_EPISODE_COMPUTED_FIELDS = frozenset(
+    field.name
+    for field in PatientRecord._meta.concrete_fields
+    if field.name.startswith(('first_line_', 'second_line_', 'later_'))
+)
+
 # How a therapy line is authored. Not a missing mapping — the write path exists
 # and works; it is simply not a single fact, so no concept could describe it. A
 # line is an Episode grouping the DrugExposures given during it, and derivation
@@ -105,6 +117,15 @@ def _unmapped_group(field):
     if field.startswith(_THERAPY_PREFIXES):
         return GROUP_THERAPY
     return GROUP_NEEDS_CONCEPT
+
+
+def _field_choice_options() -> dict[str, list[tuple[str, str | None]]]:
+    """Return curator-managed displays and their preferred code for every field."""
+    result: dict[str, list[tuple[str, str | None]]] = {}
+    for choice in FieldChoice.objects.prefetch_related('codes').all():
+        primary = next((code.code for code in choice.codes.all() if code.is_primary), None)
+        result.setdefault(choice.field_name, []).append((choice.display, primary))
+    return result
 
 # PatientRecord field → the Person field the persons endpoint accepts.
 #
@@ -215,7 +236,7 @@ _COMPUTED_INPUTS = {
         'estrogen_receptor_status', 'progesterone_receptor_status', 'her2_status',
     ],
     'tp53_disruption': ['genetic_mutations'],
-    'free_light_chain_ratio': ['kappa_flc', 'lambda_flc'],
+    'involved_uninvolved_ratio': ['kappa_flc', 'lambda_flc'],
     'molecular_markers': ['genetic_mutations'],
     'liver_enzyme_levels': [
         'liver_enzyme_levels_ast', 'liver_enzyme_levels_alt',
@@ -281,8 +302,52 @@ def _resolve_concepts(pairs):
 _MAPPING_TARGETS = {
     'measurement': 'measurement',
     'observation': 'observation',
+    'condition': 'condition',
+    'condition_occurrence': 'condition',
+    'drug': 'drug_exposure',
+    'drug_exposure': 'drug_exposure',
+    'procedure': 'procedure',
+    'procedure_occurrence': 'procedure',
 }
 
+_MAPPING_ENDPOINTS = {
+    'measurement': 'POST /api/v1/measurements/',
+    'observation': 'POST /api/v1/observations/',
+    'condition': 'POST /api/v1/conditions/',
+    'drug_exposure': 'POST /api/v1/drug-exposures/',
+    'procedure': 'POST /api/v1/procedures/',
+}
+
+
+def mapping_target_for(omop_table):
+    return _MAPPING_TARGETS.get((omop_table or '').strip().lower())
+
+
+def mapping_table_is_writable(omop_table):
+    return mapping_target_for(omop_table) is not None
+
+
+# Fields whose write recipe this cannot express, so they are reported read-only
+# rather than offered.
+#
+# Found by writing every writable field and reading it back (#666). A descriptor
+# entry is a claim that a value written to its recipe comes back; where the
+# recipe is incomplete the claim is false, and a box that accepts input and
+# silently drops it is worse than one that says why it is disabled.
+_WRITE_RECIPE_INCOMPLETE = {
+    'largest_lymph_node_size': (
+        'Derivation also requires qualifier_source_value="lymph-node" — LOINC '
+        '21889-1 "Size Tumor" is shared with tumor_size, and the qualifier is '
+        'what tells them apart. The descriptor cannot carry a qualifier yet, so '
+        'a write against the code alone is not read back.'
+    ),
+    'bone_only_metastasis_status': (
+        'Derivation looks for an Observation whose concept name contains "bone '
+        'only metastas", while the mapping here names a Measurement with a '
+        'different concept. A write against it lands in the wrong table under '
+        'the wrong concept and is not read back.'
+    ),
+}
 
 def _curated_writes():
     """Editable entries built from reviewer-approved concept mappings.
@@ -311,7 +376,7 @@ def _curated_writes():
         for name in {r.value_vocabulary for r in rows if r.value_vocabulary}
     }
     for row in rows:
-        target = _MAPPING_TARGETS.get(row.omop_table.strip().lower())
+        target = mapping_target_for(row.omop_table)
         concept_id = row.concept_id
         if target is None or concept_id is None:
             continue
@@ -319,6 +384,7 @@ def _curated_writes():
             'kind': KIND_EDITABLE,
             'writable': True,
             'target': target,
+            'endpoint': _MAPPING_ENDPOINTS[target],
             'concept_id': concept_id,
             'type_concept_id': row.type_concept_id or CONCEPT_LAB_TYPE,
             'source_value': row.source_value,
@@ -366,9 +432,30 @@ def build_writable_field_descriptor():
     )
 
     curated = _curated_writes()
+    choice_options = {
+        field_name: [
+            {'value': display, 'code': primary_code}
+            for display, primary_code in choices
+        ]
+        for field_name, choices in _field_choice_options().items()
+    }
 
     descriptor = {}
     for field in sorted(PATIENT_RECORD_OMOP_MAPPED_FIELDS - _LIFECYCLE_FIELDS):
+        if field in _EPISODE_COMPUTED_FIELDS:
+            descriptor[field] = {
+                'kind': KIND_COMPUTED,
+                'writable': False,
+                'inputs': ['Episode', 'EpisodeEvent'],
+                'source_tables': ['Episode', 'EpisodeEvent'],
+                'authored_via': _THERAPY_RECIPE,
+                'reason': (
+                    'Code-computed from persisted Episode and EpisodeEvent '
+                    'records. Author a therapy line as an Episode grouping its '
+                    'events and this field follows.'
+                ),
+            }
+            continue
         if field in _ALIAS_TO_CANONICAL:
             canonical = _ALIAS_TO_CANONICAL[field]
             descriptor[field] = {
@@ -446,6 +533,19 @@ def build_writable_field_descriptor():
                 'reason': (
                     'Set on the Person record, and only while it is empty — this '
                     'endpoint never overwrites an existing value.'
+                ),
+            }
+            continue
+
+        if field == 'wearable_coverage_ratio_30d':
+            descriptor[field] = {
+                'kind': KIND_COMPUTED,
+                'writable': False,
+                'inputs': sorted(set(_WEARABLE_METRIC.values())),
+                'window_days': 30,
+                'reason': (
+                    'Proportion of the 30-day window with any valid wearable '
+                    'reading, counting each day once across all device metrics.'
                 ),
             }
             continue
@@ -558,6 +658,7 @@ def build_writable_field_descriptor():
                 'writable': False,
                 'group': group,
                 'reason': _UNMAPPED_GROUP_REASONS[group],
+                'options': choice_options.get(field, []),
             }
             continue
 
@@ -590,7 +691,9 @@ def build_writable_field_descriptor():
             'value_kind': 'number',
             'unit': unit,
             'unit_concept_id': unit_ids.get(unit),
-            'type_concept_id': CONCEPT_LAB_TYPE,
+            # This descriptor drives a clinician/patient edit, not a lab
+            # import. Keeping it distinct preserves same-day imported facts.
+            'type_concept_id': CONCEPT_PATIENT_REPORTED_TYPE,
             'source_value': code,
         }
 
@@ -614,6 +717,16 @@ def build_writable_field_descriptor():
             'canonical': canonical,
             'reason': f'Mirrors {canonical}; edit that field instead.',
         })
+
+    # Applied last, so it overrides whichever branch offered the field.
+    for field, reason in _WRITE_RECIPE_INCOMPLETE.items():
+        if field in descriptor:
+            descriptor[field] = {
+                'kind': KIND_UNMAPPED,
+                'writable': False,
+                'group': GROUP_NEEDS_CONCEPT,
+                'reason': reason,
+            }
 
     for computed, reason in _SERIALIZER_COMPUTED.items():
         descriptor.setdefault(computed, {

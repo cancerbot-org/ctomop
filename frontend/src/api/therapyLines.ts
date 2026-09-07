@@ -1,4 +1,5 @@
 import { clinicalClient, clinicalUrl } from '@/api/clinicalTransport';
+import type { TherapyRegimen } from '@/types/therapy';
 
 /**
  * Authoring a line of therapy.
@@ -20,7 +21,7 @@ export interface DrugConcept {
 
 export interface TherapyLineDrug {
   concept_id: number;
-  source_value?: string;
+  source_value?: string | null;
 }
 
 export interface TherapyLinePayload {
@@ -40,6 +41,17 @@ export interface TherapyLineResult {
   drug_exposure_ids: number[];
   drugs_created: number;
   patient_info: Record<string, unknown>;
+}
+
+export interface EditableTherapyLine {
+  line: number;
+  episode_id?: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  outcome?: string | null;
+  regimen?: string | null;
+  regimen_concept_id?: number | null;
+  drugs?: Array<DrugConcept & { source_value?: string | null }>;
 }
 
 /**
@@ -74,11 +86,53 @@ export async function searchDrugConcepts(query: string): Promise<DrugConcept[]> 
   return (resp.data?.results ?? resp.data ?? []) as DrugConcept[];
 }
 
+/** Search therapy regimens by name, optionally filtered by disease and round. */
+export async function searchTherapyRegimens(
+  query: string,
+  disease?: string,
+  round?: string,
+): Promise<TherapyRegimen[]> {
+  if (query.trim().length < 2) return [];
+  const params: Record<string, string> = { search: query.trim() };
+  if (disease) params.disease = disease;
+  if (round) params.round = round;
+  const resp = await clinicalClient().get(clinicalUrl('/v1/therapy-regimens/'), { params });
+  return (resp.data ?? []) as TherapyRegimen[];
+}
+
+/** List all regimens for a disease+round combination (no search query needed). */
+export async function listTherapyRegimens(
+  disease: string,
+  round?: string,
+): Promise<TherapyRegimen[]> {
+  const params: Record<string, string> = { disease };
+  if (round) params.round = round;
+  const resp = await clinicalClient().get(clinicalUrl('/v1/therapy-regimens/'), { params });
+  return (resp.data ?? []) as TherapyRegimen[];
+}
+
+/** Fetch a single regimen with its component drugs and their classes. */
+export async function getTherapyRegimenDetail(code: string): Promise<TherapyRegimen> {
+  const resp = await clinicalClient().get(clinicalUrl(`/v1/therapy-regimens/${code}/`));
+  return resp.data as TherapyRegimen;
+}
+
 export async function authorTherapyLine(
   payload: TherapyLinePayload,
 ): Promise<TherapyLineResult> {
   const resp = await clinicalClient().post(
     clinicalUrl('/v1/therapy-lines/'),
+    payload,
+  );
+  return resp.data as TherapyLineResult;
+}
+
+export async function updateTherapyLine(
+  episodeId: number,
+  payload: TherapyLinePayload,
+): Promise<TherapyLineResult> {
+  const resp = await clinicalClient().patch(
+    clinicalUrl(`/v1/therapy-lines/${episodeId}/`),
     payload,
   );
   return resp.data as TherapyLineResult;

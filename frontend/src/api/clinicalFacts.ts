@@ -5,7 +5,7 @@ import type { FieldDescriptor } from '@/hooks/useWritableFields';
  * Write a clinical value as an OMOP fact.
  *
  * PatientRecord is derived and has no writable clinical columns, so an edit is a
- * write to `measurement` or `observation` followed by derivation, which fires from
+ * write to an OMOP clinical endpoint followed by derivation, which fires from
  * the row's post_save signal. Nothing here touches PatientRecord.
  */
 
@@ -25,6 +25,71 @@ function valueFields(descriptor: FieldDescriptor, value: unknown) {
   // descriptor does not carry an answer set yet — writing an unresolved concept
   // would be worse than keeping the raw text, which derivation already reads.
   return { value_as_string: value == null ? null : String(value) };
+}
+
+const CLINICAL_TARGETS = {
+  measurement: {
+    base: '/v1/measurements/',
+    idField: 'measurement_id',
+    conceptField: 'measurement_concept',
+    dateField: 'measurement_date',
+    typeField: 'measurement_type_concept',
+    sourceField: 'measurement_source_value',
+    storesValue: true,
+    storesUnit: true,
+  },
+  observation: {
+    base: '/v1/observations/',
+    idField: 'observation_id',
+    conceptField: 'observation_concept',
+    dateField: 'observation_date',
+    typeField: 'observation_type_concept',
+    sourceField: 'observation_source_value',
+    storesValue: true,
+    storesUnit: true,
+  },
+  condition: {
+    base: '/v1/conditions/',
+    idField: 'condition_occurrence_id',
+    conceptField: 'condition_concept',
+    dateField: 'condition_start_date',
+    typeField: 'condition_type_concept',
+    sourceField: 'condition_source_value',
+    storesValue: false,
+    storesUnit: false,
+  },
+  drug_exposure: {
+    base: '/v1/drug-exposures/',
+    idField: 'drug_exposure_id',
+    conceptField: 'drug_concept',
+    dateField: 'drug_exposure_start_date',
+    typeField: 'drug_type_concept',
+    sourceField: 'drug_source_value',
+    storesValue: false,
+    storesUnit: false,
+  },
+  procedure: {
+    base: '/v1/procedures/',
+    idField: 'procedure_occurrence_id',
+    conceptField: 'procedure_concept',
+    dateField: 'procedure_date',
+    typeField: 'procedure_type_concept',
+    sourceField: 'procedure_source_value',
+    storesValue: false,
+    storesUnit: false,
+  },
+} as const;
+
+type ClinicalTarget = keyof typeof CLINICAL_TARGETS;
+
+function clinicalTarget(target: FieldDescriptor['target']): ClinicalTarget | null {
+  return target && target in CLINICAL_TARGETS
+    ? target as ClinicalTarget
+    : null;
+}
+
+function isEmptyOccurrenceValue(value: unknown): boolean {
+  return value === '' || value == null || value === false;
 }
 
 export interface WriteResult {
@@ -62,21 +127,13 @@ export async function writeClinicalFact(
   // a profile edit POSTed an Observation whose concept, type and source value were
   // all undefined, and never touched Person. Sixteen writable fields — gender,
   // race, ethnicity, the six location columns — take that target.
-  if (descriptor.target !== 'measurement' && descriptor.target !== 'observation') {
+  const target = clinicalTarget(descriptor.target);
+  if (target === null) {
     throw new Error(
       `${field} writes to ${descriptor.target}, not an OMOP fact — use writeFieldValue`,
     );
   }
-  const isMeasurement = descriptor.target === 'measurement';
-  const base = isMeasurement ? '/v1/measurements/' : '/v1/observations/';
-  const dateField = isMeasurement ? 'measurement_date' : 'observation_date';
-  const sourceField = isMeasurement
-    ? 'measurement_source_value'
-    : 'observation_source_value';
-  const conceptField = isMeasurement ? 'measurement_concept' : 'observation_concept';
-  const typeField = isMeasurement
-    ? 'measurement_type_concept'
-    : 'observation_type_concept';
+  const cfg = CLINICAL_TARGETS[target];
 
   // Find a fact already recorded for this analyte on this date.
   //
@@ -88,7 +145,7 @@ export async function writeClinicalFact(
   // excludes entered-in-error rows; the is_erroneous check is belt and braces.
   let supersededId: number | null = null;
   try {
-    const existing = await clinicalClient().get(clinicalUrl(base), {
+    const existing = await clinicalClient().get(clinicalUrl(cfg.base), {
       params: { person_id: personId },
     });
     const rows = Array.isArray(existing.data)
@@ -97,12 +154,13 @@ export async function writeClinicalFact(
     const sameDay = rows.find(
       (r: Record<string, unknown>) =>
         String(r.person) === String(personId) &&
-        r[sourceField] === descriptor.source_value &&
-        r[dateField] === date &&
+        r[cfg.sourceField] === descriptor.source_value &&
+        r[cfg.dateField] === date &&
+        (target !== 'measurement' || r[cfg.typeField] === descriptor.type_concept_id) &&
         !r.is_erroneous,
     );
     if (sameDay) {
-      supersededId = (sameDay.measurement_id ?? sameDay.observation_id) as number;
+      supersededId = sameDay[cfg.idField] as number;
     }
   } catch {
     // A failed lookup must not block the write. Worst case we insert a second
@@ -111,32 +169,35 @@ export async function writeClinicalFact(
   }
 
   if (supersededId != null) {
-    await clinicalClient().patch(clinicalUrl(`${base}${supersededId}/`), {
+    await clinicalClient().patch(clinicalUrl(`${cfg.base}${supersededId}/`), {
       is_erroneous: true,
       erroneous_reason: 'Superseded by a corrected value entered in the patient editor',
     });
   }
 
+  if (!cfg.storesValue && isEmptyOccurrenceValue(value)) {
+    return { supersededId, createdId: null };
+  }
+
   const payload: Record<string, unknown> = {
     person: personId,
-    [conceptField]: descriptor.concept_id,
-    [dateField]: date,
-    [typeField]: descriptor.type_concept_id,
-    [sourceField]: descriptor.source_value,
-    ...valueFields(descriptor, value),
+    [cfg.conceptField]: descriptor.concept_id,
+    [cfg.dateField]: date,
+    [cfg.typeField]: descriptor.type_concept_id,
+    [cfg.sourceField]: descriptor.source_value,
   };
-  if (isMeasurement && descriptor.unit_concept_id) {
+  if (cfg.storesValue) {
+    Object.assign(payload, valueFields(descriptor, value));
+  }
+  if (cfg.storesUnit && descriptor.unit_concept_id) {
     payload.unit_concept = descriptor.unit_concept_id;
   }
-  if (isMeasurement && descriptor.unit) {
+  if (cfg.storesUnit && descriptor.unit) {
     payload.unit_source_value = descriptor.unit;
   }
 
-  const created = await clinicalClient().post(clinicalUrl(base), payload);
-  const createdId =
-    (created.data?.measurement_id ?? created.data?.observation_id ?? null) as
-      | number
-      | null;
+  const created = await clinicalClient().post(clinicalUrl(cfg.base), payload);
+  const createdId = (created.data?.[cfg.idField] ?? null) as number | null;
   return { supersededId, createdId };
 }
 
@@ -158,10 +219,41 @@ export async function writeProfileField(
   if (!descriptor?.writable || descriptor.target !== 'person') {
     throw new Error(`${field} is not a writable profile field`);
   }
-  const key = descriptor.payload_field ?? field;
-  await clinicalClient().patch(clinicalUrl(`/v1/persons/${personId}/`), {
-    [key]: value === '' ? null : value,
-  });
+  await writeProfileFields(personId, [{ field, descriptor, value }]);
+}
+
+export interface ProfileEdit {
+  field: string;
+  descriptor: FieldDescriptor;
+  value: unknown;
+}
+
+/**
+ * Write several Person fields in one request.
+ *
+ * One request rather than one per field, because some of them are only valid
+ * together. Latitude and longitude must be both set or both null — the record
+ * carries a check constraint saying so — and sending them separately means the
+ * first arrives alone and is refused, so a patient with no coordinates could
+ * never be given any.
+ *
+ * Batching is the fix rather than special-casing that pair: the endpoint already
+ * accepts every profile field at once, and a form submits what the user changed,
+ * not one field at a time.
+ */
+export async function writeProfileFields(
+  personId: number | string,
+  edits: ProfileEdit[],
+): Promise<void> {
+  const payload: Record<string, unknown> = {};
+  for (const { field, descriptor, value } of edits) {
+    if (!descriptor?.writable || descriptor.target !== 'person') {
+      throw new Error(`${field} is not a writable profile field`);
+    }
+    payload[descriptor.payload_field ?? field] = value === '' ? null : value;
+  }
+  if (Object.keys(payload).length === 0) return;
+  await clinicalClient().patch(clinicalUrl(`/v1/persons/${personId}/`), payload);
 }
 
 /**
@@ -170,6 +262,9 @@ export async function writeProfileField(
  * Editors should call this rather than picking a writer themselves: `writable`
  * alone does not say where a value goes, and treating every writable field as an
  * OMOP fact is what sent profile edits to the observation endpoint.
+ *
+ * For several edits at once prefer `writeFieldValues`, which sends the Person
+ * fields together — some of them are only valid in company.
  */
 export async function writeFieldValue(
   personId: number | string,
@@ -183,4 +278,78 @@ export async function writeFieldValue(
     return;
   }
   await writeClinicalFact(personId, field, descriptor, value, date ?? today());
+}
+
+
+/**
+ * Write a set of edits, sending the Person fields together.
+ *
+ * The clinical facts stay one write each: each is its own event, dated and
+ * superseded on its own terms. The Person fields do not work that way — some are
+ * only valid alongside another, so they go in one request.
+ */
+export async function writeFieldValues(
+  personId: number | string,
+  edits: ProfileEdit[],
+  date?: string,
+): Promise<void> {
+  const profile = edits.filter((e) => e.descriptor?.target === 'person');
+  const clinical = edits.filter((e) => e.descriptor?.target !== 'person');
+
+  for (const { field, descriptor, value } of clinical) {
+    await writeClinicalFact(personId, field, descriptor, value, date ?? today());
+  }
+  await writeProfileFields(personId, profile);
+}
+
+/** The capabilities a person can have in a language, server-side vocabulary. */
+export const LANGUAGE_CAPABILITIES = ['speak', 'read', 'write', 'understand'] as const;
+export type LanguageCapability = typeof LANGUAGE_CAPABILITIES[number];
+
+/** Languages the flattened PatientRecord columns cover. */
+export const FLATTENED_LANGUAGES = ['english', 'spanish'] as const;
+export type FlattenedLanguage = typeof FLATTENED_LANGUAGES[number];
+
+/**
+ * Replace a person's capabilities in the languages named.
+ *
+ * Rows, not columns: each capability is its own PersonLanguageSkill row, so
+ * this cannot go through `writeProfileFields`. It rides the same persons PATCH
+ * so it inherits one authorization check rather than a second one that could
+ * drift from it.
+ *
+ * Replace, not merge — the listed capabilities become exactly what is stored
+ * for that language. Languages left out of `skills` are untouched, so setting
+ * English asserts nothing about Spanish.
+ *
+ * An empty list clears a language back to unknown rather than recording that
+ * the person has no capability in it. Capability lives in the presence of a
+ * row, so no rows means no answer; the server documents the same limit.
+ */
+export async function writeLanguageSkills(
+  personId: number | string,
+  skills: Partial<Record<FlattenedLanguage, LanguageCapability[]>>,
+): Promise<void> {
+  if (Object.keys(skills).length === 0) return;
+  await clinicalClient().patch(
+    clinicalUrl(`/v1/persons/${personId}/`),
+    { language_skills: skills },
+  );
+}
+
+/**
+ * Read a language's capabilities back out of the flattened PatientRecord columns.
+ *
+ * The record carries `english_speak`, `english_read` and so on; the editor wants
+ * `['speak', 'read']`. Only true counts as held: false means asked and does not
+ * have it, null means nobody asked, and neither belongs in a selection.
+ */
+export function languageCapabilitiesFrom(
+  record: Record<string, unknown> | undefined,
+  language: FlattenedLanguage,
+): LanguageCapability[] {
+  if (!record) return [];
+  return LANGUAGE_CAPABILITIES.filter(
+    (capability) => record[`${language}_${capability}`] === true,
+  );
 }

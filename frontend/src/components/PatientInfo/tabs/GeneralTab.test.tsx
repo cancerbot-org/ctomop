@@ -79,7 +79,6 @@ function renderTab(formData: Record<string, unknown> = {}) {
       editedName="Alishia Howell"
       onNameChange={vi.fn()}
       onZipcodeChange={vi.fn()}
-      diseaseType="myeloma"
     />,
   );
 }
@@ -88,7 +87,10 @@ describe('GeneralTab', () => {
   it('fetches the descriptor', async () => {
     renderTab();
     await waitFor(() =>
-      expect(mockGet).toHaveBeenCalledWith('/v1/patient-records/writable-fields/'),
+      expect(mockGet).toHaveBeenCalledWith(
+        '/v1/patient-records/writable-fields/',
+        expect.anything(),
+      ),
     );
   });
 
@@ -138,13 +140,15 @@ describe('GeneralTab', () => {
     expect(screen.getByTestId('reason-bmi')).toHaveTextContent(/computed from/i);
   });
 
-  it('explains an unmapped field rather than offering it', async () => {
+  it('keeps disease attributes on the Disease tab rather than duplicating editors', async () => {
     // Twelve of the thirty are unmapped. They were selects and text boxes that
     // returned 405 on every save.
-    renderTab({ disease: 'Multiple Myeloma', hiv_status: false });
+    renderTab({ disease: 'Multiple Myeloma', stage: 'III', histologic_type: 'Plasma cell myeloma', hiv_status: false });
     await waitFor(() => expect(mockGet).toHaveBeenCalled());
 
-    expect(screen.getByTestId('reason-disease')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Disease')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Stage')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Histologic Type')).not.toBeInTheDocument();
     expect(screen.getByTestId('reason-hiv_status')).toBeInTheDocument();
   });
 

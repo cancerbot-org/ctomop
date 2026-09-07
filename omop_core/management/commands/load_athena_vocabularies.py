@@ -1,6 +1,11 @@
 import csv
+import hashlib
+import json
+import os
+import re
 import shutil
 import sys
+import tempfile
 import time
 import zipfile
 from datetime import date
@@ -9,8 +14,10 @@ from pathlib import Path
 csv.field_size_limit(sys.maxsize)
 
 from django.core.management.base import BaseCommand, CommandError
+from django.apps import apps
 from django.db import connection
 from django.db.models import Count
+import requests
 
 import logging
 
@@ -25,16 +32,29 @@ logger = logging.getLogger(__name__)
 
 VOCAB_SCOPE = frozenset({
     'HemOnc', 'RxNorm', 'RxNorm Extension', 'ATC', 'LOINC', 'UCUM',
+    # CIEL 45917997 is the clinically appropriate Measurement concept for
+    # ``spleen_size`` (#1000). Keep CIEL in scope so this Athena-owned concept
+    # is available to curators instead of minting a local substitute.
+    'CIEL',
+    # Curated measurement concepts used by field mappings.  In particular,
+    # OMOP Extension 718584 is the PD-L1 by Immune stain measurement (#989).
+    'OMOP Extension',
     'Visit', 'Type Concept',
     # Clinical-record vocabularies (FHIR sync B3): SNOMED covers conditions,
     # procedures, and allergies; ICD10CM covers EHR-sourced diagnoses. CVX
     # (immunizations) is mapped in the ingest but isn't in the current Athena
     # export, so it loads once a CVX-inclusive bundle is fetched.
     'SNOMED', 'ICD10CM', 'CVX',
+    # US procedure and professional-service codes. CPT4 is used as a source
+    # vocabulary by the code-mapping and FHIR ingestion paths, so it must be
+    # retained whenever the Athena bundle includes it.
+    'CPT4',
     # Genomic + oncology coding vocabularies (#459)
     'OMOP Genomic', 'ICDO3', 'NCIt',
     # Oncology staging/grading modifiers + cancer registry
-    'Cancer Modifier', 'NAACCR',
+    'Cancer Modifier', 'NAACCR', 'CDISC',
+    # MeSH for cytogenetic/genomic field concepts (#803)
+    'MeSH',
     # OMOP-generated metadata. 'Episode' carries the Treatment Regimen concept the
     # line-of-therapy episodes point at; 'CDM' carries the field concepts
     # EpisodeEvent references. Both were hand-seeded until the seeder was retired —
@@ -52,20 +72,35 @@ VOCAB_SCOPE = frozenset({
 # bundle, even though the importer supports it when a CVX-inclusive bundle is
 # used.
 REQUIRED_CLINICAL_VOCABULARIES = frozenset({'LOINC', 'RxNorm', 'SNOMED', 'ICD10CM'})
-RXNORM_CLASS_SCOPE = frozenset({'Ingredient', 'Clinical Drug', 'Branded Drug', 'Clinical Drug Comp'})
 # A --replace reload deletes the entire vocabulary before applying this filter.
-# Keep every LOINC domain already required by our deployed vocabulary; the
-# preflight below turns any future scope drift into a safe, actionable failure.
+# Keep every LOINC domain relevant to patient-clinical data; the preflight below
+# turns any future scope drift into a safe, actionable failure.
 LOINC_DOMAIN_SCOPE = frozenset({
+    # Core clinical domains (original scope)
     'Measurement', 'Observation', 'Meas Value', 'Procedure', 'Note',
+    # Patient demographics — LOINC codes for sex, race, ethnicity, birth date,
+    # age, language, phone, email, etc. land in these domains
+    'Gender', 'Race', 'Ethnicity', 'Provider',
+    # Additional clinical domains — some LOINC codes map to conditions,
+    # devices, specimens, or drugs
+    'Condition', 'Drug', 'Device', 'Specimen',
+    # Metadata and type concepts
+    'Metadata', 'Type Concept',
 })
 BATCH = 100_000
 PROGRESS_EVERY = 500_000
 DEFAULT_GDRIVE_URL = 'https://drive.google.com/drive/u/0/folders/1HoRWGepqcH3pMKK03KNb1oWpaVs0Avl7'
+UMLS_RELEASES_URL = 'https://uts-ws.nlm.nih.gov/releases'
+UMLS_DOWNLOAD_URL = 'https://uts-ws.nlm.nih.gov/download'
+DEFAULT_UMLS_CACHE_DIR = '/tmp/promop-umls'
+_INCOMING_CONCEPT_TABLE = '_incoming_athena_concept_ids'
+_VOCABULARY_CONCEPT_REFERENCE_TABLES = frozenset({
+    'concept_relationship', 'concept_ancestor', 'concept_synonym',
+    'drug_strength', 'source_to_concept_map',
+})
 
 # Defaults for the single self-describing cdm_source row. Kept in sync with
-# migration 0112_seed_cdm_source; the command re-seeds this row because a
-# --replace TRUNCATE ... CASCADE wipes cdm_source (it FKs to concept).
+# migration 0112_seed_cdm_source.
 _CDM_SOURCE_DEFAULTS = {
     'cdm_source_name': 'PRomop — Decision-Ready Longitudinal Patient Record',
     'cdm_holder': 'HealthKey, Inc.',
@@ -178,6 +213,143 @@ def _download_gdrive_vocabulary(url, log):
     return _extract_vocabulary_archive(archive, extract_dir, log)
 
 
+def _release_version_from_url(url):
+    """Best-effort UMLS release identifier for an operator-pinned archive URL."""
+    match = re.search(r'/([0-9]{4}(?:AA|AB))/umls-\1-full\.zip$', url)
+    return match.group(1) if match else None
+
+
+def _resolve_umls_release(release_url=None, session=requests):
+    """Return metadata for an explicit or the current UMLS Full Release."""
+    if release_url:
+        return {
+            'release_url': release_url,
+            'release_version': _release_version_from_url(release_url),
+            'release_date': None,
+        }
+    try:
+        response = session.get(
+            UMLS_RELEASES_URL,
+            params={'releaseType': 'umls-full-release', 'current': 'true'},
+            timeout=30,
+        )
+        response.raise_for_status()
+        releases = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise CommandError(
+            'Could not resolve the current UMLS Full Release from NLM UTS. '
+            'Set UMLS_RELEASE_URL to a known release URL or retry when UTS is available.'
+        ) from exc
+    if not isinstance(releases, list) or len(releases) != 1:
+        raise CommandError('NLM UTS did not return exactly one current UMLS Full Release.')
+    release = releases[0]
+    download_url = release.get('downloadUrl')
+    if not download_url:
+        raise CommandError('NLM UTS current-release response did not include downloadUrl.')
+    return {
+        'release_url': download_url,
+        'release_version': release.get('releaseVersion'),
+        'release_date': release.get('releaseDate'),
+    }
+
+
+def _validate_umls_archive(path):
+    """Validate archive structure without extracting its multi-gigabyte contents."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if not any(name.endswith('META/MRCONSO.RRF') for name in archive.namelist()):
+                raise CommandError(
+                    f'UMLS archive {path} does not contain META/MRCONSO.RRF.'
+                )
+    except zipfile.BadZipFile as exc:
+        raise CommandError(f'UMLS archive {path} is not a valid zip file.') from exc
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _cache_umls_release(api_key, cache_dir, release_url=None, log=lambda _msg: None,
+                        session=requests):
+    """Download a raw UMLS release into a reusable local cache.
+
+    This intentionally does *not* parse RRF data into OMOP tables. Athena is
+    the governed UMLS→OMOP conversion layer; the cached archive provides source
+    provenance and a local audit artifact only.
+    """
+    release = _resolve_umls_release(release_url, session=session)
+    version = release['release_version'] or _release_version_from_url(release['release_url'])
+    if not version:
+        raise CommandError(
+            'Could not determine the UMLS release version. Use an NLM URL of the form '
+            '.../<YYYYAA-or-YYYYAB>/umls-<release>-full.zip.'
+        )
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = cache_dir / f'umls-{version}-full.zip'
+    metadata_path = cache_dir / f'umls-{version}-full.json'
+
+    if archive_path.exists():
+        _validate_umls_archive(archive_path)
+        try:
+            metadata = json.loads(metadata_path.read_text())
+        except (OSError, ValueError):
+            metadata = {}
+        metadata.update(release)
+        metadata.update({
+            'archive_name': archive_path.name,
+            'archive_bytes': archive_path.stat().st_size,
+            'sha256': metadata.get('sha256') or _sha256_file(archive_path),
+            'cached': True,
+        })
+        metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + '\n')
+        log(f'  UMLS: using validated cached {archive_path.name}.')
+        return metadata
+
+    log(f'  UMLS: downloading {version} from NLM UTS...')
+    fd, tmp_name = tempfile.mkstemp(prefix=f'.{archive_path.name}.', suffix='.part', dir=cache_dir)
+    digest = hashlib.sha256()
+    try:
+        with os.fdopen(fd, 'wb') as destination:
+            try:
+                response = session.get(
+                    UMLS_DOWNLOAD_URL,
+                    params={'url': release['release_url'], 'apiKey': api_key},
+                    stream=True,
+                    timeout=(30, 300),
+                )
+                response.raise_for_status()
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        destination.write(chunk)
+                        digest.update(chunk)
+            except requests.RequestException as exc:
+                raise CommandError(
+                    'Could not download the UMLS release from NLM UTS. '
+                    'Check UMLS_API_KEY and network access.'
+                ) from exc
+        _validate_umls_archive(tmp_name)
+        os.replace(tmp_name, archive_path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+    metadata = {
+        **release,
+        'archive_name': archive_path.name,
+        'archive_bytes': archive_path.stat().st_size,
+        'sha256': digest.hexdigest(),
+        'cached': False,
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + '\n')
+    log(f'  UMLS: cached {archive_path.name} ({metadata["archive_bytes"]:,} bytes).')
+    return metadata
+
+
 def _header_index(header_row):
     """Build column-name → index map from a TSV header row."""
     return {col: i for i, col in enumerate(header_row)}
@@ -188,15 +360,13 @@ def _concept_in_scope(vid, concept_code, concept_class_id, domain_id):
         return False
     if vid == 'ATC':
         return concept_code.startswith('L')
-    if vid in ('RxNorm', 'RxNorm Extension'):
-        return concept_class_id in RXNORM_CLASS_SCOPE
     if vid == 'LOINC':
         return domain_id in LOINC_DOMAIN_SCOPE
     return True
 
 
 def _copy_rows(table, columns, rows, log, direct=False):
-    """COPY rows into table. direct=True skips temp table (use after TRUNCATE)."""
+    """COPY rows into table. direct=True skips the conflict-tolerant temp table."""
     if not rows:
         return
     connection.ensure_connection()
@@ -234,8 +404,10 @@ class Command(BaseCommand):
                                 'Google Drive folder or file URL containing a zipped '
                                 f'Athena vocabulary export. Defaults to {DEFAULT_GDRIVE_URL}.'
                             ))
-        parser.add_argument('--replace', action='store_true',
-                            help='Clear vocabulary rows before loading')
+        parser.add_argument('--replace', action='store_true', help=(
+            'Remove Athena concepts absent from the incoming release after loading. '
+            'Patient records are retained and stale concept references are cleared.'
+        ))
         parser.add_argument('--dry-run', action='store_true', dest='dry_run',
                             help='Count rows without writing to DB')
         parser.add_argument('--skip-clinical-vocabulary-verification', action='store_true',
@@ -246,6 +418,18 @@ class Command(BaseCommand):
                                 'Skips concept_relationship, concept_ancestor, '
                                 'concept_synonym and drug_strength.'
                             ))
+        parser.add_argument('--skip-code-mappings', action='store_true',
+                            help=(
+                                'Do not load the bundled code-to-concept mapping artifact. '
+                                'Intended only for deliberately partial fixtures.'
+                            ))
+        parser.add_argument('--umls-release-url',
+                            help=(
+                                'Pin the raw UMLS Full Release URL to cache. Defaults to '
+                                'UMLS_RELEASE_URL or the current UMLS release from NLM UTS.'
+                            ))
+        parser.add_argument('--skip-umls-cache', action='store_true',
+                            help='Skip optional UMLS archive caching even when UMLS_API_KEY is set.')
 
     def handle(self, *args, **options):
         base = options['path']
@@ -255,6 +439,7 @@ class Command(BaseCommand):
         replace = options['replace']
         dry_run = options['dry_run']
         skip_clinical_vocabulary_verification = options['skip_clinical_vocabulary_verification']
+        self._umls_release = None
 
         sources = [bool(base), bool(archive), bool(bucket_name), bool(gdrive_url)]
         if sum(sources) != 1:
@@ -275,25 +460,37 @@ class Command(BaseCommand):
         t0 = time.monotonic()
         self._build_start = time.time()  # wall-clock for VocabularyRelease
 
+        api_key = os.environ.get('UMLS_API_KEY')
+        if options['skip_umls_cache']:
+            self._log('  UMLS: cache step skipped by --skip-umls-cache.')
+        elif dry_run:
+            self._log('  UMLS: dry-run; would cache a UMLS release when UMLS_API_KEY is configured.')
+        elif not api_key:
+            self._log('  UMLS: UMLS_API_KEY is not configured; skipping optional raw-release cache.')
+        else:
+            self._umls_release = _cache_umls_release(
+                api_key=api_key,
+                cache_dir=os.environ.get('UMLS_CACHE_DIR', DEFAULT_UMLS_CACHE_DIR),
+                release_url=options['umls_release_url'] or os.environ.get('UMLS_RELEASE_URL'),
+                log=self._log,
+            )
+
         self._base = base
 
-        self._direct = replace and not dry_run
+        # Never TRUNCATE vocabulary tables: concept is referenced by patient data,
+        # and PostgreSQL TRUNCATE ... CASCADE deletes those dependent rows.
+        self._direct = False
 
         if replace:
             logger.warning(
-                '--replace uses TRUNCATE CASCADE and will destroy clinical '
-                'data in tables that FK to concept (drug_exposure, measurement, '
-                'condition_occurrence, etc.). The default upsert path (no flag) '
-                'is safe for databases with clinical data.'
+                '--replace removes Athena concepts missing from the incoming '
+                'release after safely clearing their references from patient data.'
             )
             self._validate_replace_loinc_scope()
             self._validate_replace_vocab_coverage()
-
-        if self._direct:
-            self._hk_concepts = self._save_healthkey_concepts()
-            self._clear()
-        else:
-            self._hk_concepts = []
+            if not dry_run:
+                self._replace_tracking = True
+                self._create_incoming_concept_table()
 
         counts = {
             'relationship':         self._load_relationships(dry_run),
@@ -302,10 +499,6 @@ class Command(BaseCommand):
             'concept_class':        self._load_concept_classes(dry_run),
             'concept':              self._load_concepts(dry_run),
         }
-        # Restore HealthKey-minted concepts after the Athena concept load
-        # but before relationship/ancestor loads that reference concept IDs.
-        if self._hk_concepts and not dry_run:
-            self._restore_healthkey_concepts()
         if options['concepts_only']:
             # Adding a small vocabulary to VOCAB_SCOPE means ~1.5k new concepts,
             # but the relationship, ancestor and synonym files are ~26M rows that
@@ -326,11 +519,18 @@ class Command(BaseCommand):
             })
         if not dry_run:
             self._seed_concept_zero()
+            if replace:
+                self._remove_stale_concepts()
             self._sync_cdm_source_metadata()
             if not skip_clinical_vocabulary_verification:
                 self._verify_required_clinical_vocabularies()
+            self._load_raw_umls(options['verbosity'])
             self._record_version_history(replace)
             self._publish_release(counts)
+            if options['skip_code_mappings']:
+                self._log('  --skip-code-mappings: skipping code mapping artifact load.')
+            else:
+                self._load_code_mappings(options['verbosity'])
         elapsed = time.monotonic() - t0
         verb = 'would load' if dry_run else 'loaded'
         total = sum(counts.values())
@@ -369,7 +569,8 @@ class Command(BaseCommand):
                 f"{', '.join(missing)}. This database cannot reliably map clinical "
                 'conditions, diagnoses, medications, and labs. Fetch an Athena bundle '
                 'that includes the missing vocabularies and rerun this command without '
-                '--replace; --replace truncates clinical data.'
+                '--replace, which would remove the loaded concepts this database '
+                'still maps clinical data against.'
             )
         self._log(
             '  verified required clinical vocabularies: ' +
@@ -388,8 +589,8 @@ class Command(BaseCommand):
                 tmp.unlink()
                 self._log(f'  Cleaned up {filename}.')
 
-    # -- HealthKey concept preservation across --replace -----------------
-
+    # Kept for the focused legacy unit tests that exercise local-concept
+    # serialization. The replacement path no longer calls either helper.
     _HK_CONCEPT_COLS = (
         'concept_id', 'concept_name', 'domain_id', 'vocabulary_id',
         'concept_class_id', 'standard_concept', 'concept_code',
@@ -397,76 +598,104 @@ class Command(BaseCommand):
     )
 
     def _save_healthkey_concepts(self):
-        """Snapshot source='HealthKey' concept rows before TRUNCATE.
-
-        Returns a list of tuples matching ``_HK_CONCEPT_COLS`` order.
-        """
-        qs = Concept.objects.filter(source='HealthKey')
-        count = qs.count()
-        if not count:
-            self._log('  No HealthKey-minted concepts to preserve.')
-            return []
-        rows = list(qs.values_list(*self._HK_CONCEPT_COLS))
-        self._log(f'  Saved {len(rows):,} HealthKey concept(s) for restore after TRUNCATE.')
-        return rows
+        return list(
+            Concept.objects.filter(source='HealthKey').values_list(*self._HK_CONCEPT_COLS)
+        )
 
     def _restore_healthkey_concepts(self):
-        """Re-insert saved HealthKey concepts after TRUNCATE + Athena reload.
-
-        FK references (vocabulary, domain, concept_class) that were not restored
-        by the Athena reload are created as minimal placeholder rows so the
-        INSERT does not violate FK constraints.
-        """
         if not self._hk_concepts:
             return
-        # Ensure FK targets exist — Athena reload may not include HK-specific
-        # vocabulary / domain / concept_class rows.
-        vocab_ids = {r[3] for r in self._hk_concepts}
-        domain_ids = {r[2] for r in self._hk_concepts}
-        class_ids = {r[4] for r in self._hk_concepts}
-
-        for vid in vocab_ids:
+        for vid in {row[3] for row in self._hk_concepts}:
             Vocabulary.objects.get_or_create(
                 vocabulary_id=vid,
                 defaults={'vocabulary_name': vid, 'vocabulary_concept_id': 0},
             )
-        for did in domain_ids:
+        for did in {row[2] for row in self._hk_concepts}:
             Domain.objects.get_or_create(
                 domain_id=did,
                 defaults={'domain_name': did, 'domain_concept_id': 0},
             )
-        for cid in class_ids:
+        for cid in {row[4] for row in self._hk_concepts}:
             ConceptClass.objects.get_or_create(
                 concept_class_id=cid,
                 defaults={'concept_class_name': cid, 'concept_class_concept_id': 0},
             )
+        _copy_rows('concept', self._HK_CONCEPT_COLS, self._hk_concepts, self._log)
 
-        _copy_rows(
-            'concept', self._HK_CONCEPT_COLS, self._hk_concepts,
-            self._log, direct=True,
-        )
-        self._log(f'  Restored {len(self._hk_concepts):,} HealthKey concept(s).')
-
-    def _clear(self):
-        self._log('Clearing existing vocabulary data (TRUNCATE)...')
-        t = time.monotonic()
+    def _create_incoming_concept_table(self):
+        """Create a temporary, database-side index of incoming concept IDs."""
         with connection.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS {_INCOMING_CONCEPT_TABLE}')
             cur.execute(
-                'TRUNCATE concept_ancestor, concept_relationship, '
-                'concept, concept_class, domain, relationship, vocabulary CASCADE'
+                f'CREATE TEMP TABLE {_INCOMING_CONCEPT_TABLE} '
+                '(concept_id integer PRIMARY KEY)'
             )
-        self._log(f'  Truncated all vocab tables in {time.monotonic() - t:.0f}s')
-        self._log('  NOTE: CASCADE also clears every table with a FK to concept — '
-                  'including cdm_source, observation_period, and clinical event tables. '
-                  'cdm_source is re-seeded after load; re-run populate_observation_period '
-                  'to re-derive observation periods.')
+
+    def _record_incoming_concept_ids(self, rows):
+        if not rows:
+            return
+        connection.ensure_connection()
+        with connection.connection.cursor() as cur:
+            with cur.copy(
+                f'COPY {_INCOMING_CONCEPT_TABLE} (concept_id) FROM STDIN'
+            ) as copy:
+                for concept_id in rows:
+                    copy.write_row((concept_id,))
+
+    def _remove_stale_concepts(self):
+        """Delete stale Athena concepts without deleting patient-owned rows."""
+        stale_sql = (
+            'SELECT c.concept_id FROM concept c '
+            'WHERE c.vocabulary_id = ANY(%s) AND c.source IS NULL '
+            f'AND NOT EXISTS (SELECT 1 FROM {_INCOMING_CONCEPT_TABLE} incoming '
+            'WHERE incoming.concept_id = c.concept_id)'
+        )
+        params = [list(VOCAB_SCOPE)]
+        qn = connection.ops.quote_name
+        references = []
+        for model in apps.get_models():
+            for field in model._meta.get_fields():
+                if (
+                    not field.auto_created
+                    and getattr(field, 'many_to_one', False)
+                    and field.related_model is Concept
+                ):
+                    references.append((model, field))
+
+        with connection.cursor() as cur:
+            cur.execute(f'SELECT COUNT(*) FROM ({stale_sql}) stale', params)
+            stale_count = cur.fetchone()[0]
+            if not stale_count:
+                cur.execute(f'DROP TABLE {_INCOMING_CONCEPT_TABLE}')
+                self._log('  --replace: no stale Athena concepts to remove.')
+                return
+
+            for model, field in references:
+                table = qn(model._meta.db_table)
+                column = qn(field.column)
+                if model._meta.db_table in _VOCABULARY_CONCEPT_REFERENCE_TABLES:
+                    cur.execute(
+                        f'DELETE FROM {table} WHERE {column} IN ({stale_sql})', params
+                    )
+                else:
+                    value = 'NULL' if field.null else '0'
+                    cur.execute(
+                        f'UPDATE {table} SET {column} = {value} '
+                        f'WHERE {column} IN ({stale_sql})', params
+                    )
+            cur.execute(f'DELETE FROM concept WHERE concept_id IN ({stale_sql})', params)
+            cur.execute(f'DROP TABLE {_INCOMING_CONCEPT_TABLE}')
+        self._log(
+            f'  --replace: removed {stale_count:,} stale Athena concept(s); '
+            'patient-owned rows were retained.'
+        )
 
     def _validate_replace_loinc_scope(self):
-        """Abort before TRUNCATE if loaded LOINC data falls outside the filter.
+        """Abort before replacement if loaded LOINC data falls outside the filter.
 
-        `--replace` first clears ``concept`` and then reloads only the configured
-        LOINC domains. Without this check, adding a new LOINC domain to a live
-        database can make a later ordinary reload silently delete its concepts.
+        `--replace` removes concepts absent from the configured incoming scope.
+        Without this check, adding a new LOINC domain to a live database can make
+        a later ordinary replacement silently delete its concepts.
         """
         excluded = Concept.objects.filter(vocabulary_id='LOINC').exclude(
             domain_id__in=LOINC_DOMAIN_SCOPE,
@@ -479,21 +708,19 @@ class Command(BaseCommand):
             excluded.order_by('domain_id').values_list('domain_id', flat=True).distinct()
         )
         raise CommandError(
-            '--replace aborted before TRUNCATE: '
+            '--replace aborted before removing stale concepts: '
             f'{count:,} loaded LOINC concept(s) use domain(s) outside '
             f'LOINC_DOMAIN_SCOPE: {", ".join(domains)}. '
             'Add the required domain(s) to LOINC_DOMAIN_SCOPE, then rerun.'
         )
 
     def _validate_replace_vocab_coverage(self):
-        """Abort before TRUNCATE if the incoming CSV would drop entire vocabularies.
+        """Abort before replacement if the incoming CSV would drop vocabularies.
 
-        When ``--replace`` TRUNCATEs the concept table, only HealthKey-sourced
-        concepts are preserved. If the Athena CSV omits a vocabulary that has
-        existing rows in the DB, those concepts are silently deleted with no way
-        to recover them. This pre-flight check compares the vocabularies present
-        in the DB against what the incoming CONCEPT.csv will provide and aborts
-        if any vocabulary would lose all its rows.
+        If the Athena CSV omits a vocabulary that has existing rows in the DB,
+        replacement would remove every loaded Athena concept in that vocabulary.
+        This pre-flight check compares the vocabularies present in the DB against
+        what the incoming CONCEPT.csv will provide and aborts that unsafe case.
         """
         # Vocabularies currently stored in the DB (within VOCAB_SCOPE).
         db_vocabs = set(
@@ -512,7 +739,7 @@ class Command(BaseCommand):
         except CommandError:
             raise CommandError(
                 '--replace aborted: CONCEPT.csv not found. Cannot verify '
-                'vocabulary coverage before TRUNCATE.'
+                'vocabulary coverage before removing stale concepts.'
             )
         with f:
             reader = csv.reader(f, delimiter='\t')
@@ -529,10 +756,10 @@ class Command(BaseCommand):
         missing = sorted(db_vocabs - csv_vocabs)
         if missing:
             raise CommandError(
-                '--replace aborted before TRUNCATE: the incoming CONCEPT.csv '
+            '--replace aborted before removing stale concepts: the incoming CONCEPT.csv '
                 f'contains no rows for {len(missing)} vocabulary/ies that have '
                 f'existing concepts in the database: {", ".join(missing)}. '
-                'A TRUNCATE would permanently delete those concepts. Either '
+                'Replacement would permanently delete those concepts. Either '
                 'fetch an Athena bundle that includes the missing vocabularies, '
                 'or run without --replace to upsert.'
             )
@@ -722,6 +949,7 @@ class Command(BaseCommand):
         scanned = 0
         vocab_counts = {}
         rows = []
+        incoming_ids = []
         with self._open('CONCEPT.csv') as f:
             reader = csv.reader(f, delimiter='\t')
             idx = _header_index(next(reader))
@@ -752,6 +980,8 @@ class Command(BaseCommand):
                 count += 1
                 vocab_counts[vid] = vocab_counts.get(vid, 0) + 1
                 if not dry_run:
+                    if hasattr(self, '_replace_tracking'):
+                        incoming_ids.append(concept_id)
                     std = cols[i_std][:1] if cols[i_std] else None
                     inv = cols[i_invalid][:1] if cols[i_invalid] else None
                     rows.append((
@@ -772,6 +1002,9 @@ class Command(BaseCommand):
                                     'concept_class_id', 'standard_concept', 'concept_code',
                                     'valid_start_date', 'valid_end_date', 'invalid_reason'),
                                    rows, self._log, direct=self._direct)
+                        if incoming_ids:
+                            self._record_incoming_concept_ids(incoming_ids)
+                            incoming_ids = []
                         rows = []
         if not dry_run:
             _copy_rows('concept',
@@ -779,6 +1012,8 @@ class Command(BaseCommand):
                         'concept_class_id', 'standard_concept', 'concept_code',
                         'valid_start_date', 'valid_end_date', 'invalid_reason'),
                        rows, self._log, direct=self._direct)
+            if incoming_ids:
+                self._record_incoming_concept_ids(incoming_ids)
         self._cleanup('CONCEPT.csv')
         self._log(f'  concepts: {count:,} loaded from {scanned:,} rows in {time.monotonic() - t:.0f}s')
         self._vocab_counts = vocab_counts
@@ -1007,9 +1242,8 @@ class Command(BaseCommand):
     def _sync_cdm_source_metadata(self):
         """Ensure the cdm_source row exists and fill its vocabulary metadata.
 
-        get_or_create (not just update) because --replace TRUNCATEs concept
-        CASCADE, which also wipes cdm_source via its cdm_version_concept FK —
-        the migration-0112 seed does not re-run after that.
+        get_or_create keeps the command resilient when the migration seed has
+        not yet run.
         """
         row, created = CdmSource.objects.get_or_create(
             cdm_source_abbreviation='PRomop',
@@ -1033,11 +1267,10 @@ class Command(BaseCommand):
     def _record_version_history(self, replace):
         """Append an immutable version-history row per loaded vocabulary.
 
-        Because --replace TRUNCATEs the vocabulary snapshot, the only durable
-        record of which release was implemented when is this append-only table
-        (promop#305, TI.4.2#01/#09). action='replaced' when --replace cleared a
-        prior snapshot, else 'loaded'. cdm_release_date is taken from the
-        self-describing cdm_source row.
+        This append-only table records which release was implemented when
+        (promop#305, TI.4.2#01/#09). action='replaced' for --replace, else
+        'loaded'. cdm_release_date is taken from the self-describing cdm_source
+        row.
         """
         action = (
             VocabularyVersionHistory.ACTION_REPLACED if replace
@@ -1175,7 +1408,58 @@ class Command(BaseCommand):
             vocab_versions=vocab_versions,
             row_counts=real_counts,
             checksums=checksums,
+            # Unit callers may publish a release directly rather than through
+            # handle(), which is where this per-run value is initialized.
+            umls_release=getattr(self, '_umls_release', None) or {},
             status='published',
             published_at=now,
         )
         self._log(f'  vocabulary_release: published release pk={release.pk}')
+
+    def _load_code_mappings(self, verbosity):
+        """Load approved code-to-concept mappings from the bundled artifact."""
+        from django.core.management import call_command
+
+        def seed_wearable_mappings():
+            self._log('  Seeding approved Apple and Garmin source-code mappings...')
+            call_command('seed_wearable_device_mappings', verbosity=verbosity)
+
+        artifact = Path(__file__).resolve().parents[2] / 'data' / 'code_concept_mappings.json'
+        if not artifact.exists():
+            self._log(
+                '  load_mappings: artifact not found at '
+                f'{artifact} — skipping code mapping load.'
+            )
+            seed_wearable_mappings()
+            return
+        # The artifact is tracked by Git LFS. If LFS content hasn't been
+        # pulled, the file is a tiny pointer instead of JSON — skip gracefully.
+        try:
+            head = artifact.read_bytes()[:30]
+        except OSError:
+            return
+        if head.startswith(b'version https://git-lfs'):
+            self._log(
+                '  load_mappings: artifact is a Git LFS pointer — '
+                'run "git lfs pull" to fetch the actual file. Skipping.'
+            )
+            seed_wearable_mappings()
+            return
+        self._log('')
+        self._log('  Loading approved code-to-concept mappings from artifact...')
+        call_command('load_mappings', artifact=str(artifact), verbosity=verbosity)
+        seed_wearable_mappings()
+
+    def _load_raw_umls(self, verbosity):
+        """Import cached raw UMLS source codes without conflating them with OMOP."""
+        if not self._umls_release:
+            return
+        from django.core.management import call_command
+        archive = Path(os.environ.get('UMLS_CACHE_DIR', DEFAULT_UMLS_CACHE_DIR)) / self._umls_release['archive_name']
+        self._log('  Loading raw UMLS CUIs and source codes...')
+        call_command(
+            'load_umls_release', archive=str(archive),
+            release_version=self._umls_release['release_version'],
+            release_url=self._umls_release['release_url'],
+            sha256=self._umls_release.get('sha256', ''), verbosity=verbosity,
+        )

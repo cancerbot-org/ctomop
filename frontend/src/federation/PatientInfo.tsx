@@ -5,7 +5,7 @@ import { PatientInfoProvider } from "./PatientInfoProvider";
 import { usePatientInfoMe, usePatchPatientInfo } from "./patientInfoHooks";
 import type { PatientInfoProps } from "./patientInfoTypes";
 import { fetchWritableFields, LIFECYCLE, type FieldDescriptors } from "@/hooks/useWritableFields";
-import { writeFieldValue } from "@/api/clinicalFacts";
+import { writeFieldValues } from "@/api/clinicalFacts";
 import GeneralTab from "@/components/PatientInfo/tabs/GeneralTab";
 import DiseaseTab from "@/components/PatientInfo/tabs/DiseaseTab";
 import TreatmentTab from "@/components/PatientInfo/tabs/TreatmentTab";
@@ -13,6 +13,7 @@ import BloodTab from "@/components/PatientInfo/tabs/BloodTab";
 import LabsTab from "@/components/PatientInfo/tabs/LabsTab";
 import BehaviorTab from "@/components/PatientInfo/tabs/BehaviorTab";
 import WearableTab from "@/components/PatientInfo/tabs/WearableTab";
+import { CustomPatientFields } from "@/components/PatientInfo/CustomPatientFields";
 
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
 
@@ -85,9 +86,9 @@ function PatientInfoInner({ readOnly, onPatientUpdated }: Pick<PatientInfoProps,
     if (d.ecog_performance_status != null)
       d.ecog_performance_status = String(d.ecog_performance_status);
     if (d.estrogen_receptor_status && d.progesterone_receptor_status && d.her2_status) {
-      const erNeg = ["Negative", "ER-"].includes(String(d.estrogen_receptor_status));
-      const prNeg = ["Negative", "PR-"].includes(String(d.progesterone_receptor_status));
-      const her2Neg = ["Negative", "HER2-"].includes(String(d.her2_status));
+      const erNeg = String(d.estrogen_receptor_status) === "Negative";
+      const prNeg = String(d.progesterone_receptor_status) === "Negative";
+      const her2Neg = String(d.her2_status) === "Negative";
       d.tnbc_status = erNeg && prNeg && her2Neg;
     }
     return d;
@@ -164,14 +165,18 @@ function PatientInfoInner({ readOnly, onPatientUpdated }: Pick<PatientInfoProps,
             (f) => descriptors[f]?.writable && info[f] !== baseline[f],
           )
         : [];
-      for (const field of clinicalEdits) {
-        await writeFieldValue(
+      // As a set: the Person fields travel in one request, because some are
+      // only valid together (latitude and longitude are a pair).
+      if (clinicalEdits.length) {
+        await writeFieldValues(
           personId as number,
-          field,
-          descriptors[field],
-          info[field],
+          clinicalEdits.map((field) => ({
+            field, descriptor: descriptors[field], value: info[field],
+          })),
         );
-        serverInfoRef.current[field] = info[field];
+        for (const field of clinicalEdits) {
+          serverInfoRef.current[field] = info[field];
+        }
       }
 
       // patient_name is handled by the server against Person, so it stays. Every
@@ -231,7 +236,7 @@ function PatientInfoInner({ readOnly, onPatientUpdated }: Pick<PatientInfoProps,
       const er = String(field === "estrogen_receptor_status" ? value : updated.estrogen_receptor_status ?? "");
       const pr = String(field === "progesterone_receptor_status" ? value : updated.progesterone_receptor_status ?? "");
       const her2 = String(field === "her2_status" ? value : updated.her2_status ?? "");
-      const neg = (v: string) => ["Negative", "ER-", "PR-", "HER2-"].includes(v);
+      const neg = (v: string) => v === "Negative";
       if (neg(er) && neg(pr) && neg(her2)) updated.tnbc_status = true;
       else if (er || pr || her2) updated.tnbc_status = false;
     }
@@ -327,8 +332,8 @@ function PatientInfoInner({ readOnly, onPatientUpdated }: Pick<PatientInfoProps,
     0: "Keep patient details up to date for accurate personalisation.",
     1: "Disease-specific clinical information and genetic details.",
     2: "Therapy history, treatment lines, and planned therapies.",
-    3: "Blood counts, electrolytes, coagulation, and cardiac markers.",
-    4: "Chemistry panel, liver function tests, and other lab markers.",
+    3: "Blood counts and differential.",
+    4: "Chemistry, liver function, coagulation, cardiac and tumour markers.",
     5: "Lifestyle, socioeconomic, and behavioural health factors.",
     6: "Apple wearable 30-day summaries derived from synced OMOP data.",
   };
@@ -403,6 +408,10 @@ function PatientInfoInner({ readOnly, onPatientUpdated }: Pick<PatientInfoProps,
           {activeTab === 4 && <LabsTab formData={editedInfo} onChange={handleFieldChange} />}
           {activeTab === 5 && <BehaviorTab formData={editedInfo} onChange={handleFieldChange} />}
           {activeTab === 6 && <WearableTab formData={editedInfo} onChange={handleFieldChange} />}
+          <CustomPatientFields
+            tab={["general", "disease", "treatment", "blood", "labs", "behavior", "wearable"][activeTab]}
+            formData={editedInfo}
+          />
         </div>
       </div>
     </div>

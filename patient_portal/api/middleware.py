@@ -7,6 +7,7 @@ from email.utils import parsedate_to_datetime
 from django.http import JsonResponse
 
 logger = logging.getLogger('audit')
+_deprecation_logger = logging.getLogger(__name__)
 
 # Sunset of the legacy, non-versioned /api/ prefix (#271).
 #
@@ -39,7 +40,7 @@ class DeprecationWarningMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
         if datetime.datetime.now(datetime.timezone.utc) > _SUNSET_DT:
-            logger.warning(
+            _deprecation_logger.warning(
                 "DeprecationWarningMiddleware: Sunset date %s has passed — "
                 "remove legacy /api/ URL aliases from ctomop/urls.py (the Django project package).",
                 _SUNSET_DATE,

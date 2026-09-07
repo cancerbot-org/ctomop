@@ -29,7 +29,10 @@ interface Props {
 }
 
 function BreastCancerSection({ formData, onChange, onMutationAdd, onMutationRemove, onMutationChange }: Omit<Props, 'diseaseType'>) {
-  const { descriptors } = useWritableFields();
+  // Ask about *this* patient: whether a field may be edited depends on who is
+  // asking and whose record it is, not only on whether the field is mapped.
+  const personId = (formData?.person_id ?? formData?.person) as number | undefined;
+  const { descriptors } = useWritableFields(personId);
   const { source: erSource }            = useVocabulary('estrogen-receptor-status', 'title');
   const { source: prSource }            = useVocabulary('progesterone-receptor-status', 'title');
   const { source: her2Source }          = useVocabulary('her2-status', 'title');
@@ -170,7 +173,10 @@ function BreastCancerSection({ formData, onChange, onMutationAdd, onMutationRemo
 }
 
 function LymphomaSection({ formData, onChange }: Pick<Props, 'formData' | 'onChange'>) {
-  const { descriptors } = useWritableFields();
+  // Ask about *this* patient: whether a field may be edited depends on who is
+  // asking and whose record it is, not only on whether the field is mapped.
+  const personId = (formData?.person_id ?? formData?.person) as number | undefined;
+  const { descriptors } = useWritableFields(personId);
   const { source: gelfSource }    = useVocabulary('gelf-criteria', 'title');
   const { source: flipiSource }   = useVocabulary('flipi-score', 'code');
   const { source: flGradeSource } = useVocabulary('follicular-lymphoma-grade', 'title');
@@ -209,7 +215,6 @@ function LymphomaSection({ formData, onChange }: Pick<Props, 'formData' | 'onCha
       <Section title="Laboratory Markers">
         <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
           <ClinicalField label="LDH Level (U/L)" name="ldh_level" descriptor={descriptors.ldh_level} type="number" value={formData?.ldh_level} onChange={onChange} />
-          <ClinicalField label="Beta-2 Microglobulin (mg/L)" name="beta2_microglobulin" descriptor={descriptors.beta2_microglobulin} type="number" value={formData?.beta2_microglobulin} onChange={onChange} />
           <ClinicalField label="Bone Marrow Involvement" name="bone_marrow_involvement" descriptor={descriptors.bone_marrow_involvement} type="select" value={formData?.bone_marrow_involvement} options={YES_NO_OPTIONS} onChange={onChange} />
           <ClinicalField label="Clonal Bone Marrow B Lymphocytes (%)" name="clonal_bone_marrow_b_lymphocytes" descriptor={descriptors.clonal_bone_marrow_b_lymphocytes} type="number" value={formData?.clonal_bone_marrow_b_lymphocytes} onChange={onChange} />
           <ClinicalField label="Number of Nodal Sites" name="number_of_nodal_sites" descriptor={descriptors.number_of_nodal_sites} unknownField type="number" value={formData?.number_of_nodal_sites} onChange={onChange} />
@@ -220,7 +225,10 @@ function LymphomaSection({ formData, onChange }: Pick<Props, 'formData' | 'onCha
 }
 
 function MyelomaSection({ formData, onChange }: Pick<Props, 'formData' | 'onChange'>) {
-  const { descriptors } = useWritableFields();
+  // Ask about *this* patient: whether a field may be edited depends on who is
+  // asking and whose record it is, not only on whether the field is mapped.
+  const personId = (formData?.person_id ?? formData?.person) as number | undefined;
+  const { descriptors } = useWritableFields(personId);
   const { source: progressionSource } = useVocabulary('disease-progression', 'title');
   const { options: sctTypeOptions, source: sctTypeSource } = useVocabulary('stem-cell-transplant', 'title');
   const { options: sctEligibilityOptions, source: sctEligibilitySource } = useVocabulary('sct-eligibility', 'title');
@@ -230,7 +238,7 @@ function MyelomaSection({ formData, onChange }: Pick<Props, 'formData' | 'onChan
     <>
       <Section title="Disease Characteristics">
         <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
-          <ClinicalField label="Myeloma Type" name="myeloma_type" descriptor={descriptors.myeloma_type} type="select" value={formData?.myeloma_type} options={myelomaTypeOptions.length ? myelomaTypeOptions.map((o: { value: string }) => o.value) : MYELOMA_TYPE_OPTIONS} onChange={onChange} vocabSource={myelomaTypeSource} />
+          <ClinicalField label="M-Protein Type" name="myeloma_type" descriptor={descriptors.myeloma_type} type="select" value={formData?.myeloma_type} options={myelomaTypeOptions.length ? myelomaTypeOptions.map((o: { value: string }) => o.value) : MYELOMA_TYPE_OPTIONS} onChange={onChange} vocabSource={myelomaTypeSource} />
           <ClinicalField label="ISS Stage" name="stage" descriptor={descriptors.stage} type="select" value={formData?.stage} options={ISS_STAGE_OPTIONS} onChange={onChange} />
           <ClinicalField label="R-ISS Stage" name="r_iss_stage" descriptor={descriptors.r_iss_stage} unknownField type="select" value={formData?.r_iss_stage} options={ISS_STAGE_OPTIONS} onChange={onChange} />
           <ClinicalField label="Durie-Salmon Stage" name="durie_salmon_stage" descriptor={descriptors.durie_salmon_stage} unknownField type="text" value={formData?.durie_salmon_stage} onChange={onChange} />
@@ -257,8 +265,8 @@ function MyelomaSection({ formData, onChange }: Pick<Props, 'formData' | 'onChan
           <ClinicalField label="Urine M-Protein (mg/24h)" name="monoclonal_protein_urine" descriptor={descriptors.monoclonal_protein_urine} type="number" value={formData?.monoclonal_protein_urine} onChange={onChange} />
           <ClinicalField label="Kappa Free Light Chains" name="kappa_flc" descriptor={descriptors.kappa_flc} type="number" value={formData?.kappa_flc} onChange={onChange} />
           <ClinicalField label="Lambda Free Light Chains" name="lambda_flc" descriptor={descriptors.lambda_flc} type="number" value={formData?.lambda_flc} onChange={onChange} />
-          <ClinicalField label="Free Light Chain Ratio" name="free_light_chain_ratio" descriptor={descriptors.free_light_chain_ratio} type="number" value={formData?.free_light_chain_ratio} onChange={onChange} />
-          <ClinicalField label="Beta-2 Microglobulin (mg/L)" name="beta2_microglobulin" descriptor={descriptors.beta2_microglobulin} type="number" value={formData?.beta2_microglobulin} onChange={onChange} />
+          <ClinicalField label="Kappa/Lambda Ratio" name="kappa_lambda_ratio" descriptor={descriptors.kappa_lambda_ratio} type="number" value={formData?.kappa_lambda_ratio} onChange={onChange} />
+          <ClinicalField label="Involved/Uninvolved Ratio" name="involved_uninvolved_ratio" descriptor={descriptors.involved_uninvolved_ratio} type="number" value={formData?.involved_uninvolved_ratio} onChange={onChange} />
           <ClinicalField label="LDH Level (U/L)" name="ldh_level" descriptor={descriptors.ldh_level} type="number" value={formData?.ldh_level} onChange={onChange} />
         </div>
       </Section>
@@ -289,7 +297,10 @@ function MyelomaSection({ formData, onChange }: Pick<Props, 'formData' | 'onChan
 }
 
 function CLLSection({ formData, onChange }: Pick<Props, 'formData' | 'onChange'>) {
-  const { descriptors } = useWritableFields();
+  // Ask about *this* patient: whether a field may be edited depends on who is
+  // asking and whose record it is, not only on whether the field is mapped.
+  const personId = (formData?.person_id ?? formData?.person) as number | undefined;
+  const { descriptors } = useWritableFields(personId);
   return (
     <>
       <Section title="CLL Disease Characteristics">
@@ -335,13 +346,15 @@ function CLLSection({ formData, onChange }: Pick<Props, 'formData' | 'onChange'>
 }
 
 function OtherSection({ formData, onChange }: Pick<Props, 'formData' | 'onChange'>) {
-  const { descriptors } = useWritableFields();
+  // Ask about *this* patient: whether a field may be edited depends on who is
+  // asking and whose record it is, not only on whether the field is mapped.
+  const personId = (formData?.person_id ?? formData?.person) as number | undefined;
+  const { descriptors } = useWritableFields(personId);
   const { options: histologicOptions, source: histologicSource } = useVocabulary('histologic-type', 'title');
   const histOptions = histologicOptions.length ? histologicOptions.map((o: { value: string }) => o.value) : HISTOLOGIC_TYPE_OPTIONS;
 
   return (
     <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
-      <ClinicalField label="Disease" name="disease" descriptor={descriptors.disease} type="select" value={formData?.disease} options={DISEASE_OPTIONS} onChange={onChange} />
       <ClinicalField label="Stage" name="stage" descriptor={descriptors.stage} type="select" value={formData?.stage} options={STAGE_OPTIONS} onChange={onChange} />
       <div className="sm:col-span-2">
         <ClinicalField label="Histologic Type" name="histologic_type" descriptor={descriptors.histologic_type} type="select" value={formData?.histologic_type} options={histOptions} onChange={onChange} vocabSource={histologicSource} />
@@ -368,7 +381,10 @@ function OtherSection({ formData, onChange }: Pick<Props, 'formData' | 'onChange
  * invented here would offer values the server cannot code.
  */
 function StagingBiomarkersSection({ formData, onChange }: Pick<Props, 'formData' | 'onChange'>) {
-  const { descriptors } = useWritableFields();
+  // Ask about *this* patient: whether a field may be edited depends on who is
+  // asking and whose record it is, not only on whether the field is mapped.
+  const personId = (formData?.person_id ?? formData?.person) as number | undefined;
+  const { descriptors } = useWritableFields(personId);
 
   const field = (label: string, name: string, type: 'text' | 'number') => (
     <ClinicalField
@@ -394,6 +410,9 @@ function StagingBiomarkersSection({ formData, onChange }: Pick<Props, 'formData'
 }
 
 export default function DiseaseTab({ formData, onChange, onMutationAdd, onMutationRemove, onMutationChange, diseaseType }: Props) {
+  const personId = (formData?.person_id ?? formData?.person) as number | undefined;
+  const { descriptors } = useWritableFields(personId);
+  const { source: diseaseSource } = useVocabulary('disease', 'title');
   const diseaseSection = (() => {
     switch (diseaseType) {
       case 'breast':
@@ -411,6 +430,11 @@ export default function DiseaseTab({ formData, onChange, onMutationAdd, onMutati
 
   return (
     <>
+      <Section title="Diagnosis">
+        <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+          <ClinicalField label="Disease" name="disease" descriptor={descriptors.disease} type="select" value={formData?.disease} options={DISEASE_OPTIONS} onChange={onChange} vocabSource={diseaseSource} />
+        </div>
+      </Section>
       {diseaseSection}
       {/* Shown for every disease: nodal and metastasis status apply to any solid
           tumour, and PD-L1 drives checkpoint-inhibitor eligibility across

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Pencil, Plus } from 'lucide-react';
 import { useWritableFields, type FieldDescriptor } from '@/hooks/useWritableFields';
+import type { EditableTherapyLine } from '@/api/therapyLines';
 import ClinicalField from '../ClinicalField';
 import Section from '../Section';
 import TherapyLineDialog from '../TherapyLineDialog';
@@ -20,6 +21,10 @@ interface Props {
    *  still writes correctly but shows stale values until the next refetch. */
   onRecordRefreshed?: (patientInfo: Record<string, unknown>) => void;
 }
+
+type TherapyDialogState =
+  | { mode: 'add' }
+  | { mode: 'edit'; line: EditableTherapyLine };
 
 /**
  * Therapy history, rendered from the writable-field descriptor.
@@ -92,13 +97,48 @@ function HowToAuthor({ descriptor }: { descriptor?: FieldDescriptor }) {
   );
 }
 
-export default function TreatmentTab({ formData, onChange, onRecordRefreshed }: Props) {
-  const { descriptors } = useWritableFields();
-  const [dialogOpen, setDialogOpen] = useState(false);
+/**
+ * Map the patient's disease string to the Disease vocabulary code for API filtering.
+ *
+ * Uses the raw disease string (not diseaseType) so MCL and FL are distinguishable —
+ * both map to diseaseType='lymphoma' but have different Disease codes.
+ * Falls back to the broader diseaseType when the raw string is absent.
+ */
+function diseaseToDiseaseCode(
+  disease: unknown,
+  diseaseType: Props['diseaseType'],
+): string | undefined {
+  // Try the raw disease string first for finer discrimination (MCL vs FL).
+  if (typeof disease === 'string') {
+    const d = disease.toLowerCase();
+    if (d.includes('mantle')) return 'MCL';
+    if (d.includes('follicular')) return 'C3209';
+    if (d.includes('myeloma') || d === 'mm') return 'C3242';
+    if (d.includes('cll') || d.includes('chronic lymphocytic') || d.includes('chronic lymphoid')) return 'C2987';
+    if (d.includes('breast')) return 'C9335';
+    if (d.includes('diffuse large b-cell') || d.includes('dlbcl')) return 'DLBCL';
+  }
+  // Fall back to the type-safe diseaseType prop.
+  // 'lymphoma' is intentionally omitted — it groups MCL and FL, and picking
+  // one code would show the wrong regimens for the other. Without a raw
+  // disease string the picker falls back to "search all regimens".
+  const TYPE_TO_CODE: Record<string, string> = {
+    myeloma: 'C3242',
+    cll: 'C2987',
+    breast: 'C9335',
+  };
+  return TYPE_TO_CODE[diseaseType];
+}
 
-  // person_id rides in the record the tab already receives, so authoring needs no
-  // extra prop threaded through both hosts.
+export default function TreatmentTab({ formData, onChange, diseaseType, onRecordRefreshed }: Props) {
+  // person_id rides in the record the tab already receives, so neither the
+  // descriptor nor authoring needs an extra prop threaded through both hosts.
   const personId = Number(formData?.person_id ?? formData?.person ?? 0) || null;
+
+  // Ask about *this* patient: whether a field may be edited depends on who is
+  // asking and whose record it is, not only on whether the field is mapped.
+  const { descriptors } = useWritableFields(personId ?? undefined);
+  const [dialogState, setDialogState] = useState<TherapyDialogState | null>(null);
 
   const field = (label: string, name: string, type: 'text' | 'number' | 'date') => (
     <ClinicalField
@@ -121,28 +161,62 @@ export default function TreatmentTab({ formData, onChange, onRecordRefreshed }: 
   const laterTherapies = Array.isArray(formData?.later_therapies)
     ? (formData.later_therapies as LaterTherapy[])
     : [];
+  const therapyLines = Array.isArray(formData?.lines_of_therapy)
+    ? (formData.lines_of_therapy as EditableTherapyLine[])
+    : [];
 
   return (
     <div>
       <HowToAuthor descriptor={descriptors.first_line_therapy} />
 
       {personId !== null && (
-        <div className="mb-5">
+        <div className="mb-5 space-y-3">
           <button
-            onClick={() => setDialogOpen(true)}
+            onClick={() => setDialogState({ mode: 'add' })}
             className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-muted"
           >
             <Plus size={14} />
             Add therapy line
           </button>
+          {therapyLines.length > 0 && (
+            <ul className="divide-y divide-border rounded-md border border-border">
+              {therapyLines.map((line) => (
+                <li
+                  key={`${line.episode_id ?? 'no-episode'}-${line.line}`}
+                  className="flex items-center gap-3 px-3 py-2 text-sm"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-portal-text-primary">
+                      Line {line.line}: {line.regimen || 'Unnamed regimen'}
+                    </p>
+                    <p className="truncate text-xs text-portal-text-secondary">
+                      {line.start_date || 'No start date'}{line.end_date ? ` to ${line.end_date}` : ''}
+                      {line.outcome ? ` - ${line.outcome}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={typeof line.episode_id !== 'number'}
+                    onClick={() => setDialogState({ mode: 'edit', line })}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Pencil size={13} />
+                    Edit
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
-      {dialogOpen && personId !== null && (
+      {dialogState && personId !== null && (
         <TherapyLineDialog
           personId={personId}
           defaultLineNumber={linesCount + 1}
-          onClose={() => setDialogOpen(false)}
+          line={dialogState.mode === 'edit' ? dialogState.line : undefined}
+          diseaseCode={diseaseToDiseaseCode(formData?.disease, diseaseType)}
+          onClose={() => setDialogState(null)}
           onAuthored={(info) => onRecordRefreshed?.(info)}
         />
       )}

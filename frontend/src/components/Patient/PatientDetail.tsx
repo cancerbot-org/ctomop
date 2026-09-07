@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, AlertCircle, ChevronDown, Download } from "lucide-react";
 import api from "@/api/axios";
 import { fetchWritableFields, LIFECYCLE, type FieldDescriptors } from "@/hooks/useWritableFields";
-import { writeFieldValue } from "@/api/clinicalFacts";
+import { writeFieldValues } from "@/api/clinicalFacts";
 import { getActiveBranding } from "@/config/branding";
 import type { User } from "@/hooks/useAuth";
 import DeleteAccountDialog from "./DeleteAccountDialog";
@@ -20,6 +20,7 @@ import BloodTab from "@/components/PatientInfo/tabs/BloodTab";
 import LabsTab from "@/components/PatientInfo/tabs/LabsTab";
 import BehaviorTab from "@/components/PatientInfo/tabs/BehaviorTab";
 import WearableTab from "@/components/PatientInfo/tabs/WearableTab";
+import { CustomPatientFields } from "@/components/PatientInfo/CustomPatientFields";
 import PatientOmopTab from "./PatientOmopTab";
 
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
@@ -291,9 +292,9 @@ export default function PatientDetail({
           d.ecog_performance_status = String(d.ecog_performance_status);
 
         if (d.estrogen_receptor_status && d.progesterone_receptor_status && d.her2_status) {
-          const erNeg = ["Negative", "ER-"].includes(d.estrogen_receptor_status);
-          const prNeg = ["Negative", "PR-"].includes(d.progesterone_receptor_status);
-          const her2Neg = ["Negative", "HER2-"].includes(d.her2_status);
+          const erNeg = d.estrogen_receptor_status === "Negative";
+          const prNeg = d.progesterone_receptor_status === "Negative";
+          const her2Neg = d.her2_status === "Negative";
           d.tnbc_status = erNeg && prNeg && her2Neg;
         }
 
@@ -363,11 +364,21 @@ export default function PatientDetail({
       const clinicalEdits = Object.keys(info).filter(
         (f) => descriptors[f]?.writable && info[f] !== baseline[f],
       );
-      for (const field of clinicalEdits) {
-        await writeFieldValue(personId, field, descriptors[field], info[field]);
-        // Advance the baseline so a later keystroke elsewhere does not re-write
-        // this same value as another result.
-        if (patientInfoRef.current) patientInfoRef.current[field] = info[field];
+      // Sent as a set, not one at a time: the Person fields go in a single
+      // request because some are only valid together — latitude and longitude
+      // must be both set or both null, so sending one alone is refused.
+      if (clinicalEdits.length) {
+        await writeFieldValues(
+          personId,
+          clinicalEdits.map((field) => ({
+            field, descriptor: descriptors[field], value: info[field],
+          })),
+        );
+        for (const field of clinicalEdits) {
+          // Advance the baseline so a later keystroke elsewhere does not
+          // re-write this same value as another result.
+          if (patientInfoRef.current) patientInfoRef.current[field] = info[field];
+        }
       }
 
       // Everything the projection still owns goes the old way — and *only* that.
@@ -471,6 +482,21 @@ export default function PatientDetail({
   }, [doSave]);
 
    
+  // Re-read the record from the server. Used where an edit lands somewhere the
+  // form does not own -- wearable imports, and language skills, whose eight
+  // flattened columns are derived from PersonLanguageSkill rows rather than
+  // patched directly.
+  const reloadPatientInfo = useCallback(() => {
+    if (!personId) return;
+    api.get(`/patient-info/${personId}/`)
+      .then((res) => {
+        const d = res.data.patient_info;
+        setPatientInfo(d);
+        setEditedInfo(d);
+      })
+      .catch(() => {});
+  }, [personId]);
+
   const handleFieldChange = useCallback((field: string, value: unknown) => {
     const base = pendingDataRef.current?.info ?? editedInfoRef.current;
     const updated = { ...base, [field]: value };
@@ -479,7 +505,7 @@ export default function PatientDetail({
       const er = String(field === "estrogen_receptor_status" ? value : updated.estrogen_receptor_status ?? "");
       const pr = String(field === "progesterone_receptor_status" ? value : updated.progesterone_receptor_status ?? "");
       const her2 = String(field === "her2_status" ? value : updated.her2_status ?? "");
-      const neg = (v: string) => ["Negative", "ER-", "PR-", "HER2-"].includes(v);
+      const neg = (v: string) => v === "Negative";
       if (neg(er) && neg(pr) && neg(her2)) updated.tnbc_status = true;
       else if (er || pr || her2) updated.tnbc_status = false;
     }
@@ -582,6 +608,23 @@ export default function PatientDetail({
     }
   }, [personId]);
 
+  const handleCustomEditableValue = useCallback(async (
+    field: { field_name: string }, value: unknown,
+  ) => {
+    if (!personId) return;
+    const descriptors = await fetchWritableFields();
+    const descriptor = descriptors[field.field_name];
+    if (!descriptor?.writable) {
+      throw new Error(`${field.field_name} does not have a complete writable OMOP mapping.`);
+    }
+    await writeFieldValues(personId, [{ field: field.field_name, descriptor, value }]);
+    const response = await api.get(`/patient-info/${personId}/`);
+    const refreshed = response.data.patient_info;
+    setPatientInfo(refreshed);
+    setEditedInfo(refreshed);
+    patientInfoRef.current = { ...refreshed };
+  }, [personId]);
+
   const getDiseaseType = (): "breast" | "lymphoma" | "myeloma" | "cll" | "other" => {
     const d = (typeof editedInfo?.disease === "string" ? editedInfo.disease : "").toLowerCase();
     if (d.includes("breast")) return "breast";
@@ -632,13 +675,18 @@ export default function PatientDetail({
   const wearablesIdx = behaviorIdx + 1;
   const surveysIdx = patientMode ? wearablesIdx + 1 : -1;
   const omopIdx = canViewOmop ? tabLabels.length - 1 : -1;
+  const activeCustomTab = ({
+    0: 'general', 1: 'disease', 2: 'treatment', 3: 'blood', 4: 'labs',
+    [behaviorIdx]: 'behavior', [wearablesIdx]: 'wearable',
+  } as Record<number, string>)[activeTab];
+  const canManageCustomFields = !!(user?.is_staff || user?.is_org_admin);
 
   const tabDescriptions: Record<number, string> = {
     0: "Keep patient details up to date for accurate personalisation.",
     1: "Disease-specific clinical information and genetic details.",
     2: "Therapy history, treatment lines, and planned therapies.",
-    3: "Blood counts, electrolytes, coagulation, and cardiac markers.",
-    4: "Chemistry panel, liver function tests, and other lab markers.",
+    3: "Blood counts and differential.",
+    4: "Chemistry, liver function, coagulation, cardiac and tumour markers.",
     ...(allergiesIdx >= 0 ? { [allergiesIdx]: "Known allergies and intolerances from your health records." } : {}),
     [behaviorIdx]: "Lifestyle, socioeconomic, and behavioural health factors.",
     [wearablesIdx]: "30 day summaries derived from synced OMOP data.",
@@ -788,7 +836,6 @@ export default function PatientDetail({
                     editedName={editedName}
                     onNameChange={handleNameChange}
                     onZipcodeChange={handleZipcodeChange}
-                    diseaseType={getDiseaseType()}
                   />
                 )}
                 {activeTab === 1 && (
@@ -827,10 +874,18 @@ export default function PatientDetail({
                 {activeTab === 3 && <BloodTab formData={editedInfo} onChange={handleFieldChange} />}
                 {activeTab === 4 && <LabsTab formData={editedInfo} onChange={handleFieldChange} />}
                 {allergiesIdx >= 0 && activeTab === allergiesIdx && <AllergyList user={user ?? null} />}
-                {activeTab === behaviorIdx && <BehaviorTab formData={editedInfo} onChange={handleFieldChange} />}
-                {activeTab === wearablesIdx && <WearableTab formData={editedInfo} onChange={handleFieldChange} onRefresh={() => { if (personId) { api.get(`/patient-info/${personId}/`).then(res => { const d = res.data.patient_info; setPatientInfo(d); setEditedInfo(d); }).catch(() => {}); } }} />}
+                {activeTab === behaviorIdx && <BehaviorTab formData={editedInfo} onChange={handleFieldChange} onRefresh={reloadPatientInfo} />}
+                {activeTab === wearablesIdx && <WearableTab formData={editedInfo} onChange={handleFieldChange} onRefresh={reloadPatientInfo} />}
                 {surveysIdx >= 0 && activeTab === surveysIdx && <PatientSurveys user={user ?? null} />}
                 {omopIdx >= 0 && activeTab === omopIdx && personId && <PatientOmopTab personId={personId} />}
+                {activeCustomTab && (
+                  <CustomPatientFields
+                    tab={activeCustomTab}
+                    formData={editedInfo}
+                    canManage={canManageCustomFields}
+                    onEditableValueChange={handleCustomEditableValue}
+                  />
+                )}
               </div>
             </div>
           </>

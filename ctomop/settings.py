@@ -41,8 +41,14 @@ if not DEBUG:
     # app server is fully initialised (migrate, test, collectstatic, check, etc.)
     # so that Render deploys (which call `migrate` in start.sh) and CI test runs
     # are not broken when DATABASE_URL is absent at import time.
-    _management_commands = {'migrate', 'test', 'collectstatic', 'check', 'makemigrations'}
+    _management_commands = {
+        'migrate', 'test', 'collectstatic', 'check', 'makemigrations',
+        'copy_field_mappings',
+    }
     _running_mgmt = len(_sys.argv) > 1 and _sys.argv[1] in _management_commands
+    # A Celery worker serves no HTTP, so the host and origin checks below would
+    # only stop it from booting. Its secret and database still have to be real.
+    _running_worker = os.path.basename(_sys.argv[0] if _sys.argv else '') == 'celery'
     if not _running_mgmt:
         from django.core.exceptions import ImproperlyConfigured
         _config_errors = []
@@ -54,11 +60,11 @@ if not DEBUG:
             _config_errors.append(
                 'DATABASE_URL must be set (SQLite is not supported in production)'
             )
-        if not os.environ.get('ALLOWED_HOSTS'):
+        if not _running_worker and not os.environ.get('ALLOWED_HOSTS'):
             _config_errors.append(
                 'ALLOWED_HOSTS must be set to your domain(s), e.g. "app.example.com"'
             )
-        if not os.environ.get('CORS_ALLOWED_ORIGINS'):
+        if not _running_worker and not os.environ.get('CORS_ALLOWED_ORIGINS'):
             _config_errors.append(
                 'CORS_ALLOWED_ORIGINS must be set to your frontend origin(s), '
                 'e.g. "https://app.example.com"'
@@ -96,11 +102,16 @@ INSTALLED_APPS = [
     'omop_oncology',
     'patient_portal',
     'anymail',
+    # PROlog survey runner. Contributes its own tables to this database and
+    # binds every response to an omop_core.Person; see docs/prolog-surveys.md.
+    'prolog_surveys',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',
+    # WhiteNoise, plus the PROlog runner's build when one is mounted — see
+    # ctomop/whitenoise.py.
+    'ctomop.whitenoise.PromopWhiteNoise',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -242,6 +253,7 @@ PASSWORD_REUSE_DAYS = int(os.environ.get('PASSWORD_REUSE_DAYS', '180'))       # 
 # Audit tamper-evidence (TI.2.2.1) and break-glass (TI.2.3#04).
 AUDIT_HMAC_KEY = os.environ.get('AUDIT_HMAC_KEY', '')                          # falls back to SECRET_KEY when empty
 BREAK_GLASS_TTL_SECONDS = int(os.environ.get('BREAK_GLASS_TTL_SECONDS', '3600'))  # emergency-access window (1h)
+BREAK_GLASS_ALLOW_SERVICE = os.environ.get('BREAK_GLASS_ALLOW_SERVICE', 'false').lower() in ('1', 'true', 'yes')
 # Hash-chain audit rows so row deletion/insertion is detectable (TI.2.2.1). Serializes
 # audit writes via an advisory lock; can be disabled under extreme write load.
 AUDIT_HASH_CHAIN_ENABLED = os.environ.get('AUDIT_HASH_CHAIN_ENABLED', 'true').lower() in ('1', 'true', 'yes')
@@ -341,6 +353,14 @@ PHR_INTROSPECT_URL = os.environ.get(
     f"{PHR_BASE_URL}/api/v1/auth/introspect/" if PHR_BASE_URL else "",
 )
 PHR_JWKS_CACHE_TTL = int(os.environ.get("PHR_JWKS_CACHE_TTL", "3600"))
+# Expected `aud` claim on incoming PHR tokens (audit findings PROMOP F10/F16/F17).
+# Both verification paths in patient_portal/api/providers/phr.py treat an unset
+# value as "not configured" and reject every PHR token — fail CLOSED, not open.
+# This is deliberate: a wrong or missing audience must never be silently
+# accepted. Operational consequence: PHR_AUDIENCE must be set in the Render and
+# GCP environments before this change reaches those environments, or every PHR
+# federation login will fail with no other code change required to break it.
+PHR_AUDIENCE = os.environ.get("PHR_AUDIENCE", "promop-api" if DEBUG else "")
 
 FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "promop-test" if DEBUG else "")
 FIREBASE_SKIP_REVOCATION_CHECK = os.environ.get(
@@ -351,6 +371,12 @@ AUTH_TOKEN_CACHE_TTL = int(os.environ.get("AUTH_TOKEN_CACHE_TTL", "60"))
 
 # REST Framework
 SERVICE_AUTH_TOKEN = os.environ.get("SERVICE_AUTH_TOKEN", "")
+
+# Ranking key for Code Mapping suggestions (#856). Deliberately optional: with
+# no key the suggester falls back to lexical order and says so on the proposal,
+# because a Suggest button that returns nothing when a third party is down is
+# worse than one that returns a guess a curator can correct.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 _auth_classes = [
     'patient_portal.api.authentication.ServiceTokenAuthentication',
@@ -386,13 +412,25 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': '60/minute',
-        'user': '300/minute',
+        # Env-tunable like the sync buckets below. The default protects the
+        # deployment; a local sweep that exercises every writable field fires
+        # several hundred requests in a minute and is not what the limit is for.
+        'user': os.environ.get('USER_THROTTLE_RATE', '300/minute'),
         # Wearable sync re-uploads daily rollups and fires on each HealthKit
         # change; 10/min was too tight. Env-tunable (set higher in dev).
         'sync': os.environ.get('SYNC_THROTTLE_RATE', '60/minute'),
         # Patient self-service ingest (/api/fhir/patient-sync/) — per-patient, so
         # a more generous bucket than the shared service-token /sync/ endpoint.
         'patient_sync': os.environ.get('PATIENT_SYNC_THROTTLE_RATE', '120/minute'),
+        # PROlog runner scopes (prolog_surveys). Per hashed client key, never a raw
+        # IP. A survey is answered in bursts, so these are per hour rather than per
+        # minute; creation and contact capture stay tight because they are the
+        # abuse-facing ones.
+        'run.read': os.environ.get('PROLOG_THROTTLE_READ', '1200/hour'),
+        'run.create': os.environ.get('PROLOG_THROTTLE_CREATE', '30/hour'),
+        'run.capture': os.environ.get('PROLOG_THROTTLE_CAPTURE', '30/hour'),
+        'run.answer': os.environ.get('PROLOG_THROTTLE_ANSWER', '600/hour'),
+        'run.write': os.environ.get('PROLOG_THROTTLE_WRITE', '3000/hour'),
         'patient_signup': '10/hour',
         # OMOP clinical-row CRUD (conditions / drug-exposures / measurements /
         # observations / procedures). These viewsets set throttle_scope='omop_write'
@@ -498,6 +536,82 @@ for host in ALLOWED_HOSTS:
 CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(csrf_origins))
 
 
+# ── Caches ────────────────────────────────────────────────────────────────
+# DRF's throttles count in caches['default'], so this is what makes a rate
+# limit a limit. Without a shared backend the counter is per worker process,
+# and every rate in DEFAULT_THROTTLE_RATES is silently multiplied by the worker
+# count — which matters most for `run.create`, the only bound on how fast an
+# anonymous survey respondent can create Person rows.
+#
+# CACHE_URL, else the Celery broker if it is Redis (the same instance is fine —
+# separate keyspace), else per-process memory, which is correct for a developer
+# machine and is what the deploy check warns about anywhere else.
+_CACHE_URL = os.environ.get('CACHE_URL') or (
+    os.environ.get('CELERY_BROKER_URL', '')
+    if os.environ.get('CELERY_BROKER_URL', '').startswith(('redis://', 'rediss://'))
+    else ''
+)
+if _CACHE_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': _CACHE_URL,
+            'KEY_PREFIX': 'promop',
+        }
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'promop-locmem',
+        }
+    }
+
+# ── Celery ────────────────────────────────────────────────────────────────
+# An empty broker means no queue, so the derivation runs inline in the request.
+# That is what a developer machine with no Redis gets, and it is the switch the
+# dispatcher reads — see omop_core/services/derivation_jobs.py.
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', '')
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ['json']
+
+# Each worker process holds its own DB connection, so concurrency x instances
+# has to stay under the database's connection cap.
+CELERY_WORKER_CONCURRENCY = int(os.environ.get('CELERY_WORKER_CONCURRENCY', '4'))
+# Default is 4, which lets one worker reserve four slow patients while its
+# siblings idle. Derivation is minutes-long, so reserve one at a time.
+CELERY_WORKER_PREFETCH_MULTIPLIER = int(
+    os.environ.get('CELERY_WORKER_PREFETCH_MULTIPLIER', '1'))
+
+CELERY_TASK_TIME_LIMIT = int(os.environ.get('CELERY_TASK_TIME_LIMIT', '900'))
+# Acknowledge after the task finishes, so a worker killed mid-derivation
+# releases the job instead of dropping it. Safe because deriving twice is
+# the same as deriving once.
+CELERY_TASK_ACKS_LATE = True
+# acks_late on its own still drops the task when the worker *process* dies —
+# an OOM kill or a hard time limit acknowledges it rather than redelivering.
+# Idempotent, so redelivery is the better failure mode.
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+# Off by default, which would leave a 15-25s derivation reading PENDING for its
+# whole run. The status endpoint publishes STARTED, so it has to be tracked.
+CELERY_TASK_TRACK_STARTED = True
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    # Must exceed CELERY_TASK_TIME_LIMIT. Below it, Redis decides a still
+    # running task was lost and hands the same job to a second worker.
+    'visibility_timeout': int(
+        os.environ.get('CELERY_BROKER_VISIBILITY_TIMEOUT', '1800')),
+    # The refresh endpoint enqueues inside the request, so an unreachable
+    # broker has to fail fast. Unset, kombu waits on the connect indefinitely
+    # and the caller sits there until gunicorn kills the worker.
+    'socket_connect_timeout': 5,
+    'socket_timeout': 5,
+}
+# How long a caller can still poll a finished task id.
+CELERY_RESULT_EXPIRES = int(os.environ.get('CELERY_RESULT_EXPIRES', '86400'))
+
+
 # ── Firebase Admin SDK ────────────────────────────────────────────────────
 def _init_firebase_admin():
     try:
@@ -535,3 +649,47 @@ def _init_firebase_admin():
 
 
 _init_firebase_admin()
+
+
+# ---------------------------------------------------------------------------
+# PROlog survey runner (prolog_surveys)
+#
+# PRomop is the system of record: the app's tables live in this database and
+# every response is bound to an omop_core.Person. Nothing here writes to OMOP
+# clinical tables — answers stay in the survey tables until a governed mapping
+# exists (PROlog DEP-7). See docs/prolog-surveys.md.
+# ---------------------------------------------------------------------------
+
+PROLOG_PROFILE = 'integrated'
+
+# The participant a response is bound to (PROlog DEP-2).
+PROLOG_PARTICIPANT_MODEL = 'omop_core.Person'
+
+# Resolves the signed-in participant; returns None for anyone who is not a
+# patient, so their response is bound to a fresh unidentified person instead.
+PROLOG_PARTICIPANT_RESOLVER = 'patient_portal.services.prolog_participant_id'
+
+# Mints the person for a respondent who is not signed in (PROlog RUN-2). The
+# counterpart to resolve_or_create_person, which needs an Identity.
+PROLOG_PARTICIPANT_FACTORY = 'patient_portal.services.create_unidentified_person'
+
+# Deployment-supplied content, mounted read-only. Empty by default: a PRomop
+# that offers no surveys loads none.
+PROLOG_DEFINITION_DIRS = [d for d in os.environ.get('PROLOG_DEFINITION_DIRS', '').split(os.pathsep) if d]
+PROLOG_THEME_DIRS = [d for d in os.environ.get('PROLOG_THEME_DIRS', '').split(os.pathsep) if d]
+# The deployment's own legal pages (privacy.md and friends), served by the
+# runner inside the survey. Read through settings rather than the environment
+# once the app is installed here, so a deployment that only sets the
+# environment variable gets nothing — which is how it went unnoticed until a
+# real notice was mounted.
+PROLOG_LEGAL_DIRS = [d for d in os.environ.get('PROLOG_LEGAL_DIRS', '').split(os.pathsep) if d]
+
+# The built runner front end, when a deployment mounts one. It is a separate SPA
+# from PRomop's own, so its assets are served under their own prefix
+# (/prolog-static/) — PRomop's build already owns /assets/. Unset means the API
+# is mounted but no page is served, which is the default.
+# prolog_surveys.views.runner_index reads settings.RUNNER_DIST directly.
+RUNNER_DIST = Path(os.environ['PROLOG_RUNNER_DIST']) if os.environ.get('PROLOG_RUNNER_DIST') else None
+
+PROLOG_PUBLIC_URL = os.environ.get('PROLOG_PUBLIC_URL', APP_BASE_URL)
+PROLOG_EMAIL_FROM = os.environ.get('PROLOG_EMAIL_FROM', DEFAULT_FROM_EMAIL)
