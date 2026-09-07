@@ -524,6 +524,20 @@ describe("CodeMappingPage", () => {
       expect(await screen.findByText("Quantitative · Unit: mg/dL")).toBeInTheDocument();
     });
 
+    it("selects a reviewed mint candidate as the mapping destination", async () => {
+      await openDialog();
+      mockPost.mockResolvedValue({ data: { candidates: [loincHit], review_token: "checked" } });
+      fireEvent.click(screen.getByRole("button", { name: "Mint new concept" }));
+      const mint = within(screen.getByRole("dialog", { name: "Mint new concept" }));
+      fireEvent.change(mint.getByLabelText("Custom vocabulary group"), { target: { value: "HK-Labs" } });
+      fireEvent.change(mint.getByLabelText("Concept code"), { target: { value: "custom-protein" } });
+      fireEvent.click(mint.getByText("Check existing destinations"));
+      fireEvent.click(await mint.findByRole("button", { name: /Protein.monoclonal/ }));
+      expect(screen.queryByRole("dialog", { name: "Mint new concept" })).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Destination Concept ID")).toHaveValue(3046299);
+      expect(mockPost).toHaveBeenCalledTimes(1);
+    });
+
     it("scopes the concept search to the destination vocabulary", async () => {
       await openDialog();
       fireEvent.change(screen.getByLabelText("Search destination concepts"), {
