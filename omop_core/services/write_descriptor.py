@@ -335,12 +335,6 @@ def mapping_table_is_writable(omop_table):
 # recipe is incomplete the claim is false, and a box that accepts input and
 # silently drops it is worse than one that says why it is disabled.
 _WRITE_RECIPE_INCOMPLETE = {
-    'largest_lymph_node_size': (
-        'Derivation also requires qualifier_source_value="lymph-node" — LOINC '
-        '21889-1 "Size Tumor" is shared with tumor_size, and the qualifier is '
-        'what tells them apart. The descriptor cannot carry a qualifier yet, so '
-        'a write against the code alone is not read back.'
-    ),
     'bone_only_metastasis_status': (
         'Derivation looks for an Observation whose concept name contains "bone '
         'only metastas", while the mapping here names a Measurement with a '
@@ -696,6 +690,10 @@ def build_writable_field_descriptor():
             'type_concept_id': CONCEPT_PATIENT_REPORTED_TYPE,
             'source_value': code,
         }
+        if field == 'largest_lymph_node_size':
+            # The shared Size Tumor LOINC needs this explicit clinical context
+            # to be distinguishable from primary tumour size on readback.
+            descriptor[field]['qualifier_source_value'] = 'lymph-node'
 
     # Fields the serializer adds that no PatientRecord column backs.
     #

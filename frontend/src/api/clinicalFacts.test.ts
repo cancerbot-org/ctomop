@@ -71,6 +71,16 @@ describe('writeClinicalFact', () => {
     });
   });
 
+  it('includes a server-supplied qualifier in a measurement write', async () => {
+    await writeClinicalFact(3542, 'largest_lymph_node_size', {
+      ...HGB, source_value: '21889-1', qualifier_source_value: 'lymph-node',
+    }, 2.7, '2026-08-21');
+
+    expect(mockPost).toHaveBeenCalledWith('/v1/measurements/', expect.objectContaining({
+      qualifier_source_value: 'lymph-node', value_as_number: 2.7,
+    }));
+  });
+
   it('routes an observation-domain field to the observation endpoint', async () => {
     mockPost.mockResolvedValue({ data: { observation_id: 7 } });
 

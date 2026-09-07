@@ -36,6 +36,14 @@ def _load_ucum(unit):
 
 
 class TestMappedFields:
+    def test_largest_lymph_node_recipe_carries_its_required_qualifier(self):
+        _load_loinc('21889-1')
+
+        entry = build_writable_field_descriptor()['largest_lymph_node_size']
+
+        assert entry['writable'] is True
+        assert entry['qualifier_source_value'] == 'lymph-node'
+
     def test_a_loaded_mapping_is_writable_with_a_full_fact_recipe(self):
         concept = _load_loinc('718-7')
         unit = _load_ucum('g/dL')
