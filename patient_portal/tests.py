@@ -2620,11 +2620,11 @@ class ConditionToPatientRecordTest(_SignalBase):
 
 
 class DrugExposureToPatientRecordTest(_SignalBase):
-    """DrugExposure saves/deletes update PatientRecord therapy line fields."""
+    """Drug exposures alone must not invent persisted therapy episodes."""
 
     PERSON_ID = 80002
 
-    def test_first_drug_exposure_sets_first_line_therapy(self):
+    def test_first_drug_exposure_does_not_invent_first_line_therapy(self):
         DrugExposure.objects.create(
             drug_exposure_id=91001,
             person=self.person,
@@ -2634,9 +2634,9 @@ class DrugExposureToPatientRecordTest(_SignalBase):
         )
         pi = self._get_pi()
         self.assertIsNotNone(pi)
-        self.assertEqual(pi.first_line_therapy, 'Paclitaxel')
+        self.assertIsNone(pi.first_line_therapy)
 
-    def test_two_drug_exposures_set_first_and_second_line(self):
+    def test_two_drug_exposures_do_not_invent_therapy_lines(self):
         DrugExposure.objects.create(
             drug_exposure_id=91001,
             person=self.person,
@@ -2652,10 +2652,10 @@ class DrugExposureToPatientRecordTest(_SignalBase):
             drug_type_concept=self.type_concept,
         )
         pi = self._get_pi()
-        self.assertIsNotNone(pi.first_line_therapy)
-        self.assertIsNotNone(pi.second_line_therapy)
+        self.assertIsNone(pi.first_line_therapy)
+        self.assertIsNone(pi.second_line_therapy)
 
-    def test_therapy_lines_count_matches_unique_start_dates(self):
+    def test_unique_start_dates_do_not_count_as_persisted_lines(self):
         for idx, drug in enumerate([self.drug_concept_a, self.drug_concept_b, self.drug_concept_c], start=1):
             DrugExposure.objects.create(
                 drug_exposure_id=91000 + idx,
@@ -2664,10 +2664,10 @@ class DrugExposureToPatientRecordTest(_SignalBase):
                 drug_exposure_start_date=date(2021 + idx, 1, 1),
                 drug_type_concept=self.type_concept,
             )
-        self.assertEqual(self._get_pi().therapy_lines_count, 3)
+        self.assertEqual(self._get_pi().therapy_lines_count, 0)
 
-    def test_same_start_date_drugs_count_as_one_line(self):
-        # Two drugs on the same date = one therapy line (combination regimen)
+    def test_same_start_date_drugs_do_not_invent_a_line(self):
+        # A shared date is not a persisted Episode/EpisodeEvent relationship.
         DrugExposure.objects.create(
             drug_exposure_id=91001,
             person=self.person,
@@ -2682,10 +2682,10 @@ class DrugExposureToPatientRecordTest(_SignalBase):
             drug_exposure_start_date=date(2022, 6, 1),
             drug_type_concept=self.type_concept,
         )
-        self.assertEqual(self._get_pi().therapy_lines_count, 1)
+        self.assertEqual(self._get_pi().therapy_lines_count, 0)
 
-    def test_combination_regimen_joined_in_first_line_therapy(self):
-        # Same-date drugs are joined as "Drug A + Drug B" in first_line_therapy
+    def test_same_date_drugs_do_not_invent_a_combination_regimen(self):
+        # Regimen labels require persisted episodes, not inferred drug names.
         DrugExposure.objects.create(
             drug_exposure_id=91001,
             person=self.person,
@@ -2701,11 +2701,10 @@ class DrugExposureToPatientRecordTest(_SignalBase):
             drug_type_concept=self.type_concept,
         )
         pi = self._get_pi()
-        self.assertIn('Paclitaxel', pi.first_line_therapy)
-        self.assertIn('Carboplatin', pi.first_line_therapy)
+        self.assertIsNone(pi.first_line_therapy)
         self.assertIsNone(pi.second_line_therapy)
 
-    def test_delete_drug_exposure_removes_therapy_line(self):
+    def test_delete_unlinked_drug_exposure_keeps_therapy_empty(self):
         de = DrugExposure.objects.create(
             drug_exposure_id=91001,
             person=self.person,
@@ -2713,15 +2712,14 @@ class DrugExposureToPatientRecordTest(_SignalBase):
             drug_exposure_start_date=date(2022, 3, 1),
             drug_type_concept=self.type_concept,
         )
-        self.assertEqual(self._get_pi().first_line_therapy, 'Paclitaxel')
+        self.assertIsNone(self._get_pi().first_line_therapy)
 
         de.delete()
 
         self.assertIsNone(self._get_pi().first_line_therapy)
 
-    def test_prior_therapy_reflects_line_count_vocabulary(self):
-        # PatientRecord.save() sets prior_therapy to controlled vocabulary based
-        # on therapy_lines_count — not drug names.  One exposure → 'One line'.
+    def test_prior_therapy_requires_persisted_lines(self):
+        # A raw exposure alone does not establish a prior therapy line.
         DrugExposure.objects.create(
             drug_exposure_id=91001,
             person=self.person,
@@ -2730,8 +2728,8 @@ class DrugExposureToPatientRecordTest(_SignalBase):
             drug_type_concept=self.type_concept,
         )
         pi = self._get_pi()
-        self.assertEqual(pi.first_line_therapy, 'Carboplatin')
-        self.assertEqual(pi.prior_therapy, 'One line')
+        self.assertIsNone(pi.first_line_therapy)
+        self.assertEqual(pi.prior_therapy, 'None')
 
 
 class MeasurementToPatientRecordTest(_SignalBase):
@@ -6716,6 +6714,10 @@ class PersonFindOrCreateTest(_SmartBase):
         self.assertTrue(PatientRecord.objects.filter(person_id=resp.json()['person_id']).exists())
 
     def test_created_person_can_be_refreshed(self):
+        # Refresh is admin-only. An ordinary OAuth client does not gain
+        # cross-patient access merely by creating a Person.
+        self.foundation_user.is_staff = True
+        self.foundation_user.save(update_fields=['is_staff'])
         resp = self.client.post(
             self.URL,
             {'actor_iss': 'https://securetoken.google.com/proj', 'actor_sub': 'refreshable-uid'},
@@ -23552,9 +23554,10 @@ class CodeMappingSourceVocabTabsTest(TestCase):
         self.assertIn('source_vocabulary_tabs', resp.data)
         tabs = resp.data['source_vocabulary_tabs']
         self.assertTrue(len(tabs) > 0)
-        icd_tab = next((t for t in tabs if t['vocabulary_id'] == 'ICD10CM'), None)
+        # ICD10CM is merged into the ICD10 tab (#1028).
+        icd_tab = next((t for t in tabs if t['vocabulary_id'] == 'ICD10'), None)
         self.assertIsNotNone(icd_tab)
-        self.assertEqual(icd_tab['label'], 'ICD-10-CM')
+        self.assertEqual(icd_tab['label'], 'ICD-10')
         self.assertFalse(icd_tab['is_standard'])
         self.assertIn('MedDRA', [tab['vocabulary_id'] for tab in tabs])
         self.assertIn('PartnerCodes', [tab['vocabulary_id'] for tab in tabs])

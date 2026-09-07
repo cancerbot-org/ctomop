@@ -223,7 +223,12 @@ class TestVocabToUmlsRootMapping:
     """Verify the VOCAB_TO_UMLS_ROOT constant is internally consistent."""
 
     def test_reverse_mapping_roundtrips(self):
+        # ICD10 shares the ICD10CM SAB, so the reverse map prefers ICD10CM.
+        # Skip aliases that share a SAB with a canonical vocab.
+        sab_aliases = {'ICD10'}  # ICD10 → ICD10CM SAB (alias of ICD10CM)
         for omop_vocab, umls_sab in VOCAB_TO_UMLS_ROOT.items():
+            if omop_vocab in sab_aliases:
+                continue
             assert _UMLS_ROOT_TO_VOCAB[umls_sab] == omop_vocab
 
     def test_all_strategies_constant(self):
@@ -642,3 +647,48 @@ class TestSourceEnrichment:
         # UMLS name should be used as the description fallback
         assert mapping.source_code_description == 'Fictional Analyte Level in Serum'[:255]
         assert mapping.umls_source_name == 'Fictional Analyte Level in Serum'
+
+
+# ---------------------------------------------------------------------------
+# ICD10 vocabulary → UMLS ICD10CM SAB lookup (#1028)
+# ---------------------------------------------------------------------------
+
+class TestICD10UmlsLookup:
+    """Verify that ICD10 (HT-One) codes resolve through the ICD10CM UMLS SAB."""
+
+    def test_icd10_vocab_maps_to_icd10cm_sab(self):
+        assert VOCAB_TO_UMLS_ROOT.get('ICD10') == 'ICD10CM'
+
+    def test_icd10_code_finds_umls_candidates(
+        self, umls_release, condition_domain, snomed_vocab, concept_class,
+    ):
+        """An ICD10 code should find UMLS candidates via the ICD10CM SAB."""
+        # Create ICD10 vocab (the source row's vocabulary)
+        icd10_vocab = VocabularyFactory(vocabulary_id='ICD10', vocabulary_name='ICD10')
+
+        cui = UmlsConcept.objects.create(
+            cui='C0008031', preferred_name='Cholera',
+            release=umls_release,
+        )
+        # UMLS source code under ICD10CM SAB (same code format)
+        UmlsSourceCode.objects.create(
+            concept=cui, root_source='ICD10CM', code='A00.0',
+            term_type='PT', name='Cholera due to Vibrio cholerae 01, biovar cholerae',
+        )
+        # Sibling: SNOMED concept
+        UmlsSourceCode.objects.create(
+            concept=cui, root_source='SNOMEDCT_US', code='63650001',
+            term_type='PT', name='Cholera',
+        )
+        ConceptFactory(
+            concept_id=63650001, concept_name='Cholera',
+            concept_code='63650001', vocabulary=snomed_vocab,
+            domain=condition_domain, concept_class=concept_class,
+            standard_concept='S',
+        )
+
+        # Look up with vocabulary_id='ICD10' — should work via ICD10CM SAB
+        candidates, cui_str = umls_candidates('A00.0', 'ICD10', 'Condition')
+        assert len(candidates) == 1
+        assert candidates[0]['concept_id'] == 63650001
+        assert cui_str == 'C0008031'

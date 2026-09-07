@@ -360,10 +360,15 @@ class TestEveryFieldIsCategorised:
                 assert entry.get('group'), field
                 assert entry.get('reason'), field
 
-    def test_therapy_fields_are_grouped_as_inference_not_missing_concepts(self):
-        """They need a different design, not a code — #595 must not count them."""
+    def test_therapy_line_fields_are_computed_from_persisted_episode_events(self):
+        """Per-line columns are projections, not direct PatientRecord inputs."""
         d = build_writable_field_descriptor()
-        for field in ('first_line_outcome', 'relapse_count', 'line_of_therapy'):
+        for field in ('first_line_outcome', 'second_line_start_date', 'later_end_date'):
+            assert d[field]['kind'] == 'computed', field
+            assert d[field]['source_tables'] == ['Episode', 'EpisodeEvent']
+        # Other treatment summaries retain their existing episode-authoring
+        # guidance; they are not individual first/second/later-line columns.
+        for field in ('relapse_count', 'line_of_therapy'):
             assert d[field]['group'] == 'therapy-inference', field
 
     def test_location_fields_are_writable_not_grouped_as_missing(self):
@@ -400,6 +405,32 @@ class TestProfileFields:
 
 
 class TestWearableAggregates:
+    def test_coverage_ratio_is_computed_from_all_device_metrics(self):
+        entry = build_writable_field_descriptor()['wearable_coverage_ratio_30d']
+        assert entry['kind'] == 'computed'
+        assert entry['writable'] is False
+        assert entry['window_days'] == 30
+        assert set(entry['inputs']) == {
+            'steps', 'active_minutes', 'resting_hr', 'hrv_sdnn', 'hrv_rmssd',
+            'spo2', 'respiratory_rate', 'sleep_duration', 'vo2_max', 'distance',
+            'walking_speed', 'walking_step_length', 'walking_double_support_pct',
+            'walking_hr_avg', 'flights_climbed', 'active_energy', 'basal_energy', 'body_mass',
+        }
+        assert len(entry['inputs']) == 18
+        assert 'counting each day once' in entry['reason']
+
+    def test_no_thirty_day_aggregate_is_reported_unmapped(self):
+        descriptor = build_writable_field_descriptor()
+        aggregates = {field: entry for field, entry in descriptor.items() if field.endswith('_30d')}
+        assert aggregates
+        assert not [field for field, entry in aggregates.items() if entry['kind'] == 'unmapped']
+
+    def test_last_sync_remains_device_metadata(self):
+        entry = build_writable_field_descriptor()['wearable_last_sync_at']
+        assert entry['kind'] == 'unmapped'
+        assert entry['group'] == 'wearable-metadata'
+        assert entry['writable'] is False
+
     def test_an_aggregate_is_computed_over_a_series(self):
         entry = build_writable_field_descriptor()['median_daily_steps_30d']
 
