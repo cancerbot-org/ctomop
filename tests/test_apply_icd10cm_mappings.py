@@ -80,10 +80,12 @@ class TestApplyICD10CMMappings:
         assert proposed_icd10.target_concept == target_concept
         assert proposed_icd10.destination_vocabulary_id == 'SNOMED'
         assert proposed_icd10.reviewed_at is not None
+        assert proposed_icd10.reviewer is not None
+        assert proposed_icd10.reviewer.name == 'system'
         assert 'auto-approved from ICD10CM' in proposed_icd10.origin_system
 
     def test_skips_already_approved_icd10_rows(self, approved_icd10cm, target_concept):
-        already = SourceCodeConceptMapping.objects.create(
+        SourceCodeConceptMapping.objects.create(
             source_vocabulary_id='ICD10',
             source_code='A00.0',
             target_concept=target_concept,
@@ -116,3 +118,4 @@ class TestApplyICD10CMMappings:
         proposed.refresh_from_db()
         assert len(proposed.origin_system) <= 50
         assert proposed.status == 'approved'
+

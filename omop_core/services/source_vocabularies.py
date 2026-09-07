@@ -114,6 +114,7 @@ _OBSERVATION_SYSTEMS = (
     ('Apple', 'Apple — Apple HealthKit wearable metrics'),
     ('Garmin', 'Garmin — Garmin FIT wearable metrics'),
     ('ICD10CM', 'ICD-10-CM — Z-codes and social history'),
+    ('ICD10', 'ICD-10 — Z-code equivalents (merged with ICD-10-CM)'),
     ('HCPCS', 'HCPCS — assessments and screenings'),
     ('NCIt', 'NCIt — NCI thesaurus'),
     ('PPI', 'PPI — participant-provided information (surveys)'),

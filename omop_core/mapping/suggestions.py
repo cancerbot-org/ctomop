@@ -318,10 +318,10 @@ def unmapped_source_values(omop_table, min_occurrences=DEFAULT_MIN_OCCURRENCES,
     out = []
     for row in rows.iterator():
         value = row[source_col]
-        source_vocabulary_id = row['source_vocabulary_id'] or ''
-        if (source_vocabulary_id, value.upper()) in already:
+        row_vocab = row['source_vocabulary_id'] or ''
+        if (row_vocab, value.upper()) in already:
             continue
-        out.append((value, source_vocabulary_id, row['occurrences']))
+        out.append((value, row_vocab, row['occurrences']))
         if limit and len(out) >= limit:
             break
     return out
