@@ -7092,6 +7092,7 @@ def _serialize_concept(concept, versions=None):
         'domain_id': concept.domain_id,
         'concept_class_id': concept.concept_class_id,
         'standard_concept': concept.standard_concept,
+        'invalid_reason': concept.invalid_reason,
     }
 
 
@@ -8556,6 +8557,7 @@ def _serialize_code_mapping_row(concept, mapping=None):
             'destination_omop_table': mapping.omop_table if mapping else '',
             'destination_domain_id': '',
             'standard_concept': None,
+            'destination_invalid_reason': None,
             'concept_source': '',
             'mapping_id': mapping.id if mapping else None,
             'domain_id': mapping.domain_id if mapping else '',
@@ -8605,6 +8607,7 @@ def _serialize_code_mapping_row(concept, mapping=None):
         'destination_omop_table': mapping.omop_table if mapping else '',
         'destination_domain_id': concept.domain_id,
         'standard_concept': concept.standard_concept,
+        'destination_invalid_reason': concept.invalid_reason,
         'concept_source': concept.source or '',
         # Source
         'mapping_id': mapping.id if mapping else None,

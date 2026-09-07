@@ -42,6 +42,7 @@ interface CodeMappingRow {
   destination_omop_table: string;
   destination_domain_id?: string;
   standard_concept?: string | null;
+  destination_invalid_reason?: string | null;
   status: "proposed" | "approved" | "rejected" | "unmapped";
   notes: string;
   origin: string;
@@ -67,6 +68,7 @@ interface ConceptResult {
   domain_id: string;
   concept_class_id: string;
   standard_concept: string | null;
+  invalid_reason?: string | null;
   measurement_type?: "qualitative" | "quantitative";
   suggested_unit?: string;
 }
@@ -139,6 +141,7 @@ interface MappingForm {
   destination_vocabulary_id: string;
   destination_concept_class_id: string;
   standard_concept: string;
+  destination_invalid_reason: string;
   omop_table: string;
   status: "proposed" | "approved" | "rejected";
   notes: string;
@@ -156,6 +159,7 @@ const emptyForm: MappingForm = {
   destination_vocabulary_id: "",
   destination_concept_class_id: "",
   standard_concept: "",
+  destination_invalid_reason: "",
   omop_table: "",
   status: "proposed",
   notes: "",
@@ -233,7 +237,7 @@ const TIP = {
   destination_concept_class:
     "The concept's class within its vocabulary, e.g. Clinical Finding, Lab Test.",
   standard_concept:
-    "'S' means a standard Athena concept. Blank means a HealthKey-minted concept in a quarantined HK-* vocabulary.",
+    "'S' means a standard Athena concept. Blank means non-standard; a retired concept is called out separately.",
   destination_table:
     "The OMOP clinical table the fact is stored in. Follows from Domain.",
   search:
@@ -321,6 +325,7 @@ function buildEditForm(row: CodeMappingRow, reference: Reference): MappingForm {
     destination_vocabulary_id: row.destination_vocabulary_id,
     destination_concept_class_id: row.destination_concept_class_id || "",
     standard_concept: row.standard_concept || "",
+    destination_invalid_reason: row.destination_invalid_reason || "",
     omop_table: row.destination_omop_table || omopTableFor(reference, domainId),
     status: row.status === "unmapped" ? "proposed" : row.status,
     notes: row.notes || "",
@@ -584,6 +589,7 @@ export default function CodeMappingPage() {
         destination_vocabulary_id: concept.vocabulary_id,
         destination_concept_class_id: concept.concept_class_id || "",
         standard_concept: concept.standard_concept || "",
+        destination_invalid_reason: concept.invalid_reason || "",
         omop_table: prev.omop_table || omopTableFor(reference, domainId),
       };
     });
@@ -608,7 +614,23 @@ export default function CodeMappingPage() {
         destination_concept_code: "",
         destination_concept_class_id: "",
         standard_concept: "",
+        destination_invalid_reason: "",
       }));
+    }
+  };
+
+  const useReplacement = async () => {
+    if (!form.destination_concept_id) return;
+    try {
+      const { data } = await api.get(`/v1/concepts/${form.destination_concept_id}/replacement/`);
+      if (!data.replaced) {
+        setBanner("No active replacement is recorded; search for a current destination concept.");
+        return;
+      }
+      applyConcept(data.resolved_concept);
+      setBanner(`Replaced with active concept ${data.resolved_concept.concept_id}.`);
+    } catch {
+      setError("Could not look up a replacement concept.");
     }
   };
 
@@ -1275,7 +1297,6 @@ export default function CodeMappingPage() {
                     value={form.source_concept_id}
                     testId="source-concept-id"
                   />
-
                   {selectedRow?.umls_source_name && (
                     <ReadOnlyField
                       id="umls_source_name"
@@ -1451,6 +1472,13 @@ export default function CodeMappingPage() {
                     testId="standard-concept"
                   />
                   <ReadOnlyField
+                    id="destination_status"
+                    label="Destination Status"
+                    tip="Active concepts can be used as destinations. A retired concept is no longer current; select an active replacement when one is available."
+                    value={form.destination_invalid_reason ? `Retired / invalid (reason ${form.destination_invalid_reason})` : form.destination_concept_id ? "Active" : ""}
+                    testId="destination-status"
+                  />
+                  <ReadOnlyField
                     id="omop_table"
                     label="Destination Table"
                     tip={TIP.destination_table}
@@ -1458,6 +1486,14 @@ export default function CodeMappingPage() {
                     testId="destination-table"
                   />
                 </div>
+                {form.destination_invalid_reason && (
+                  <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    <span>This destination is retired. Use its active replacement when available.</span>
+                    <button type="button" onClick={() => void useReplacement()} className="shrink-0 rounded border border-amber-400 px-2 py-1 text-xs font-medium hover:bg-amber-100">
+                      Find replacement
+                    </button>
+                  </div>
+                )}
               </fieldset>
 
               {selectedRow

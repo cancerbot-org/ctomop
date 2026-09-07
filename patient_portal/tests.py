@@ -7556,6 +7556,7 @@ class ConceptSearchTest(_ConceptFixtureBase):
             'domain_id': 'Condition',
             'concept_class_id': 'Clinical Finding',
             'standard_concept': 'S',
+            'invalid_reason': None,
         })
 
     def test_search_result_carries_vocabulary_version(self):
@@ -19904,6 +19905,19 @@ class CodeMappingApiTest(TestCase):
         resp = self.client.get('/api/v1/code-mappings/')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertTrue(any(r['source_code'] == 'M-PROTEIN, SERUM' for r in resp.data))
+
+    def test_list_marks_a_retired_destination(self):
+        """Curators need the invalid state as well as the blank standard flag."""
+        self.minted.invalid_reason = 'U'
+        self.minted.save(update_fields=['invalid_reason'])
+        self.client.force_authenticate(user=self.org_admin)
+
+        resp = self.client.get('/api/v1/code-mappings/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        row = next(r for r in resp.data if r['source_code'] == 'M-PROTEIN, SERUM')
+        self.assertIsNone(row['standard_concept'])
+        self.assertEqual(row['destination_invalid_reason'], 'U')
 
     # ------------------------------------------------------------ direction
 
