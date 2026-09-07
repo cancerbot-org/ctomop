@@ -417,6 +417,7 @@ describe("CodeMappingPage", () => {
         "Destination Vocabulary ID",
         "Destination Concept Class",
         "Standard Concept",
+        "Destination Status",
         "Destination Table",
       ]);
     });
@@ -482,6 +483,21 @@ describe("CodeMappingPage", () => {
       await waitFor(() => {
         expect(screen.getByTestId("standard-concept")).toHaveValue("S");
       });
+    });
+
+    it("identifies a retired non-standard destination without rewriting its class", async () => {
+      renderPage([{
+        ...proposedRow,
+        destination_concept_class_id: "Undefined",
+        destination_invalid_reason: "U",
+      }]);
+      await openDialog();
+
+      expect(screen.getByTestId("destination-concept-class")).toHaveValue("Undefined");
+      expect(screen.getByTestId("standard-concept")).toHaveValue("");
+      expect(screen.getByTestId("destination-status"))
+        .toHaveValue("Retired / invalid (reason U)");
+      expect(screen.getByRole("button", { name: "Find replacement" })).toBeInTheDocument();
     });
 
     it("fills the destination from a concept search result", async () => {
