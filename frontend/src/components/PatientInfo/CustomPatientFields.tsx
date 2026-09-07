@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Plus, Search, X } from "lucide-react";
-import api from "@/api/axios";
+import { clinicalClient, clinicalUrl } from "@/api/clinicalTransport";
 
 type Mode = "editable" | "computed";
 
@@ -71,7 +71,7 @@ export function AddCustomFieldDialog({ tab, onClose, onCreated }: {
     const timer = setTimeout(async () => {
       if (query.trim().length < 3) { setResults([]); return; }
       try {
-        const response = await api.get("/v1/concepts/search/", { params: { q: query, limit: "20" } });
+        const response = await clinicalClient().get(clinicalUrl("/v1/concepts/search/"), { params: { q: query, limit: "20" } });
         setResults(response.data.results || response.data || []);
       } catch { setResults([]); }
     }, 300);
@@ -86,7 +86,7 @@ export function AddCustomFieldDialog({ tab, onClose, onCreated }: {
     if (!selected || !confirmed) return;
     setSaving(true); setError("");
     try {
-      await api.post("/v1/custom-patient-fields/", {
+      await clinicalClient().post(clinicalUrl("/v1/custom-patient-fields/"), {
         confirm_patient_record: true,
         display_name: displayName.trim(),
         field_name: fieldName.trim(),
@@ -134,7 +134,15 @@ export function CustomPatientFields({ tab, formData, canManage, onEditableValueC
   const [fields, setFields] = useState<CustomField[]>([]);
   const [showDialog, setShowDialog] = useState(false);
   const load = useCallback(async () => {
-    try { const response = await api.get("/v1/custom-patient-fields/"); setFields(response.data); } catch { setFields([]); }
+    try {
+      const response = await clinicalClient().get(clinicalUrl("/v1/custom-patient-fields/"));
+      // Only an array is usable here; a paginated envelope or anything else
+      // (an HTML shell from a mis-targeted request) must not reach setFields.
+      const body = response.data;
+      setFields(Array.isArray(body) ? body : Array.isArray(body?.results) ? body.results : []);
+    } catch {
+      setFields([]);
+    }
   }, []);
   useEffect(() => {
     const timer = setTimeout(() => { void load(); }, 0);
