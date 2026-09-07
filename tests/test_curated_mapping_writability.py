@@ -119,6 +119,48 @@ class TestAnIncompleteMappingIsStillAdvisory:
         assert entry['endpoint'].startswith('POST /api/v1/')
 
 
+@pytest.mark.parametrize('omop_table,source_column', [
+    ('measurement', 'measurement.measurement_source_value'),
+    ('observation', 'observation.observation_source_value'),
+    ('condition', 'condition_occurrence.condition_source_value'),
+    ('condition_occurrence', 'condition_occurrence.condition_source_value'),
+    ('drug', 'drug_exposure.drug_source_value'),
+    ('drug_exposure', 'drug_exposure.drug_source_value'),
+    ('procedure', 'procedure_occurrence.procedure_source_value'),
+    ('procedure_occurrence', 'procedure_occurrence.procedure_source_value'),
+])
+@pytest.mark.parametrize('length', [50, 51, 100])
+def test_curated_source_value_must_fit_target_column(omop_table, source_column, length):
+    # Non-ASCII characters count as characters, not UTF-8 bytes, in PostgreSQL.
+    source_value = 'é' * length
+    mapping = _mapping(omop_table=omop_table, source_value=source_value)
+
+    entry = build_writable_field_descriptor()[FIELD]
+
+    assert entry['curated'] is True
+    assert entry['writable'] is (length <= 50)
+    if length <= 50:
+        assert entry['source_value'] == source_value
+    else:
+        assert '50-character' in entry['reason']
+        assert source_column in entry['reason']
+    mapping.refresh_from_db()
+    assert mapping.source_value == source_value
+
+
+def test_overlong_curated_mapping_blocks_fallback_recipe():
+    VocabularyFactory(vocabulary_id='LOINC')
+    ConceptFactory(concept_code='718-7', vocabulary_id='LOINC')
+    assert build_writable_field_descriptor()['hemoglobin_g_dl']['writable'] is True
+    _mapping(field_name='hemoglobin_g_dl', source_value='x' * 51)
+
+    entry = build_writable_field_descriptor()['hemoglobin_g_dl']
+
+    assert entry['writable'] is False
+    assert entry['curated'] is True
+    assert 'source_value exceeds' in entry['reason']
+
+
 class TestBoundedAnswers:
     def test_a_value_vocabulary_becomes_the_offered_options(self):
         # The vocabulary tables are seeded by their own migrations; this reads
