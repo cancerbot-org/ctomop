@@ -349,7 +349,7 @@ _WRITE_RECIPE_INCOMPLETE = {
     ),
 }
 
-def _curated_writes():
+def _curated_writes(choice_options=None):
     """Editable entries built from reviewer-approved concept mappings.
 
     The curation interface records a decision per field; this is what acts on
@@ -398,6 +398,9 @@ def _curated_writes():
             if options:
                 entry['options'] = [{'value': t} for t in options]
                 entry['multiple'] = row.multiple
+        elif choice_options and row.field_name in choice_options:
+            entry['options'] = choice_options[row.field_name]
+            entry['multiple'] = row.multiple
         entries[row.field_name] = entry
     return entries
 
@@ -431,7 +434,6 @@ def build_writable_field_descriptor():
         {(vocab, code) for code, vocab, _fn in DERIVED_FIELD_TO_CODE.values()}
     )
 
-    curated = _curated_writes()
     choice_options = {
         field_name: [
             {'value': display, 'code': primary_code}
@@ -439,6 +441,7 @@ def build_writable_field_descriptor():
         ]
         for field_name, choices in _field_choice_options().items()
     }
+    curated = _curated_writes(choice_options)
 
     descriptor = {}
     for field in sorted(PATIENT_RECORD_OMOP_MAPPED_FIELDS - _LIFECYCLE_FIELDS):
