@@ -156,6 +156,7 @@ export async function writeClinicalFact(
         String(r.person) === String(personId) &&
         r[cfg.sourceField] === descriptor.source_value &&
         r[cfg.dateField] === date &&
+        (target !== 'measurement' || r[cfg.typeField] === descriptor.type_concept_id) &&
         !r.is_erroneous,
     );
     if (sameDay) {

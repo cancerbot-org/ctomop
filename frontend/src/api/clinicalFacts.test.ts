@@ -20,7 +20,7 @@ vi.mock('@/api/axios', () => ({
 const HGB: FieldDescriptor = {
   kind: 'editable', writable: true, target: 'measurement',
   concept_id: 3000963, code: '718-7', value_kind: 'number',
-  unit: 'g/dL', unit_concept_id: 8713, type_concept_id: 32856,
+  unit: 'g/dL', unit_concept_id: 8713, type_concept_id: 32865,
   source_value: '718-7',
 };
 
@@ -63,7 +63,7 @@ describe('writeClinicalFact', () => {
       person: 3542,
       measurement_concept: 3000963,
       measurement_date: '2026-08-21',
-      measurement_type_concept: 32856,
+      measurement_type_concept: 32865,
       measurement_source_value: '718-7',
       value_as_number: 12.5,
       unit_concept: 8713,
@@ -140,7 +140,7 @@ describe('writeClinicalFact', () => {
   it('supersedes a same-day value instead of overwriting it', async () => {
     mockGet.mockResolvedValue({
       data: [{ measurement_id: 500, person: 1, measurement_source_value: '718-7',
-               measurement_date: '2026-08-21', is_erroneous: false }],
+               measurement_date: '2026-08-21', measurement_type_concept: 32865, is_erroneous: false }],
     });
 
     const res = await writeClinicalFact(1, 'hemoglobin_g_dl', HGB, 13.1, '2026-08-21');
@@ -227,7 +227,7 @@ describe('writeClinicalFact', () => {
   it('handles a paginated list response', async () => {
     mockGet.mockResolvedValue({
       data: { results: [{ measurement_id: 77, person: 1, measurement_source_value: '718-7',
-                         measurement_date: '2026-08-21' }] },
+                         measurement_date: '2026-08-21', measurement_type_concept: 32865 }] },
     });
 
     const res = await writeClinicalFact(1, 'hemoglobin_g_dl', HGB, 1, '2026-08-21');
@@ -290,13 +290,25 @@ describe('writeClinicalFact — supersede targeting', () => {
         { measurement_id: 2, person: 258, measurement_source_value: '777-3',
           measurement_date: '2026-08-21', is_erroneous: false },
         { measurement_id: 3, person: 258, measurement_source_value: '718-7',
-          measurement_date: '2026-08-21', is_erroneous: false },
+          measurement_date: '2026-08-21', measurement_type_concept: 32865, is_erroneous: false },
       ],
     });
 
     const res = await writeClinicalFact(258, 'hemoglobin_g_dl', HGB, 13.4, '2026-08-21');
 
     expect(res.supersededId).toBe(3);
+  });
+
+  it('does not supersede a same-day imported lab', async () => {
+    mockGet.mockResolvedValue({
+      data: [{ measurement_id: 4, person: 258, measurement_source_value: '718-7',
+        measurement_date: '2026-08-21', measurement_type_concept: 32856, is_erroneous: false }],
+    });
+
+    const res = await writeClinicalFact(258, 'hemoglobin_g_dl', HGB, 13.4, '2026-08-21');
+
+    expect(mockPatch).not.toHaveBeenCalled();
+    expect(res.supersededId).toBeNull();
   });
 });
 

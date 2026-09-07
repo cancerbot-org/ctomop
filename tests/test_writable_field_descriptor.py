@@ -9,7 +9,7 @@ import pytest
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
 
-from omop_core.services.mappings import CONCEPT_LAB_TYPE, LAB_FIELD_TO_LOINC
+from omop_core.services.mappings import CONCEPT_PATIENT_REPORTED_TYPE, LAB_FIELD_TO_LOINC
 from omop_core.services.patient_record_service import (
     PATIENT_RECORD_OMOP_MAPPED_FIELDS,
 )
@@ -50,7 +50,7 @@ class TestMappedFields:
         assert entry['value_kind'] == 'number'
         assert entry['unit'] == 'g/dL'
         assert entry['unit_concept_id'] == unit.concept_id
-        assert entry['type_concept_id'] == CONCEPT_LAB_TYPE
+        assert entry['type_concept_id'] == CONCEPT_PATIENT_REPORTED_TYPE
         assert entry['source_value'] == '718-7'
 
     def test_every_key_a_measurement_write_needs_is_present(self):
