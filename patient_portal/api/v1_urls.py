@@ -1,5 +1,6 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
+from .concept_mint import mint_destination
 
 from .views import (
     SurveyViewSet, PatientSurveyResponseViewSet,
@@ -139,6 +140,7 @@ urlpatterns = [
     path('orgs/<slug:slug>/patient-signup/', OrgPatientSignupView.as_view(), name='v1-org-patient-signup'),
     path('field-mappings/', field_mapping_list, name='v1-field-mapping-list'),
     path('code-mappings/', code_mapping_list, name='v1-code-mapping-list'),
+    path('code-mappings/mint-destination/', mint_destination, name='v1-mint-destination'),
     path('code-mappings/reference/', code_mapping_reference, name='v1-code-mapping-reference'),
     path('code-mappings/suggest/', code_mapping_suggest, name='v1-code-mapping-suggest'),
     path('code-mappings/suggest-one/', code_mapping_suggest_one, name='v1-code-mapping-suggest-one'),

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Pencil, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import api from "@/api/axios";
+import MintConceptDialog from "./MintConceptDialog";
 import ConceptInputDetails from "@/components/UI/ConceptInputDetails";
 import { useAuth } from "@/hooks/useAuth";
 import { HelpTip, Field, ReadOnlyField, INPUT_CLASS } from "@/components/UI/MappingFormPrimitives";
@@ -341,6 +342,7 @@ export default function CodeMappingPage() {
   const [accuracy, setAccuracy] = useState<AccuracyResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [mintOpen, setMintOpen] = useState(false);
   const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   // `null` means no choice has been made, so use the work-prioritized default.
@@ -543,6 +545,7 @@ export default function CodeMappingPage() {
   };
 
   const closeDialog = () => {
+    setMintOpen(false);
     setDialogMode(null);
     setSelectedRow(null);
     setSaving(false);
@@ -619,7 +622,7 @@ export default function CodeMappingPage() {
     }
   };
 
-  const useReplacement = async () => {
+  const selectReplacement = async () => {
     if (!form.destination_concept_id) return;
     try {
       const { data } = await api.get(`/v1/concepts/${form.destination_concept_id}/replacement/`);
@@ -1191,7 +1194,7 @@ export default function CodeMappingPage() {
       </div>
 
       {dialogMode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+        <div inert={mintOpen} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
           <form
             onSubmit={submitForm}
             role="dialog"
@@ -1486,10 +1489,13 @@ export default function CodeMappingPage() {
                     testId="destination-table"
                   />
                 </div>
+                <div className="mt-3 flex justify-end">
+                  <button type="button" onClick={() => setMintOpen(true)} className="rounded border border-sky-300 px-3 py-2 text-sm text-sky-700">Mint new concept</button>
+                </div>
                 {form.destination_invalid_reason && (
                   <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                     <span>This destination is retired. Use its active replacement when available.</span>
-                    <button type="button" onClick={() => void useReplacement()} className="shrink-0 rounded border border-amber-400 px-2 py-1 text-xs font-medium hover:bg-amber-100">
+                    <button type="button" onClick={() => void selectReplacement()} className="shrink-0 rounded border border-amber-400 px-2 py-1 text-xs font-medium hover:bg-amber-100">
                       Find replacement
                     </button>
                   </div>
@@ -1631,6 +1637,13 @@ export default function CodeMappingPage() {
           </form>
         </div>
       )}
+      {mintOpen && dialogMode && <MintConceptDialog
+        vocabularies={reference.destination_vocabularies} domains={reference.domains}
+        initialDomain={form.domain_id} initialName={form.source_code_description || form.source_code}
+        sourceCode={form.source_code} sourceVocabulary={form.source_vocabulary_id}
+        onClose={() => setMintOpen(false)}
+        onSelect={concept => { applyConcept(concept); setMintOpen(false); }}
+      />}
     </div>
   );
 }

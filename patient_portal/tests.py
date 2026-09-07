@@ -20228,6 +20228,59 @@ class CodeMappingApiTest(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.assertEqual(response.data, {'found': False})
 
+    def _mint_payload(self):
+        return {'vocabulary_id': 'HK-Labs', 'concept_name': 'Protein test custom',
+                'concept_code': 'mint-test', 'domain_id': 'Measurement'}
+
+    def test_mint_requires_review_and_confirmation(self):
+        self.client.force_authenticate(user=self.staff)
+        url = '/api/v1/code-mappings/mint-destination/'
+        payload = self._mint_payload()
+        self.assertEqual(self.client.post(url, {**payload, 'action': 'mint'}, format='json').status_code, 400)
+        review = self.client.post(url, {**payload, 'action': 'review'}, format='json')
+        self.assertEqual(review.status_code, 200, review.data)
+        self.assertFalse(Concept.objects.filter(concept_code='mint-test').exists())
+        mint = {**payload, 'action': 'mint', 'review_token': review.data['review_token']}
+        self.assertEqual(self.client.post(url, mint, format='json').status_code, 400)
+        self.assertEqual(self.client.post(url, {**mint, 'none_match': True, 'concept_name': 'Changed name'}, format='json').status_code, 400)
+        response = self.client.post(url, {**mint, 'none_match': True}, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        concept = Concept.objects.get(pk=response.data['concept_id'])
+        self.assertGreaterEqual(concept.pk, 2_000_000_000)
+        self.assertEqual(concept.source, 'HealthKey')
+        self.assertIsNone(concept.standard_concept)
+        self.assertEqual(concept.vocabulary_id, 'HK-Labs')
+        self.assertFalse(SourceCodeConceptMapping.objects.filter(target_concept=concept).exists())
+        self.assertEqual(self.client.post(url, {**mint, 'none_match': True}, format='json').status_code, 409)
+
+    def test_mint_review_shows_existing_destination(self):
+        self.client.force_authenticate(user=self.staff)
+        payload = {**self._mint_payload(), 'concept_name': self.standard.concept_name, 'action': 'review'}
+        response = self.client.post('/api/v1/code-mappings/mint-destination/', payload, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIn(self.standard.pk, [c['concept_id'] for c in response.data['candidates']])
+
+    def test_mint_requires_existing_custom_group_and_curator(self):
+        url = '/api/v1/code-mappings/mint-destination/'
+        payload = {**self._mint_payload(), 'action': 'review'}
+        self.client.force_authenticate(user=self.non_staff)
+        self.assertEqual(self.client.post(url, payload, format='json').status_code, 403)
+        self.client.force_authenticate(user=self.staff)
+        for vocabulary in ('LOINC', 'HK-NewMissing'):
+            response = self.client.post(url, {**payload, 'vocabulary_id': vocabulary}, format='json')
+            self.assertEqual(response.status_code, 400)
+        self.assertFalse(Vocabulary.objects.filter(pk='HK-NewMissing').exists())
+
+    def test_mint_review_cannot_be_shared_between_curators(self):
+        url = '/api/v1/code-mappings/mint-destination/'
+        payload = self._mint_payload()
+        self.client.force_authenticate(user=self.staff)
+        review = self.client.post(url, {**payload, 'action': 'review'}, format='json')
+        self.client.force_authenticate(user=self.org_admin)
+        response = self.client.post(url, {**payload, 'action': 'mint', 'none_match': True,
+                                         'review_token': review.data['review_token']}, format='json')
+        self.assertEqual(response.status_code, 400)
+
     # ------------------------------------------------------------ reference
 
     def test_reference_returns_all_five_domains(self):
