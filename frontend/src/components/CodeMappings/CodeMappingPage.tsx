@@ -109,6 +109,7 @@ interface RepointResult {
 interface SuggestionAccuracy {
   model_version?: string | null;
   accepted: number;
+  approved: number;
   overridden: number;
   rejected: number;
   reviewed: number;
@@ -442,9 +443,12 @@ export default function CodeMappingPage() {
 
   const selectedVocabulary = activeVocabulary ?? defaultVocabulary;
   const overallTab = selectedVocabulary === OVERALL_TAB;
+  // A vocabulary with no suggestions of its own still needs to show the
+  // current model's live score; otherwise the dashboard has data while the
+  // main curation page misleadingly shows dashes.
   const selectedAccuracy = overallTab
     ? accuracy?.overall
-    : accuracy?.by_source_vocabulary?.[selectedVocabulary];
+    : accuracy?.by_source_vocabulary?.[selectedVocabulary] ?? accuracy?.overall;
 
   const visibleRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
