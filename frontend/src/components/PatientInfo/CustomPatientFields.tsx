@@ -108,7 +108,7 @@ export function AddCustomFieldDialog({ tab, onClose, onCreated }: {
   };
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-    <div className="relative max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border bg-white p-6 shadow-xl">
+    <div className="relative max-h-[90vh] w-full max-w-[42rem] overflow-y-auto rounded-lg border bg-white p-6 shadow-xl">
       <button onClick={onClose} className="absolute right-3 top-3 rounded p-1 text-gray-400 hover:text-gray-700" aria-label="Close"><X size={16} /></button>
       <h2 className="text-lg font-semibold">Add field to PatientRecord</h2>
       <p className="mb-4 text-sm text-gray-500">This field will appear at the bottom of the {tab} tab after its approved mapping is saved.</p>
