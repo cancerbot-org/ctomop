@@ -2140,6 +2140,9 @@ _BIOMARKER_MEASUREMENT_LOINCS = frozenset({
 _BIOMARKER_OBS_LOINCS = frozenset({'44667-4'})
 _HISTOLOGIC_TYPE_LOINCS = frozenset({'59847-4'})
 _GENETIC_MUTATION_LOINCS = {
+    # Generic, repeatable LOINC question used by the clinician-facing mutation
+    # editor (#905).  The gene is carried in qualifier_source_value.
+    '36908-2': None,
     '21636-6': 'BRCA1',
     '21640-8': 'BRCA2',   # BRCA2 gene c.6174delT [Presence] in Blood or Tissue
     '21739-8': 'TP53',    # TP53 gene mutations found [Identifier] in Blood or Tissue
@@ -3346,7 +3349,10 @@ def _get_genetic_mutations(person: Person, snapshot: OmopSnapshot = None) -> dic
     for measurement in genetic_measurements:
         if not measurement.value_as_string:
             continue
-        gene = _GENETIC_MUTATION_LOINCS.get(_measurement_code(measurement))
+        code = _measurement_code(measurement)
+        gene = _GENETIC_MUTATION_LOINCS.get(code)
+        if code == '36908-2':
+            gene = measurement.qualifier_source_value
         if not gene:
             continue
 
@@ -3362,7 +3368,7 @@ def _get_genetic_mutations(person: Person, snapshot: OmopSnapshot = None) -> dic
         if measurement.value_as_concept and measurement.value_as_concept.concept_id in interpretation_concepts:
             mutation_data['interpretation'] = interpretation_concepts[measurement.value_as_concept.concept_id]
 
-        if measurement.qualifier_source_value:
+        if measurement.qualifier_source_value and code != '36908-2':
             mutation_data['assay_method'] = measurement.qualifier_source_value
 
         mutations.append(mutation_data)

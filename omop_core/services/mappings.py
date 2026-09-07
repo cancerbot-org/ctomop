@@ -627,7 +627,10 @@ SUGGESTED_FIELD_CODES: dict[str, tuple[str, str]] = {
     'flipi_score_options':           ('444723004', 'SNOMED'),  # FLIPI
 
     # Genomics / molecular
-    'genetic_mutations':             ('55232-3',   'LOINC'),   # Genetic analysis summary panel
+    # Athena 45876022: "Gene mutations tested for".  This is the discrete
+    # result term used for a patient's mutation list; 55232-3 is only a
+    # document-level analysis summary and cannot represent selectable results.
+    'genetic_mutations':             ('36908-2',   'LOINC'),
     'molecular_markers':             ('55232-3',   'LOINC'),   # Genetic analysis summary panel
     'cytogenic_markers':             ('D002869',   'MeSH'),    # Chromosome Aberrations (#803)
     'protein_expressions':           ('85337-4',   'LOINC'),   # Gene expression panel
