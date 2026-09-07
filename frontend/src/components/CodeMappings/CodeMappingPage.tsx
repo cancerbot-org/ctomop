@@ -386,7 +386,8 @@ export default function CodeMappingPage() {
   const [umlsCheckMessage, setUmlsCheckMessage] = useState("");
   const [repointing, setRepointing] = useState<{ from: string; to: string } | null>(null);
   const [repointResult, setRepointResult] = useState<RepointResult | null>(null);
-  const [replaceExisting, setReplaceExisting] = useState(true);
+  const [replaceExisting, setReplaceExisting] = useState(false);
+  const [confirmReplace, setConfirmReplace] = useState(false);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -824,15 +825,16 @@ export default function CodeMappingPage() {
    * would not be a queue.
    */
   const runSuggest = async () => {
-    // Confirmation dialog when replacing existing suggestions.
-    if (replaceExisting) {
-      const mappingVersion = selectedAccuracy?.model_version;
-      const isVersionBump = !!mappingVersion && mappingVersion !== suggestModelVersion;
-      const msg = isVersionBump
-        ? "This will replace all current suggestions and effectively freezes accuracy results for current model. Are you sure?"
-        : "This will replace all current suggestions. Are you sure?";
-      if (!window.confirm(msg)) return;
+    // Replace is only valid when a specific vocabulary is selected (the backend
+    // rejects replace without source_vocabulary_id to prevent global deletes).
+    const effectiveReplace = replaceExisting && !overallTab;
+
+    // Show inline confirmation when replacing existing suggestions.
+    if (effectiveReplace && !confirmReplace) {
+      setConfirmReplace(true);
+      return;
     }
+    setConfirmReplace(false);
 
     setSuggesting(true);
     setError("");
@@ -845,7 +847,7 @@ export default function CodeMappingPage() {
         source_vocabulary_id: selectedVocabulary,
         min_occurrences: Number(minOccurrences) || 1,
         strategies: activeStrategies,
-        replace: replaceExisting,
+        replace: effectiveReplace,
       });
       const { created = 0, considered = 0, ranked = 0, truncated,
               landed_in: landed = {},
@@ -1218,12 +1220,40 @@ export default function CodeMappingPage() {
             <input
               type="checkbox"
               checked={replaceExisting}
-              onChange={(e) => setReplaceExisting(e.target.checked)}
+              onChange={(e) => { setReplaceExisting(e.target.checked); setConfirmReplace(false); }}
               className="h-3.5 w-3.5 rounded border-slate-300"
             />
             Replace Current Suggestions
           </label>
         </div>
+
+        {confirmReplace && (
+          <div className="mb-4 flex items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <span>
+              {(() => {
+                const mappingVersion = selectedAccuracy?.model_version;
+                const isVersionBump = !!mappingVersion && mappingVersion !== suggestModelVersion;
+                return isVersionBump
+                  ? "This will replace all current suggestions and effectively freezes accuracy results for current model."
+                  : "This will replace all current suggestions.";
+              })()}
+            </span>
+            <button
+              type="button"
+              onClick={() => void runSuggest()}
+              className="rounded bg-amber-600 px-2 py-1 text-xs font-medium text-white hover:bg-amber-700"
+            >
+              Confirm
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmReplace(false)}
+              className="text-xs font-medium text-amber-700 underline hover:text-amber-900"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
 
         <div className="mb-4 flex justify-end">
           <section aria-label="Suggestion accuracy" className="flex flex-wrap divide-x rounded-md border border-slate-200 bg-slate-50 text-right text-xs">

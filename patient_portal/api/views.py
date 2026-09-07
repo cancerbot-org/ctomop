@@ -9645,14 +9645,19 @@ def code_mapping_suggest(request):
     # Replace mode: delete existing proposed suggestions so they get re-suggested.
     replaced = 0
     if replace and not dry_run:
-        qs = SourceCodeConceptMapping.objects.filter(
-            status='proposed',
-            origin_system__startswith='suggest ',
-        )
-        if source_vocab:
-            qs = qs.filter(source_vocabulary_id=source_vocab)
-        replaced = qs.count()
-        qs.delete()
+        if not source_vocab:
+            return Response(
+                {'replace': 'replace requires source_vocabulary_id.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            qs = SourceCodeConceptMapping.objects.filter(
+                status='proposed',
+                suggestion_model_version__gt='',
+                source_vocabulary_id=source_vocab,
+            )
+            _, deleted_counts = qs.delete()
+            replaced = sum(deleted_counts.values())
 
     # Multi-table: scan each relevant table, merge results by occurrence.
     all_results = []

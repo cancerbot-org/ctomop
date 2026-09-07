@@ -187,8 +187,6 @@ describe("CodeMappingPage", () => {
     mockPost.mockResolvedValue({ data: {} });
     mockPatch.mockResolvedValue({ data: {} });
     mockDelete.mockResolvedValue({ data: {} });
-    // Suggest now shows a confirm dialog when Replace Current Suggestions is checked (default).
-    vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
   describe("duplicate source-code errors", () => {
