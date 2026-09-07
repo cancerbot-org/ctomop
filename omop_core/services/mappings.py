@@ -466,8 +466,9 @@ DERIVED_FIELD_TO_CODE = {
     'nodes_stage':                   ('21906-3',   'LOINC',  '_get_staging_data'),
     'stage':                         ('21908-9',   'LOINC',  '_get_staging_data'),
     'tumor_stage':                   ('21905-5',   'LOINC',  '_get_staging_data'),
-    # CLL — _get_cll_data. 21889-1 is 'Size Tumor'; a lymph-node row carries
-    # qualifier_source_value='lymph-node' to separate it from tumor_size.
+    # CLL — legacy import fallback only. New edits use Cancer Modifier
+    # 36769292 (Dimension of Largest Lymph Node) in write_descriptor.py;
+    # qualified 21889-1 rows remain readable for historical data.
     'largest_lymph_node_size':       ('21889-1',   'LOINC',  '_get_cll_data'),
     # Social — _get_social_data
     # #596 corrected _get_social_data: 408729009 had been writing to
@@ -622,7 +623,6 @@ SUGGESTED_FIELD_CODES: dict[str, tuple[str, str]] = {
     'dlbcl_transformation_date':     ('91860004',  'SNOMED'),  # Richter / transformation
     'transformed_to_dlbcl':          ('91860004',  'SNOMED'),  # Richter / transformation
     'plasma_cell_leukemia':          ('47082-2',   'LOINC'),   # Plasma cells in bone marrow
-    'largest_lymph_node_size':       ('21889-1',   'LOINC'),   # Size of primary tumor
     'spleen_size':                   ('16294009',  'SNOMED'),  # Splenomegaly
     'flipi_score_options':           ('444723004', 'SNOMED'),  # FLIPI
 

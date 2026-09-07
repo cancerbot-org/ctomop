@@ -33,7 +33,6 @@ export interface FieldDescriptor {
   unit_concept_id?: number | null;
   type_concept_id?: number;
   source_value?: string;
-  qualifier_source_value?: string;
   attributed_from?: string;
   /** alias */
   canonical?: string;

@@ -71,13 +71,16 @@ describe('writeClinicalFact', () => {
     });
   });
 
-  it('includes a server-supplied qualifier in a measurement write', async () => {
+  it('writes the standard Cancer Modifier measurement without a legacy qualifier', async () => {
     await writeClinicalFact(3542, 'largest_lymph_node_size', {
-      ...HGB, source_value: '21889-1', qualifier_source_value: 'lymph-node',
+      ...HGB, concept_id: 36769292, code: 'largest-lymph-node-dimension',
+      vocabulary: 'Cancer Modifier', source_value: 'largest-lymph-node-dimension',
     }, 2.7, '2026-08-21');
 
     expect(mockPost).toHaveBeenCalledWith('/v1/measurements/', expect.objectContaining({
-      qualifier_source_value: 'lymph-node', value_as_number: 2.7,
+      measurement_concept: 36769292,
+      measurement_source_value: 'largest-lymph-node-dimension',
+      value_as_number: 2.7,
     }));
   });
 
