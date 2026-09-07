@@ -355,7 +355,6 @@ function OtherSection({ formData, onChange }: Pick<Props, 'formData' | 'onChange
 
   return (
     <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
-      <ClinicalField label="Disease" name="disease" descriptor={descriptors.disease} type="select" value={formData?.disease} options={DISEASE_OPTIONS} onChange={onChange} />
       <ClinicalField label="Stage" name="stage" descriptor={descriptors.stage} type="select" value={formData?.stage} options={STAGE_OPTIONS} onChange={onChange} />
       <div className="sm:col-span-2">
         <ClinicalField label="Histologic Type" name="histologic_type" descriptor={descriptors.histologic_type} type="select" value={formData?.histologic_type} options={histOptions} onChange={onChange} vocabSource={histologicSource} />
@@ -411,6 +410,9 @@ function StagingBiomarkersSection({ formData, onChange }: Pick<Props, 'formData'
 }
 
 export default function DiseaseTab({ formData, onChange, onMutationAdd, onMutationRemove, onMutationChange, diseaseType }: Props) {
+  const personId = (formData?.person_id ?? formData?.person) as number | undefined;
+  const { descriptors } = useWritableFields(personId);
+  const { source: diseaseSource } = useVocabulary('disease', 'title');
   const diseaseSection = (() => {
     switch (diseaseType) {
       case 'breast':
@@ -428,6 +430,11 @@ export default function DiseaseTab({ formData, onChange, onMutationAdd, onMutati
 
   return (
     <>
+      <Section title="Diagnosis">
+        <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+          <ClinicalField label="Disease" name="disease" descriptor={descriptors.disease} type="select" value={formData?.disease} options={DISEASE_OPTIONS} onChange={onChange} vocabSource={diseaseSource} />
+        </div>
+      </Section>
       {diseaseSection}
       {/* Shown for every disease: nodal and metastasis status apply to any solid
           tumour, and PD-L1 drives checkpoint-inhibitor eligibility across

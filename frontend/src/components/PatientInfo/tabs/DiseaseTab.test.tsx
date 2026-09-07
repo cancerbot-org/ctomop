@@ -40,6 +40,7 @@ const observation = (source_value: string, value_kind: string, multiple = false)
 });
 
 const DESCRIPTORS: Record<string, unknown> = {
+  disease: observation('disease', 'string'),
   sct_date: observation('mm-sct-date', 'date'),
   stem_cell_transplant_history: observation('mm-sct-history', 'string', true),
   sct_eligibility: observation('mm-sct-eligibility', 'string', true),
@@ -164,6 +165,11 @@ describe('MyelomaSection — SCT fields', () => {
     renderMyeloma();
     expect(screen.getByText('M-Protein Type')).toBeInTheDocument();
     expect(screen.queryByText('Myeloma Type')).not.toBeInTheDocument();
+  });
+
+  it('keeps the single Disease editor on the Disease tab', () => {
+    renderMyeloma({ disease: 'Multiple Myeloma' });
+    expect(screen.getAllByTestId('select-control')[0]).toHaveValue('Multiple Myeloma');
   });
 
   it('renders all three SCT field labels', () => {
