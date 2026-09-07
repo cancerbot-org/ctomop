@@ -631,9 +631,21 @@ export default function CodeMappingPage() {
     }
   };
 
-  const suggestCurrentCode = () => {
-    const query = form.source_code_description || form.source_code || "";
-    void searchConcepts(query.replace(/[-_]/g, " "));
+  const suggestCurrentCode = async () => {
+    setSearchingConcepts(true);
+    try {
+      const enabled = Object.entries(strategies).filter(([, on]) => on).map(([name]) => name);
+      const { data } = await api.post("/v1/code-mappings/suggest-one/", {
+        source_code: form.source_code, source_vocabulary_id: form.source_vocabulary_id,
+        source_code_description: form.source_code_description, omop_table: form.omop_table,
+        strategies: enabled,
+      });
+      if (data.suggested) {
+        applyConcept(data.suggested);
+        setBanner(`Suggested via ${data.strategy_used || "waterfall"}.`);
+      } else setError(data.note || "No suggestion found.");
+    } catch { setError("Failed to suggest a destination concept."); }
+    finally { setSearchingConcepts(false); }
   };
 
   // Keyed on the same condition submitForm branches on. dialogMode can say
@@ -1258,9 +1270,13 @@ export default function CodeMappingPage() {
                         </label>
                         <HelpTip tip={TIP.search_vocabulary} />
                       </div>
+                      {(["umls", "vectors", "lexical"] as const).map((key) => (
+                        <label key={key} className="inline-flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" checked={strategies[key]} onChange={(e) => setStrategies((prev) => ({ ...prev, [key]: e.target.checked }))} />{key === "umls" ? "UMLS" : key === "vectors" ? "Vectors" : "Lexical"}</label>
+                      ))}
                       <button
                         type="button"
-                        onClick={suggestCurrentCode}
+                        onClick={() => void suggestCurrentCode()}
+                        disabled={searchingConcepts || !Object.values(strategies).some(Boolean)}
                         className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
                       >
                         <Sparkles size={13} />
