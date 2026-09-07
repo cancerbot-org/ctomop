@@ -711,3 +711,40 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
         results.append(entry)
 
     return results
+
+
+def suggest_one_mapping(source_code, source_vocabulary_id, omop_table, *, source_description='', strategies=None):
+    """Run the same UMLS → vectors → lexical waterfall for one dialog row."""
+    if strategies is None:
+        strategies = list(ALL_STRATEGIES)
+    target = _QUARANTINE_TARGETS.get(omop_table)
+    if target is None:
+        raise ValueError(f'No quarantine vocabulary for table {omop_table!r}.')
+    _hk_vocabulary, domain_id, _class, _slug = target
+    source_concept = Concept.objects.filter(vocabulary_id=source_vocabulary_id, concept_code__iexact=source_code).first() if source_vocabulary_id else None
+    description = source_description or (source_concept.concept_name if source_concept else '')
+    chosen, note, candidates, strategy_used, umls_cui = None, '', [], None, None
+    if STRATEGY_UMLS in strategies:
+        hits, umls_cui = umls_candidates(source_code, source_vocabulary_id, domain_id)
+        if hits:
+            candidates = hits
+            if len(hits) == 1:
+                chosen, strategy_used = hits[0], STRATEGY_UMLS
+                note = f'UMLS CUI bridge ({umls_cui}): exact cross-vocabulary equivalency.'
+            else:
+                chosen, note = rank_candidates(source_code, hits, source_description=description)
+                strategy_used = STRATEGY_UMLS if chosen else None
+    if chosen is None and STRATEGY_VECTORS in strategies:
+        hits = vector_candidates(description or source_code, domain_id)
+        if hits:
+            candidates = hits
+            chosen, note = rank_candidates(source_code, hits, source_description=description)
+            strategy_used = STRATEGY_VECTORS if chosen else None
+    if chosen is None and STRATEGY_LEXICAL in strategies:
+        hits = lexical_candidates(description or source_code, domain_id)
+        if hits:
+            candidates = hits
+            chosen, note = rank_candidates(source_code, hits, source_description=description)
+            strategy_used = STRATEGY_LEXICAL if chosen else None
+    return {'suggested': chosen, 'note': note or 'No candidate concept found by any enabled strategy.',
+            'strategy_used': strategy_used, 'umls_cui': umls_cui, 'candidates_considered': len(candidates)}

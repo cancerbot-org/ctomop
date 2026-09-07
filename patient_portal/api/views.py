@@ -79,6 +79,7 @@ from omop_core.mapping.code_resolution import (
 from omop_core.mapping.suggestions import (
     ALL_STRATEGIES,
     DEFAULT_MIN_OCCURRENCES,
+    suggest_one_mapping,
     suggest_mappings,
 )
 from omop_core.services.write_descriptor import mapping_table_is_writable
@@ -9217,6 +9218,20 @@ def code_mapping_suggest(request):
         'results': results,
         'truncated': len(all_results) > limit,
     }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def code_mapping_suggest_one(request):
+    if not _can_manage_field_mappings(request.user):
+        return Response({'detail': 'Organization admin access required.'}, status=status.HTTP_403_FORBIDDEN)
+    source_code = str(request.data.get('source_code') or '').strip()
+    omop_table = normalize_omop_table(request.data.get('omop_table'))
+    strategies = request.data.get('strategies') or list(ALL_STRATEGIES)
+    if not source_code or not omop_table or not isinstance(strategies, list) or any(s not in ALL_STRATEGIES for s in strategies):
+        return Response({'detail': 'source_code, omop_table, and valid strategies are required.'}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(suggest_one_mapping(source_code, str(request.data.get('source_vocabulary_id') or ''), omop_table,
+        source_description=str(request.data.get('source_code_description') or ''), strategies=strategies))
 
 
 @api_view(['GET'])
