@@ -180,7 +180,11 @@ export function ConceptAssignDialog({
     try {
       const resp = await api.get("/v1/concepts/candidates/", { params: { icd10_code: trimmed } });
       setIcd10Result(resp.data);
-    } catch {
+    } catch (err: unknown) {
+      if (err && typeof err === "object" && "response" in err) {
+        const status = (err as { response: { status: number } }).response?.status;
+        if (status === 401 || status === 403) throw err;
+      }
       setIcd10Result(null);
     } finally {
       setIcd10Loading(false);

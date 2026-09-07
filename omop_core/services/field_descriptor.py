@@ -596,7 +596,11 @@ def get_all_field_descriptors() -> list[dict]:
                 'reviewer': mapping.reviewer.username if mapping.reviewer else None,
                 'reviewed_at': mapping.reviewed_at.isoformat() if mapping.reviewed_at else None,
                 'notes': mapping.notes,
-                'candidate_count': candidate_count_for_icd10(mapping.concept_code) if mapping.concept_code else 0,
+                'candidate_count': (
+                    candidate_count_for_icd10(mapping.concept_code)
+                    if mapping.concept_code and mapping.vocabulary_id in ('ICD10', 'ICD10CM')
+                    else 0
+                ),
             }
 
         formula = formulas_by_field.get(name)
@@ -612,6 +616,8 @@ def get_all_field_descriptors() -> list[dict]:
             if not validation.valid:
                 derivation_error = f"Invalid formula: {'; '.join(validation.errors)}"
 
+        suggestion = _build_suggestion(name, prov_dict)
+
         result.append({
             'field_name': name,
             'field_type': _get_field_type_label(f),
@@ -619,10 +625,12 @@ def get_all_field_descriptors() -> list[dict]:
             'tab': _classify_tab(name),
             'provenance': prov_dict,
             'mapping': mapping_dict,
-            'suggestion': (suggestion := _build_suggestion(name, prov_dict)),
+            'suggestion': suggestion,
             'candidate_count': (
                 mapping_dict.get('candidate_count', 0) if mapping_dict
-                else candidate_count_for_icd10(suggestion['concept_code']) if suggestion and suggestion.get('concept_code')
+                else candidate_count_for_icd10(suggestion['concept_code'])
+                    if suggestion and suggestion.get('concept_code')
+                    and suggestion.get('vocabulary_id') in ('ICD10', 'ICD10CM')
                 else 0
             ),
             'unit_options': FIELD_COMMON_UNITS.get(name, STANDARD_UNIT_CHOICES),
@@ -671,7 +679,11 @@ def get_all_field_descriptors() -> list[dict]:
                 'reviewer': mapping.reviewer.username if mapping.reviewer else None,
                 'reviewed_at': mapping.reviewed_at.isoformat() if mapping.reviewed_at else None,
                 'notes': mapping.notes,
-                'candidate_count': candidate_count_for_icd10(mapping.concept_code) if mapping.concept_code else 0,
+                'candidate_count': (
+                    candidate_count_for_icd10(mapping.concept_code)
+                    if mapping.concept_code and mapping.vocabulary_id in ('ICD10', 'ICD10CM')
+                    else 0
+                ),
             },
             'suggestion': None,
             'unit_options': STANDARD_UNIT_CHOICES,
