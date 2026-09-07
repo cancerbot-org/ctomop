@@ -80,6 +80,7 @@ from omop_core.mapping.code_resolution import (
 from omop_core.mapping.suggestions import (
     ALL_STRATEGIES,
     DEFAULT_MIN_OCCURRENCES,
+    SUGGESTION_MODEL_VERSION,
     VOCAB_TO_UMLS_ROOT,
     suggest_one_mapping,
     suggest_mappings,
@@ -9616,6 +9617,7 @@ def code_mapping_suggest(request):
     limit = min(limit, SUGGEST_MAX_PER_CALL)
 
     dry_run = bool(request.data.get('dry_run'))
+    replace = bool(request.data.get('replace'))
 
     # Retrieval strategies (new: multi-strategy waterfall).
     raw_strategies = request.data.get('strategies')
@@ -9639,6 +9641,18 @@ def code_mapping_suggest(request):
         strategies = raw_strategies
     else:
         strategies = None  # suggest_mappings() defaults to all
+
+    # Replace mode: delete existing proposed suggestions so they get re-suggested.
+    replaced = 0
+    if replace and not dry_run:
+        qs = SourceCodeConceptMapping.objects.filter(
+            status='proposed',
+            origin_system__startswith='suggest ',
+        )
+        if source_vocab:
+            qs = qs.filter(source_vocabulary_id=source_vocab)
+        replaced = qs.count()
+        qs.delete()
 
     # Multi-table: scan each relevant table, merge results by occurrence.
     all_results = []
@@ -9679,6 +9693,8 @@ def code_mapping_suggest(request):
         'strategy_counts': strategy_counts,
         'results': results,
         'truncated': len(all_results) > limit,
+        'model_version': SUGGESTION_MODEL_VERSION,
+        'replaced': replaced,
     }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
@@ -9828,6 +9844,7 @@ def code_mapping_accuracy(request):
     return Response({
         'overall': overall,
         'by_source_vocabulary': by_source_vocabulary,
+        'suggest_model_version': SUGGESTION_MODEL_VERSION,
     })
 
 

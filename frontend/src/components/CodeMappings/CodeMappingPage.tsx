@@ -125,6 +125,7 @@ interface SuggestionAccuracy {
 interface AccuracyResponse {
   overall: SuggestionAccuracy;
   by_source_vocabulary: Record<string, SuggestionAccuracy>;
+  suggest_model_version?: string;
 }
 
 const OVERALL_TAB = "__overall__";
@@ -385,6 +386,7 @@ export default function CodeMappingPage() {
   const [umlsCheckMessage, setUmlsCheckMessage] = useState("");
   const [repointing, setRepointing] = useState<{ from: string; to: string } | null>(null);
   const [repointResult, setRepointResult] = useState<RepointResult | null>(null);
+  const [replaceExisting, setReplaceExisting] = useState(true);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -473,6 +475,8 @@ export default function CodeMappingPage() {
   const selectedAccuracy = overallTab
     ? accuracy?.overall
     : accuracy?.by_source_vocabulary?.[selectedVocabulary] ?? accuracy?.overall;
+
+  const suggestModelVersion = accuracy?.suggest_model_version ?? "";
 
   // Audit the entire tab, not just expanded/search-visible rows. A hidden
   // rejected mapping still owns its source code and can block re-creation.
@@ -820,6 +824,16 @@ export default function CodeMappingPage() {
    * would not be a queue.
    */
   const runSuggest = async () => {
+    // Confirmation dialog when replacing existing suggestions.
+    if (replaceExisting) {
+      const mappingVersion = selectedAccuracy?.model_version;
+      const isVersionBump = !!mappingVersion && mappingVersion !== suggestModelVersion;
+      const msg = isVersionBump
+        ? "This will replace all current suggestions and effectively freezes accuracy results for current model. Are you sure?"
+        : "This will replace all current suggestions. Are you sure?";
+      if (!window.confirm(msg)) return;
+    }
+
     setSuggesting(true);
     setError("");
     setBanner(null);
@@ -831,10 +845,12 @@ export default function CodeMappingPage() {
         source_vocabulary_id: selectedVocabulary,
         min_occurrences: Number(minOccurrences) || 1,
         strategies: activeStrategies,
+        replace: replaceExisting,
       });
       const { created = 0, considered = 0, ranked = 0, truncated,
               landed_in: landed = {},
-              strategy_counts: stratCounts = {} } = resp.data || {};
+              strategy_counts: stratCounts = {},
+              replaced: replacedCount = 0 } = resp.data || {};
       await fetchAll();
       // Say which tabs the new rows are in. A ranked suggestion's destination
       // is a standard concept, so its mapping belongs to the LOINC or SNOMED
@@ -848,14 +864,17 @@ export default function CodeMappingPage() {
         .filter(([, n]) => n > 0)
         .map(([s, n]) => `${n} via ${s}`)
         .join(", ");
+      const replacedNote = replacedCount ? `Replaced ${replacedCount} previous suggestion(s). ` : "";
       setBanner(
         created
-          ? `Proposed ${created} mapping(s) from ${considered} unmapped code(s), `
+          ? replacedNote
+            + `Proposed ${created} mapping(s) from ${considered} unmapped code(s), `
             + `${ranked} with a suggested destination`
             + (byStrategy ? ` (${byStrategy})` : "")
             + (where ? ` — ${where}.` : ".")
             + (truncated ? " More remain — run Suggest again." : "")
-          : `No unmapped codes seen ${Number(minOccurrences) || 1}+ times in this vocabulary.`,
+          : replacedNote
+            + `No unmapped codes seen ${Number(minOccurrences) || 1}+ times in this vocabulary.`,
       );
     } catch (err) {
       const detail =
@@ -1192,6 +1211,18 @@ export default function CodeMappingPage() {
             <Sparkles size={13} />
             {suggesting ? "Suggesting…" : "Suggest"}
           </button>
+          {suggestModelVersion && (
+            <span className="text-xs font-medium text-slate-500">suggest {suggestModelVersion}</span>
+          )}
+          <label className="inline-flex items-center gap-1 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={replaceExisting}
+              onChange={(e) => setReplaceExisting(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-slate-300"
+            />
+            Replace Current Suggestions
+          </label>
         </div>
 
         <div className="mb-4 flex justify-end">
