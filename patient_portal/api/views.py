@@ -9462,6 +9462,17 @@ def _source_vocabulary_tabs():
         .annotate(cnt=Count('id'))
         .order_by()
     )
+    # Mirror the same vocab merges so the extras gate sees merged keys.
+    for sub, canonical in source_vocabularies.ICD10CM_MERGE.items():
+        if sub in proposed_counts:
+            proposed_counts[canonical] = proposed_counts.get(canonical, 0) + proposed_counts.pop(sub)
+    wearable_subs_p = source_vocabularies.WEARABLE_SOURCE_VOCABULARIES - {'OpenWearables'}
+    for sub in wearable_subs_p:
+        if sub in proposed_counts:
+            proposed_counts['OpenWearables'] = proposed_counts.get('OpenWearables', 0) + proposed_counts.pop(sub)
+    for oid, canonical in source_vocabularies.VOCABULARY_OID_ALIASES.items():
+        if oid in proposed_counts:
+            proposed_counts[canonical] = proposed_counts.get(canonical, 0) + proposed_counts.pop(oid)
 
     ordered_set = set(source_vocabularies.SOURCE_TAB_ORDER)
     tabs = []

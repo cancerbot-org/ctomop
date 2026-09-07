@@ -103,6 +103,10 @@ VOCAB_TO_UMLS_ROOT = {
 _UMLS_ROOT_TO_VOCAB: dict[str, str] = {}
 for _k, _v in VOCAB_TO_UMLS_ROOT.items():
     _UMLS_ROOT_TO_VOCAB.setdefault(_v, _k)
+assert _UMLS_ROOT_TO_VOCAB.get('ICD10CM') == 'ICD10CM', (
+    "ICD10CM must appear before ICD10 in VOCAB_TO_UMLS_ROOT so the reverse "
+    "map prefers the canonical Athena vocabulary for sibling lookups."
+)
 
 # ---------------------------------------------------------------------------
 # Strategy labels
@@ -297,8 +301,19 @@ def unmapped_source_values(omop_table, min_occurrences=DEFAULT_MIN_OCCURRENCES,
         .order_by('-occurrences', source_col, 'source_vocabulary_id')
     )
     # When filtering by source vocabulary, only return rows from that vocabulary.
+    # Expand merged vocabularies (e.g. ICD10 → [ICD10, ICD10CM]) so the merged
+    # tab sees clinical rows from both the canonical and aliased vocab.
     if source_vocabulary_id is not None:
-        rows = rows.filter(source_vocabulary_id=source_vocabulary_id)
+        from omop_core.services.source_vocabularies import ICD10CM_MERGE
+        # Build the reverse: canonical → {aliases that fold into it}
+        vocab_ids = {source_vocabulary_id}
+        for alias, canonical in ICD10CM_MERGE.items():
+            if canonical == source_vocabulary_id:
+                vocab_ids.add(alias)
+        if len(vocab_ids) == 1:
+            rows = rows.filter(source_vocabulary_id=source_vocabulary_id)
+        else:
+            rows = rows.filter(source_vocabulary_id__in=vocab_ids)
 
     out = []
     for row in rows.iterator():

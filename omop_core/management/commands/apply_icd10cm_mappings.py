@@ -8,6 +8,12 @@ go through the normal curation flow.
 
 Safe to re-run: already-approved ICD10 rows are skipped.
 
+**Note:** This command does NOT call ``repoint_clinical_rows``.  After running
+it, trigger a full patient-record refresh for affected persons so that stored
+clinical rows pick up the newly approved concepts::
+
+    python manage.py backfill_patient_records
+
 Usage::
 
     # Preview what would change
@@ -20,10 +26,14 @@ import logging
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
 
 from omop_core.models import SourceCodeConceptMapping
 
 logger = logging.getLogger(__name__)
+
+_ORIGIN_FIELD = SourceCodeConceptMapping._meta.get_field('origin_system')
+_ORIGIN_MAX_LEN = _ORIGIN_FIELD.max_length or 50
 
 
 class Command(BaseCommand):
@@ -69,22 +79,31 @@ class Command(BaseCommand):
             ))
             return
 
-        updated = 0
+        now = timezone.now()
+        rows_to_update = []
+        for row in pending_icd10.iterator():
+            donor = approved_icd10cm[row.source_code]
+            row.target_concept = donor.target_concept
+            row.destination_vocabulary_id = donor.destination_vocabulary_id
+            row.status = 'approved'
+            row.reviewed_at = now
+            new_origin = (
+                f'{row.origin_system}; auto-approved from ICD10CM'
+                if row.origin_system
+                else 'auto-approved from ICD10CM'
+            )
+            row.origin_system = new_origin[:_ORIGIN_MAX_LEN]
+            rows_to_update.append(row)
+
+        update_fields = [
+            'target_concept', 'destination_vocabulary_id',
+            'status', 'reviewed_at', 'origin_system',
+        ]
         with transaction.atomic():
-            for row in pending_icd10.iterator():
-                donor = approved_icd10cm[row.source_code]
-                row.target_concept = donor.target_concept
-                row.status = 'approved'
-                row.origin_system = (
-                    f'{row.origin_system}; auto-approved from ICD10CM'
-                    if row.origin_system
-                    else 'auto-approved from ICD10CM'
-                )
-                row.save(update_fields=[
-                    'target_concept', 'status', 'origin_system',
-                ])
-                updated += 1
+            SourceCodeConceptMapping.objects.bulk_update(
+                rows_to_update, update_fields, batch_size=500,
+            )
 
         self.stdout.write(self.style.SUCCESS(
-            f'Approved {updated} ICD10 rows from ICD10CM mappings.'
+            f'Approved {len(rows_to_update)} ICD10 rows from ICD10CM mappings.'
         ))
