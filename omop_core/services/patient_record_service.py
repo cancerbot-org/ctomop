@@ -3120,7 +3120,7 @@ def _get_sct_cytogenetic_data(person: Person, snapshot: OmopSnapshot = None) -> 
             continue
 
         if src == 'mm-cytogenetic-markers':
-            data['cytogenetic_markers'] = val
+            data['cytogenetic_markers'] = _normalise_cytogenetic_markers(val)
         elif src == 'mm-sct-date':
             try:
                 data['sct_date'] = datetime.strptime(val[:10], '%Y-%m-%d').date()
@@ -3136,6 +3136,23 @@ def _get_sct_cytogenetic_data(person: Person, snapshot: OmopSnapshot = None) -> 
             ]
 
     return data
+
+
+def _normalise_cytogenetic_markers(value: str) -> str:
+    """Use one stored spelling for UI, FHIR import, and exact matching (#1051)."""
+    aliases = {
+        'del(17p13)': 'del17p', 'tp53/17p deletion': 'del17p',
+        '1q21 amplification': '1q_amp', '1q21 gain': '1q_gain',
+        '1q21 gain/amplification': '1q_gain',
+        'fgfr3/igh translocation t(4;14)': 't(4;14)',
+        'maf/igh translocation t(14;16)': 't(14;16)',
+    }
+    values = []
+    for part in value.split(','):
+        marker = aliases.get(part.strip().casefold(), part.strip())
+        if marker and marker not in values:
+            values.append(marker)
+    return ', '.join(values)
 
 
 def _get_assessment_data(person: Person, snapshot: OmopSnapshot = None) -> dict:
