@@ -6,6 +6,11 @@ import FieldMappingPage from "./FieldMappingPage";
 const mockGet = vi.fn();
 const mockPost = vi.fn();
 const mockPatch = vi.fn();
+const mockUseAuth = vi.fn();
+
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => mockUseAuth(),
+}));
 
 vi.mock("@/api/axios", () => ({
   default: {
@@ -220,6 +225,7 @@ const renderPage = () =>
 describe("FieldMappingPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseAuth.mockReturnValue({ currentUser: { is_staff: true, is_org_admin: false } });
     mockPatch.mockResolvedValue({ data: {} });
     mockGet.mockImplementation((url: string) => {
       if (url === "/v1/field-mappings/") {
@@ -391,6 +397,41 @@ describe("FieldMappingPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Assign Concept")).toBeInTheDocument();
     });
+    expect(screen.getByRole("option", { name: "CDISC" })).toBeInTheDocument();
+  });
+
+  it("suggests field mappings for the active tab", async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("Field Concept Mappings")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith("/v1/field-mappings/propose-all/", { tab: "general" });
+    });
+  });
+
+  it("suggests concepts for the selected field from the dialog", async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/Behavior/)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText(/Behavior/));
+    await waitFor(() => {
+      expect(screen.getByText("smoking_status")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByText("click to map")[0]);
+    await screen.findByRole("heading", { name: "Assign Concept" });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Suggest" }));
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith("/v1/concepts/search/", {
+        params: { q: "smoking status", limit: "50" },
+      });
+    });
   });
 
   it("keeps units out of the field list while retaining mapping columns", async () => {
@@ -503,7 +544,7 @@ describe("FieldMappingPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Edit Concept Mapping")).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: "Update/Approve Mapping" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Update Mapping" })).toBeEnabled();
   });
 
   it("approves a proposed mapping when it is updated from the dialog", async () => {
@@ -513,7 +554,8 @@ describe("FieldMappingPage", () => {
     await waitFor(() => expect(screen.getByText("229819007")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("229819007"));
-    const submit = await screen.findByRole("button", { name: "Update/Approve Mapping" });
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: "approved" } });
+    const submit = await screen.findByRole("button", { name: "Update Mapping" });
     fireEvent.click(submit);
 
     await waitFor(() => {

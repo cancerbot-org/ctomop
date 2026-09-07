@@ -86,9 +86,9 @@ function PatientInfoInner({ readOnly, onPatientUpdated }: Pick<PatientInfoProps,
     if (d.ecog_performance_status != null)
       d.ecog_performance_status = String(d.ecog_performance_status);
     if (d.estrogen_receptor_status && d.progesterone_receptor_status && d.her2_status) {
-      const erNeg = ["Negative", "ER-"].includes(String(d.estrogen_receptor_status));
-      const prNeg = ["Negative", "PR-"].includes(String(d.progesterone_receptor_status));
-      const her2Neg = ["Negative", "HER2-"].includes(String(d.her2_status));
+      const erNeg = String(d.estrogen_receptor_status) === "Negative";
+      const prNeg = String(d.progesterone_receptor_status) === "Negative";
+      const her2Neg = String(d.her2_status) === "Negative";
       d.tnbc_status = erNeg && prNeg && her2Neg;
     }
     return d;
@@ -236,7 +236,7 @@ function PatientInfoInner({ readOnly, onPatientUpdated }: Pick<PatientInfoProps,
       const er = String(field === "estrogen_receptor_status" ? value : updated.estrogen_receptor_status ?? "");
       const pr = String(field === "progesterone_receptor_status" ? value : updated.progesterone_receptor_status ?? "");
       const her2 = String(field === "her2_status" ? value : updated.her2_status ?? "");
-      const neg = (v: string) => ["Negative", "ER-", "PR-", "HER2-"].includes(v);
+      const neg = (v: string) => v === "Negative";
       if (neg(er) && neg(pr) && neg(her2)) updated.tnbc_status = true;
       else if (er || pr || her2) updated.tnbc_status = false;
     }
@@ -332,8 +332,8 @@ function PatientInfoInner({ readOnly, onPatientUpdated }: Pick<PatientInfoProps,
     0: "Keep patient details up to date for accurate personalisation.",
     1: "Disease-specific clinical information and genetic details.",
     2: "Therapy history, treatment lines, and planned therapies.",
-    3: "Blood counts, electrolytes, coagulation, and cardiac markers.",
-    4: "Chemistry panel, liver function tests, and other lab markers.",
+    3: "Blood counts and differential.",
+    4: "Chemistry, liver function, coagulation, cardiac and tumour markers.",
     5: "Lifestyle, socioeconomic, and behavioural health factors.",
     6: "Apple wearable 30-day summaries derived from synced OMOP data.",
   };

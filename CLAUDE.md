@@ -692,6 +692,63 @@ If `remoteEntry.js` returns 500 on staging, check that `WHITENOISE_ROOT` points 
 
 ---
 
+## Copying Field Mappings Between Instances
+
+`copy_field_mappings` moves the field-mapping curation from another PRomop
+instance into this one. The curation is manual reviewer work, so it is copied
+rather than redone.
+
+```bash
+SOURCE_DATABASE_URL="postgresql://..." \
+  .venv/bin/python manage.py copy_field_mappings --dry-run
+SOURCE_DATABASE_URL="postgresql://..." \
+  .venv/bin/python manage.py copy_field_mappings
+```
+
+Destination is `DATABASE_URL`. The source is opened as a second connection
+registered at runtime (not in `settings.DATABASES`, so the test runner does not
+try to build a test database for it) and, on PostgreSQL, in a
+`default_transaction_read_only` session — the command never writes to the source.
+
+By default the command copies the two datasets loaded by the field-mapping
+screen: `FieldConceptMapping` and `FieldSynonym`. Existing rows with the same
+natural key are always overwritten. Related field-curation tables can be
+included explicitly with `--tables`:
+
+| Table | Natural key |
+|---|---|
+| `FieldConceptMapping` | `field_name` |
+| `CustomPatientField` | `field_name` (its mapping is `PROTECT`, so mappings are written first) |
+| `FieldChoice` + `FieldChoiceCode` | `(field_name, display)`; codes are replaced wholesale |
+| `FieldFormula` | `field_name` |
+| `FieldSynonym` | `(field_name, synonym_text)` |
+
+`--dry-run` rolls back, and `--prune` also deletes local rows the source lacks
+(off by default, so a copy is additive). Everything runs in one transaction
+against the local database. To migrate the entire related curation set, pass
+`--tables mappings custom_fields choices formulas synonyms`.
+
+Two things deliberately do not survive the trip:
+
+- **Row IDs.** Matching is on the natural key — the two instances number rows
+  independently.
+- **`reviewer` / `created_by`.** These point at `Identity` rows whose IDs mean a
+  different person on each instance, so they are cleared. A wrong attribution is
+  worse than none.
+
+The concept FK is **re-resolved by `(vocabulary_id, concept_code)`**, not copied
+as an id. Athena concept ids are stable across instances, but locally minted
+concepts (`Concept.source == 'HealthKey'`) are numbered per instance, so the
+same id can name a different concept on the target. A concept the target has
+not loaded leaves the mapping's concept null and logs a warning; the rest of the
+mapping still lands.
+
+Logic lives in `omop_core/services/field_curation_transfer.py`, split into
+`read_payload(using)` and `apply_payload(payload)` so the round trip is testable
+without a second test database (`tests/test_copy_field_mappings.py`).
+
+---
+
 ## Deployment
 
 - **`start.sh`** runs `python manage.py migrate` on every deploy — so migrations pushed to `main` are auto-applied on next Render deploy.
@@ -751,11 +808,68 @@ A client that defers must derive afterwards:
 
 ```
 POST /api/v1/patient-records/{person_id}/refresh/
+  202 {"person_id": 123, "task_id": "..."}
+
+GET /api/v1/derivation-status/{task_id}/
+  200 {"task_id": "...", "state": "PENDING|STARTED|SUCCESS|FAILURE", "error": null}
 ```
 
-Admin or service-token only. It does not swallow a failing derivation, unlike
-the signal path in `omop_core/signals.py`, because a 2xx over a record that did
-not re-derive would be a lie on an endpoint that exists only to derive.
+Both are admin or service-token only.
+
+`202`, not `200`: the derivation is queued on Celery and the record is not
+rebuilt yet when the POST returns. Poll the status endpoint for the outcome.
+`state` is Celery's own, and a derivation that fails reports `FAILURE` with the
+error rather than a success over a stale record — the signal path in
+`omop_core/signals.py` swallows failures, this does not.
+
+Result state lives in the Redis result backend and expires after
+`CELERY_RESULT_EXPIRES` (default 24h). An id past that, or one that was never
+issued, reads as `PENDING`, which is also what Celery reports for an id it has
+never seen.
+
+### Running the derivation
+
+`omop_core/services/derivation_jobs.py` picks how:
+
+| `CELERY_BROKER_URL` | Dispatcher | Behaviour |
+|---|---|---|
+| set | `CeleryDispatcher` | enqueues on transaction commit, worker derives |
+| empty | `InlineDispatcher` | derives in the request, before the `202` |
+
+There is deliberately no separate setting for the choice: a dispatcher that can
+disagree with the broker leaves every job queued with nothing consuming it.
+Inline is what a developer machine with no Redis gets — the wire contract is
+the same, so a client needs one path either way. Inline lets a failing
+derivation propagate instead of recording it, because the caller is still
+holding the request, so an id is only ever issued for a derivation that
+already succeeded. That is why the id itself (`inline-<signed uuid>`) is the
+completion record: a registry would be process-local, and under several
+gunicorn workers the poll would land on a process that never saw the POST. It
+is signed with SECRET_KEY so only an id the deployment issued reads SUCCESS,
+and it verifies on any worker.
+Because it holds the request, it caps the derivation with a 25s
+`statement_timeout` — the queued path gets that bound from
+`CELERY_TASK_TIME_LIMIT` instead.
+
+Tests swap in `FakeDispatcher` through `use_dispatcher(...)`; nothing needs to
+patch Celery or run it eager.
+
+Run a worker with:
+
+```bash
+celery -A ctomop worker --loglevel=info
+```
+
+The task is idempotent — derivation clears and rebuilds every field — so a
+duplicate call is extra load, not a correctness problem. That is why nothing
+deduplicates, and why `CELERY_TASK_ACKS_LATE` is safe.
+
+`CELERY_BROKER_VISIBILITY_TIMEOUT` (default 1800) must stay above
+`CELERY_TASK_TIME_LIMIT` (default 900) or Redis decides a still-running task
+was lost and hands the same job to a second worker.
+
+Only `refresh/` is async. The signal path and the bulk write still derive
+inline.
 
 ---
 
@@ -824,6 +938,125 @@ Three things to know before touching this code:
 - **The collapse path deletes rows, and `post_delete` receivers are live.** The
   whole write block runs inside `suppress_patient_record_refresh()`; without it a
   batch that collapses duplicates fires one refresh per deleted row.
+
+---
+
+## Bulk OMOP Row Deletes
+
+The five clinical endpoints delete in batches, on `/api/v1/` only:
+
+```
+POST /api/v1/measurements/bulk_delete/     {"ids": [10605646, 10605649, ...]}
+  200 {"deleted": 2, "missing": []}
+```
+
+Ids come from a prior read, so there is no matching logic server-side. One
+transaction, all-or-nothing. One batch is one person (mixed-person → 400).
+Max 5,000 ids (`OMOP_BULK_DELETE_MAX_IDS`) → 413. `?skip_refresh=true` defers
+the derivation, admin-gated as on the row level `DELETE`.
+
+**Ids that name no row come back in `missing` rather than failing the batch.**
+A retry after a read timeout, or a re-run of an applied batch, has to converge.
+Rows the caller cannot reach are reported the same way, so the endpoint cannot
+be used to tell an absent id from somebody else's.
+
+`POST`, not `DELETE`, because a `DELETE` with a body gets stripped by
+intermediaries. That makes the permission class matter: the viewsets use
+`PatientCrudPermission`, which grants a session patient `POST` but denies them
+`DELETE`, so the action overrides it with the base `ScopedTokenPermission`.
+Evaluated on a `POST` that class reproduces the `DELETE` rule. Per-person write
+access is `_authorize_person_write`, shared with the bulk create path.
+
+Three things that are easy to get wrong:
+
+- **Scoping is `_visible_clinical_rows`, not `get_queryset()`.** That queryset
+  carries the tenancy filter *and* hides `is_erroneous` rows. Only the first
+  half is wanted here, since a row flagged in error is one a reconciliation
+  most wants to drop.
+- **The lookup is locked inside the transaction.** Without `select_for_update`
+  a concurrent row level `PATCH` could move a row to another person between the
+  authorization and the delete.
+- **`queryset.delete()` fires `post_delete`**, unlike `bulk_create`. The delete
+  runs inside `suppress_patient_record_refresh()` with one explicit
+  `refresh_patient_record` after it. Without the suppression a 40-row batch
+  costs 40 derivations.
+
+`ProvenanceRecord` and `MeasurementOwnership` rows for the deleted ids go too.
+Neither has a database cascade: provenance points through a `GenericForeignKey`,
+and ownership holds a bare `measurement_id`. Ids are never reused
+(`next_pk` only advances its sequence), so the risk is orphan rows rather than
+mis-attribution. `EpisodeEvent` is deliberately left alone: its `event_id` is
+ambiguous without the field concept, and deleting by id alone would take out
+links belonging to another domain.
+
+---
+
+## Bulk OMOP Row Updates
+
+Updates are ~3% of the migration's volume, so this is the smallest of the three
+batch entrances. A correction pass still paid one request per row:
+
+```
+PATCH /api/v1/measurements/bulk_update/   [{"measurement_id": 106, "value_as_number": 7.5}, ...]
+  200 {"updated": 1, "missing": []}
+```
+
+Partial per row, through the same serializer and the same `partial=True` as the
+row level `PATCH`. One transaction, one person, one refresh, ids reported in
+`missing`, `409` on a constraint, per-index validation errors. Max 1,000 rows
+(`OMOP_BULK_MAX_ROWS`) → 413. Same locking and same scoping as the delete path.
+
+Rules specific to updates:
+
+- **`person` is rejected in the payload.** Moving a row to another person breaks
+  both the batch's single authorization and its single refresh. Use the row
+  level `PATCH` for that.
+- **Duplicate ids are rejected, not last-wins.** Two partial patches of one row
+  in one batch have no defined order.
+- **Rows carrying only an id are not counted and get no provenance.** They wrote
+  nothing.
+- **Errors are re-indexed onto the request rows.** Validation runs over matched
+  rows only, so an id that matched nothing would otherwise shift every error
+  after it onto the wrong row.
+
+Permissions are the viewset's own, because `PATCH` is open to session patients
+at the row level. `_authorize_person_write` on the batch's person is the guard,
+and `_visible_clinical_rows` builds the reachable set from the same access
+grants the row level path honours: self, verified representative, professional
+through `GroupAccess`.
+
+Writes are grouped by patched column set, one `bulk_update` per distinct shape.
+A single call takes one column list for every instance, so an ungrouped batch
+would write a column back onto rows whose payload never carried it, clobbering
+a concurrent change.
+
+**Each row is validated by its own serializer, bound to its instance.** That is
+what keeps the batch honest about partial writes: a serializer with no instance
+cannot tell a column the caller omitted from one it set to null. The FK caches
+are resolved once for the batch (`_bulk_fk_caches`) and shared across the row
+serializers, so the query count stays flat in batch size.
+
+### The partial-write trap behind it
+
+`MeasurementSerializer.validate` and `ObservationSerializer.validate` assigned
+`value_as_number` and `value_as_string` unconditionally, reading them out of
+`attrs` where a partial update had never put them. So a `PATCH` of an unrelated
+field wrote `None` over the row value. That was live on the row level `PATCH`,
+and `bulk_update` would have amplified it to a thousand rows a request.
+
+Both serializers now decide by what the write carries:
+
+| The write carries | Value columns |
+|---|---|
+| nothing, source is not an assertion code | untouched |
+| nothing, source becomes an assertion code | stored values coerced, both written |
+| one value column, source is not an assertion code | only that column written |
+| either value column, source is an assertion code | both written, coerced |
+
+An explicitly supplied value is never mixed with the stored sibling.
+`coerce_assertion_value` gives `value_as_string` precedence, so feeding the
+stored string back in would let it beat a patch that sets the number, and
+setting an assertion from 1 to 0 would silently stay true.
 
 ---
 

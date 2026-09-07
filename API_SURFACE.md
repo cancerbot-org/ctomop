@@ -4,7 +4,7 @@
 > Last revised: 2026-08-18
 
 > **Versioning note:** All new integrations should target `/api/v1/` paths. The legacy
-> unversioned `/api/` paths still work but return `Deprecation: true` / `Sunset: Tue, 01 Sep 2026 00:00:00 GMT`
+> unversioned `/api/` paths still work but return `Deprecation: true` / `Sunset: Tue, 01 Dec 2026 00:00:00 GMT`
 > headers. The OpenAPI schema and Swagger UI are at `/api/v1/schema/` and `/api/v1/docs/`.
 
 ---
@@ -213,6 +213,55 @@ Returns the PatientRecord for the authenticated patient. Only available to patie
 **Response 200** — same shape as `GET /api/v1/patient-records/{person_id}/`.
 
 **Response 404** — caller is not a confirmed patient (org_admin, doctor, navigator, or service tokens).
+
+---
+
+### POST /api/v1/patient-records/{person_id}/refresh/
+
+Queues a re-derivation of the record from the person's OMOP rows. Admin or
+service-token only. Needed after any write made with `?skip_refresh=true`.
+
+**Response 202**
+
+```json
+{ "person_id": 123, "task_id": "3f2b1c8e-..." }
+```
+
+The record is **not** rebuilt yet when this returns — derivation runs on a
+Celery worker and costs 15-25s on a bulk-loaded patient. Poll the status
+endpoint below with the returned `task_id`.
+
+**Response 403** — caller is not an administrator.
+**Response 404** — no such person, or no PatientRecord for them.
+
+---
+
+### GET /api/v1/derivation-status/{task_id}/
+
+The outcome of a queued derivation. Admin or service-token only; a task id
+carries no person, so there is no narrower ownership check.
+
+**Response 200**
+
+```json
+{ "task_id": "3f2b1c8e-...", "state": "SUCCESS", "error": null }
+```
+
+| `state` | Meaning |
+|---|---|
+| `PENDING` | queued, or an id this deployment has no record of |
+| `STARTED` | a worker is deriving |
+| `SUCCESS` | the record was rebuilt; `derived_at` has advanced |
+| `FAILURE` | derivation raised; `error` carries the message |
+
+`FAILURE` is reported rather than swallowed — a `SUCCESS` over a record that
+did not re-derive would be worse than an error. Results expire from the backend
+after `CELERY_RESULT_EXPIRES` (default 24h), after which the id reads `PENDING`
+again, so poll to a conclusion rather than parking an id for later.
+
+When the deployment has no broker configured, derivation runs inline before the
+`202` is sent and the first poll already reports `SUCCESS`. The contract is the
+same, so a client needs one code path.
 
 ---
 

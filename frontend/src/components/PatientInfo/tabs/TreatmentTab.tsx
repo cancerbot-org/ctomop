@@ -114,14 +114,17 @@ function diseaseToDiseaseCode(
     if (d.includes('mantle')) return 'MCL';
     if (d.includes('follicular')) return 'C3209';
     if (d.includes('myeloma') || d === 'mm') return 'C3242';
-    if (d.includes('cll') || d.includes('chronic lymphocytic')) return 'C2987';
+    if (d.includes('cll') || d.includes('chronic lymphocytic') || d.includes('chronic lymphoid')) return 'C2987';
     if (d.includes('breast')) return 'C9335';
+    if (d.includes('diffuse large b-cell') || d.includes('dlbcl')) return 'DLBCL';
   }
   // Fall back to the type-safe diseaseType prop.
+  // 'lymphoma' is intentionally omitted — it groups MCL and FL, and picking
+  // one code would show the wrong regimens for the other. Without a raw
+  // disease string the picker falls back to "search all regimens".
   const TYPE_TO_CODE: Record<string, string> = {
     myeloma: 'C3242',
     cll: 'C2987',
-    lymphoma: 'C3209',
     breast: 'C9335',
   };
   return TYPE_TO_CODE[diseaseType];

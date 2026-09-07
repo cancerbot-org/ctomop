@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Search, X, Plus, Trash2 } from 'lucide-react';
 import {
   searchDrugConcepts, authorTherapyLine, updateTherapyLine, THERAPY_OUTCOME_CHOICES,
-  searchTherapyRegimens, getTherapyRegimenDetail,
+  searchTherapyRegimens, listTherapyRegimens, getTherapyRegimenDetail,
   type DrugConcept, type EditableTherapyLine,
 } from '@/api/therapyLines';
 import type { TherapyRegimen } from '@/types/therapy';
@@ -21,6 +21,13 @@ interface Props {
 }
 
 type SelectedDrug = DrugConcept & { source_value?: string | null; class_names?: string[] };
+
+/** Map line number to the therapy round code used by the disease-therapy-round table. */
+function lineToRound(lineNumber: number): string {
+  if (lineNumber === 1) return 'first_line_therapy';
+  if (lineNumber === 2) return 'second_line_therapy';
+  return 'later_line_therapy';
+}
 
 /**
  * Record a line of therapy.
@@ -59,12 +66,80 @@ export default function TherapyLineDialog({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Regimen picker state
+  const [selectedRegimen, setSelectedRegimen] = useState<TherapyRegimen | null>(null);
+  const [loadingRegimen, setLoadingRegimen] = useState(false);
+  // Pre-populated dropdown: regimens for this disease + line
+  const [availableRegimens, setAvailableRegimens] = useState<TherapyRegimen[]>([]);
+  const [loadingAvailable, setLoadingAvailable] = useState(false);
+  // Toggle to broader search mode
+  const [searchMode, setSearchMode] = useState(false);
   const [regimenQuery, setRegimenQuery] = useState('');
   const [regimenResults, setRegimenResults] = useState<TherapyRegimen[]>([]);
   const [regimenSearching, setRegimenSearching] = useState(false);
-  const [selectedRegimen, setSelectedRegimen] = useState<TherapyRegimen | null>(null);
-  const [loadingRegimen, setLoadingRegimen] = useState(false);
   const regimenDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load regimens for this disease + line number on mount and when line changes.
+  // Key on the computed round (3 values), not the raw lineNumber, so typing "12"
+  // does not fire two calls — only a round change triggers a refetch.
+  const round = lineToRound(Number(lineNumber) || 1);
+  // Track whether the initial regimen has been restored so we only do it once.
+  const initialRegimenRestored = useRef(false);
+
+  /** Restore the existing regimen when editing. Separated so the catch path can
+   *  also call it — a network error should not silently blank the regimen. */
+  const restoreLineRegimen = useCallback((regimens: TherapyRegimen[]) => {
+    if (!line || initialRegimenRestored.current) return;
+    initialRegimenRestored.current = true;
+    const cid = line.regimen_concept_id;
+    const name = line.regimen;
+    const match = cid
+      ? regimens.find((reg) => reg.concept_id === cid)
+      : name
+        ? regimens.find((reg) => reg.title === name)
+        : null;
+    if (match) {
+      // Directly set state rather than calling selectRegimen() — the drug list
+      // is already populated from the existing line; we don't want to overwrite it.
+      setSelectedRegimen(match);
+    } else if (name || cid) {
+      // Regimen exists but isn't in this disease+round list — show it as a
+      // synthetic entry so the clinician sees the current value and can clear it.
+      // concept_id is preserved so the submit payload does not silently erase it.
+      setSelectedRegimen({ code: '__current__', title: name ?? '', concept_id: cid ?? null });
+    }
+  }, [line]);
+
+  const loadAvailableRegimens = useCallback(async (disease: string, r: string) => {
+    // Only clear a previously-selected regimen when the round changes after
+    // the initial restore has already run. Avoids a flash-of-null on first load.
+    if (initialRegimenRestored.current) {
+      setSelectedRegimen(null);
+    }
+    setLoadingAvailable(true);
+    try {
+      const regimens = await listTherapyRegimens(disease, r);
+      setAvailableRegimens(regimens);
+      restoreLineRegimen(regimens);
+    } catch {
+      setAvailableRegimens([]);
+      // Still restore on error so the clinician sees the current regimen value.
+      restoreLineRegimen([]);
+    } finally {
+      setLoadingAvailable(false);
+    }
+  }, [restoreLineRegimen]);
+
+  useEffect(() => {
+    (async () => {
+      if (!diseaseCode) {
+        // No disease code — still restore the regimen if editing.
+        await Promise.resolve();
+        restoreLineRegimen([]);
+        return;
+      }
+      await loadAvailableRegimens(diseaseCode, round);
+    })();
+  }, [diseaseCode, round, loadAvailableRegimens, restoreLineRegimen]);
 
   const doRegimenSearch = useCallback(async (q: string) => {
     if (q.trim().length < 2) {
@@ -73,13 +148,14 @@ export default function TherapyLineDialog({
     }
     setRegimenSearching(true);
     try {
-      setRegimenResults(await searchTherapyRegimens(q, diseaseCode));
+      // In search mode, search all regimens (no disease/round filter).
+      setRegimenResults(await searchTherapyRegimens(q));
     } catch {
       setRegimenResults([]);
     } finally {
       setRegimenSearching(false);
     }
-  }, [diseaseCode]);
+  }, []);
 
   const selectRegimen = useCallback(async (regimen: TherapyRegimen) => {
     setRegimenQuery('');
@@ -110,6 +186,7 @@ export default function TherapyLineDialog({
 
   const clearRegimen = useCallback(() => {
     setSelectedRegimen(null);
+    setSearchMode(false);
     setRegimenQuery('');
     setRegimenResults([]);
   }, []);
@@ -172,7 +249,9 @@ export default function TherapyLineDialog({
         start_date: startDate || null,
         end_date: endDate || null,
         outcome: outcome || null,
-        regimen_concept_id: selectedRegimen?.concept_id ?? null,
+        // Preserve the original concept_id when the clinician hasn't changed the
+        // regimen — a no-op save must not silently erase a stored concept.
+        regimen_concept_id: selectedRegimen?.concept_id ?? line?.regimen_concept_id ?? null,
         drugs: drugs.map((d) => ({
           concept_id: d.concept_id,
           source_value: (d.source_value || d.concept_name).slice(0, 50),
@@ -291,18 +370,29 @@ export default function TherapyLineDialog({
                 <X size={14} />
               </button>
             </div>
-          ) : (
+          ) : searchMode ? (
             <div className="mb-3">
-              <div className="relative">
-                <Search size={14} className="absolute left-2.5 top-2.5 text-muted-foreground" />
-                <input
-                  type="text"
-                  value={regimenQuery}
-                  onChange={(e) => setRegimenQuery(e.target.value)}
-                  placeholder="Search regimens (e.g. R-CHOP)…"
-                  aria-label="Search regimens"
-                  className="w-full rounded-md border border-input py-1.5 pl-8 pr-3 text-sm"
-                />
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search size={14} className="absolute left-2.5 top-2.5 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={regimenQuery}
+                    onChange={(e) => setRegimenQuery(e.target.value)}
+                    placeholder="Search all regimens…"
+                    aria-label="Search regimens"
+                    className="w-full rounded-md border border-input py-1.5 pl-8 pr-3 text-sm"
+                  />
+                </div>
+                {diseaseCode && (
+                  <button
+                    type="button"
+                    onClick={() => { setSearchMode(false); setRegimenQuery(''); setRegimenResults([]); }}
+                    className="shrink-0 text-xs text-primary hover:underline"
+                  >
+                    Back to list
+                  </button>
+                )}
               </div>
               {regimenSearching && <p className="mt-1 text-xs text-muted-foreground">Searching…</p>}
               {loadingRegimen && <p className="mt-1 text-xs text-muted-foreground">Loading regimen components…</p>}
@@ -325,6 +415,52 @@ export default function TherapyLineDialog({
                     </li>
                   ))}
                 </ul>
+              )}
+            </div>
+          ) : (
+            <div className="mb-3">
+              {loadingAvailable ? (
+                <p className="text-xs text-muted-foreground">Loading regimens…</p>
+              ) : availableRegimens.length > 0 ? (
+                <>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const r = availableRegimens.find((reg) => reg.code === e.target.value);
+                      if (r) selectRegimen(r);
+                    }}
+                    aria-label="Select regimen"
+                    className="w-full rounded-md border border-input px-2 py-1.5 text-sm"
+                  >
+                    <option value="">Select a regimen…</option>
+                    {availableRegimens.map((r) => (
+                      <option key={r.code} value={r.code}>{r.title}</option>
+                    ))}
+                  </select>
+                  {loadingRegimen && <p className="mt-1 text-xs text-muted-foreground">Loading regimen components…</p>}
+                  <button
+                    type="button"
+                    onClick={() => setSearchMode(true)}
+                    className="mt-1.5 text-xs text-primary hover:underline"
+                  >
+                    Search all regimens
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground mb-1.5">
+                    {diseaseCode
+                      ? 'No regimens found for this disease and line.'
+                      : 'No disease identified — search by name instead.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setSearchMode(true)}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    Search all regimens
+                  </button>
+                </>
               )}
             </div>
           )}
