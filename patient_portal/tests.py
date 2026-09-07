@@ -33,7 +33,7 @@ from rest_framework.test import APIClient
 from omop_core.models import (
     Concept, ConceptClass, Domain, Vocabulary,
     Person, PatientRecord, ProvenanceRecord, FieldConceptMapping,
-    SourceCodeConceptMapping,
+    SourceCodeConceptMapping, UmlsConcept, UmlsRelease, UmlsSourceCode,
     ConditionOccurrence, DrugExposure, Measurement, Observation, ProcedureOccurrence,
     Death, PatientDocument, RecordRevision,
     Relationship, ConceptRelationship, ConceptAncestor,
@@ -20128,6 +20128,40 @@ class CodeMappingApiTest(TestCase):
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         self.assertIsNone(resp.data['source_concept_id'])
+
+    def test_check_umls_populates_source_description_and_concept_id(self):
+        source_concept = Concept.objects.create(
+            concept_id=45561046, concept_name='UMLS source concept',
+            domain=self.domain, vocabulary=Vocabulary.objects.get(vocabulary_id='ICD10CM'),
+            concept_class=self.concept_class, standard_concept=None, concept_code='C90.88',
+            valid_start_date=date(1970, 1, 1), valid_end_date=date(2099, 12, 31),
+        )
+        release = UmlsRelease.objects.create(
+            release_version='TEST-2026', release_url='https://example.test/umls',
+        )
+        umls_concept = UmlsConcept.objects.create(
+            cui='C1234567', preferred_name='UMLS multiple myeloma', release=release,
+        )
+        UmlsSourceCode.objects.create(
+            concept=umls_concept, root_source='ICD10CM', code='C90.88',
+            term_type='PT', name='UMLS multiple myeloma', is_preferred=True,
+        )
+        self.client.force_authenticate(user=self.staff)
+        response = self.client.post('/api/v1/code-mappings/check-umls/', {
+            'source_vocabulary_id': 'ICD10CM', 'source_code': 'C90.88',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertTrue(response.data['found'])
+        self.assertEqual(response.data['source_code_description'], 'UMLS multiple myeloma')
+        self.assertEqual(response.data['source_concept_id'], source_concept.concept_id)
+
+    def test_check_umls_reports_missing_code(self):
+        self.client.force_authenticate(user=self.staff)
+        response = self.client.post('/api/v1/code-mappings/check-umls/', {
+            'source_vocabulary_id': 'ICD10CM', 'source_code': 'NOT-A-CODE',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data, {'found': False})
 
     # ------------------------------------------------------------ reference
 

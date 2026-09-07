@@ -359,6 +359,8 @@ export default function CodeMappingPage() {
   const [conceptSearchQuery, setConceptSearchQuery] = useState("");
   const [conceptResults, setConceptResults] = useState<ConceptResult[]>([]);
   const [searchingConcepts, setSearchingConcepts] = useState(false);
+  const [checkingUmls, setCheckingUmls] = useState(false);
+  const [umlsCheckMessage, setUmlsCheckMessage] = useState("");
   const [repointing, setRepointing] = useState<{ from: string; to: string } | null>(null);
   const [repointResult, setRepointResult] = useState<RepointResult | null>(null);
 
@@ -518,6 +520,7 @@ export default function CodeMappingPage() {
     setSearchVocabulary("");
     setConceptSearchQuery("");
     setConceptResults([]);
+    setUmlsCheckMessage("");
     setRepointResult(null);
     setDialogMode("new");
   };
@@ -528,6 +531,7 @@ export default function CodeMappingPage() {
     setSearchVocabulary(row.destination_vocabulary_id || "");
     setConceptSearchQuery("");
     setConceptResults([]);
+    setUmlsCheckMessage("");
     setRepointResult(null);
     setDialogMode("edit");
   };
@@ -538,6 +542,7 @@ export default function CodeMappingPage() {
     setSaving(false);
     setRepointing(null);
     setRepointResult(null);
+    setUmlsCheckMessage("");
   };
 
   const setField = (field: keyof MappingForm, value: string) => {
@@ -646,6 +651,31 @@ export default function CodeMappingPage() {
       } else setError(data.note || "No suggestion found.");
     } catch { setError("Failed to suggest a destination concept."); }
     finally { setSearchingConcepts(false); }
+  };
+
+  const checkUmls = async () => {
+    setCheckingUmls(true);
+    setUmlsCheckMessage("");
+    try {
+      const { data } = await api.post("/v1/code-mappings/check-umls/", {
+        source_code: form.source_code,
+        source_vocabulary_id: form.source_vocabulary_id,
+      });
+      if (!data.found) {
+        setUmlsCheckMessage("Missing from UMLS");
+        return;
+      }
+      setForm((prev) => ({
+        ...prev,
+        source_code_description: data.source_code_description || prev.source_code_description,
+        source_concept_id: data.source_concept_id ? String(data.source_concept_id) : "",
+      }));
+      setUmlsCheckMessage("Found in UMLS");
+    } catch {
+      setError("Failed to check UMLS.");
+    } finally {
+      setCheckingUmls(false);
+    }
   };
 
   // Keyed on the same condition submitForm branches on. dialogMode can say
@@ -1214,6 +1244,18 @@ export default function CodeMappingPage() {
                       className={`${INPUT_CLASS} font-mono`}
                     />
                   </Field>
+
+                  <div className="flex items-end gap-2">
+                    <button
+                      type="button"
+                      onClick={checkUmls}
+                      disabled={checkingUmls || !form.source_code.trim() || !form.source_vocabulary_id}
+                      className="rounded-md border border-sky-300 px-3 py-2 text-sm font-medium text-sky-700 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {checkingUmls ? "Checking UMLS…" : "Check UMLS"}
+                    </button>
+                    {umlsCheckMessage && <span className="pb-2 text-sm text-slate-600">{umlsCheckMessage}</span>}
+                  </div>
 
                   <Field id="source_code_description" label="Source Description" tip={TIP.source_description}>
                     <input
