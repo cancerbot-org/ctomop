@@ -6713,6 +6713,22 @@ class PersonFindOrCreateTest(_SmartBase):
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.assertIn('person_id', resp.json())
         self.assertTrue(resp.json()['created'])
+        self.assertTrue(PatientRecord.objects.filter(person_id=resp.json()['person_id']).exists())
+
+    def test_created_person_can_be_refreshed(self):
+        resp = self.client.post(
+            self.URL,
+            {'actor_iss': 'https://securetoken.google.com/proj', 'actor_sub': 'refreshable-uid'},
+            content_type='application/json',
+            **self._auth(),
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        refresh = self.client.post(
+            f"/api/v1/patient-records/{resp.json()['person_id']}/refresh/",
+            **self._auth(),
+        )
+        self.assertEqual(refresh.status_code, status.HTTP_202_ACCEPTED, refresh.data)
 
     def test_returns_same_person_id_on_repeat(self):
         payload = {'actor_iss': 'https://securetoken.google.com/proj', 'actor_sub': 'uid-xyz'}
