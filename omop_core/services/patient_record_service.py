@@ -11,6 +11,7 @@ import logging
 import math
 import statistics
 from collections import defaultdict
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import date, datetime, timedelta
 from django.db import models
 from django.db.models import DateTimeField, Q
@@ -857,6 +858,7 @@ def refresh_patient_record(person: Person) -> PatientRecord:
         patient_info.derivation_version = DERIVATION_VERSION
         patient_info.derived_at = timezone.now()
 
+        _clear_overflowing_decimal_fields(patient_info)
         patient_info.save()
         # PatientRecord.save retains a few legacy calculations (notably BMI).
         # Reapply active formulas with a direct update so an approved formula is
@@ -873,6 +875,40 @@ def refresh_patient_record(person: Person) -> PatientRecord:
             updates['updated_at'] = timezone.now()
             PatientRecord.objects.filter(pk=patient_info.pk).update(**updates)
         return patient_info
+
+
+def _clear_overflowing_decimal_fields(patient_info: PatientRecord) -> None:
+    """Leave an oversized derived decimal unset instead of losing the refresh.
+
+    PostgreSQL reports only a generic numeric overflow at save time. Checking
+    the integer portion against each model column's declared precision lets the
+    remaining derived fields persist and identifies the bad projection value in
+    logs. Values are checked after rounding to the column's stored scale, since
+    a near-limit fraction can otherwise round up into an overflow.
+    """
+    for field in PatientRecord._meta.concrete_fields:
+        if not isinstance(field, models.DecimalField):
+            continue
+        value = getattr(patient_info, field.attname)
+        if value is None:
+            continue
+        try:
+            decimal_value = Decimal(str(value))
+            stored_value = decimal_value.quantize(
+                Decimal(1).scaleb(-field.decimal_places),
+                rounding=ROUND_HALF_UP,
+            )
+        except (InvalidOperation, ValueError):
+            continue
+        integer_digits = field.max_digits - field.decimal_places
+        if not stored_value.is_finite() or stored_value.adjusted() + 1 > integer_digits:
+            logger.warning(
+                'Skipping overflowing derived value for person_id=%s field=%s value=%r '
+                '(max_digits=%s decimal_places=%s)',
+                patient_info.person_id, field.name, value,
+                field.max_digits, field.decimal_places,
+            )
+            setattr(patient_info, field.attname, None)
 
 
 # ---------------------------------------------------------------------------
