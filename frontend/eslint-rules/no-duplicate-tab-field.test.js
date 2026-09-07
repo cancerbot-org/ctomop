@@ -200,38 +200,14 @@ describe('no-duplicate-tab-field', () => {
     ])).toEqual(['unreadable']);
   });
 
-  it('exempts the known duplicates it is configured with', () => {
-    // Only 'duplicate' is in question here. This fixture renders none of the
-    // other configured entries, so it also reports those stale — correctly, and
-    // the next test is what covers that.
+  it('reports a duplicate when the same field renders on two tabs', () => {
+    // KNOWN_DUPLICATES is empty (PR #1034 moved all previously-exempted fields
+    // to DiseaseTab exclusively), so any field on two tabs is now flagged.
     const reports = ids([
       ['DiseaseTab.tsx', inlineTab('stage')],
       ['GeneralTab.tsx', inlineTab('stage')],
     ]);
-    expect(reports.filter((id) => id === 'duplicate')).toEqual([]);
-  });
-
-  it('flags a known duplicate that no longer renders on both', () => {
-    // A fixed duplicate must not leave a permanent hole behind it — whichever
-    // half drops the field, and whichever order the two are linted in. All
-    // three configured entries pair the same two tabs, so a fixture that
-    // renders none of them makes all three stale, which is the point.
-    const stale = (files) => {
-      __resetTabFieldState();
-      const reports = lint(files);
-      expect(reports.map((r) => r.id)).toEqual(['stale', 'stale', 'stale']);
-      return reports.map((r) => /'([a-z_]+)' is listed/.exec(r.text)[1]).sort();
-    };
-
-    const expected = ['disease', 'histologic_type', 'stage'];
-    expect(stale([
-      ['DiseaseTab.tsx', inlineTab('stage')],
-      ['GeneralTab.tsx', inlineTab('something_else')],
-    ])).toEqual(expected);
-    expect(stale([
-      ['DiseaseTab.tsx', inlineTab('something_else')],
-      ['GeneralTab.tsx', inlineTab('stage')],
-    ])).toEqual(expected);
+    expect(reports.filter((id) => id === 'duplicate')).toEqual(['duplicate']);
   });
 
   it('does not run on files that are not tabs', () => {

@@ -42,13 +42,10 @@ const fieldsByFile = new Map();
  * exemption cannot widen. Exempting the whole tab *pair* would permanently
  * excuse the two largest tabs, and a new duplicate between them would pass.
  *
- * These three are #960. Once that lands the rule reports them as stale, so a
- * fixed duplicate cannot leave a dead exemption behind it.
+ * #960 moved disease/histologic_type/stage to DiseaseTab exclusively —
+ * entries cleared so the stale-exemption check no longer fires.
  */
 const KNOWN_DUPLICATES = new Map([
-  ['disease', ['DiseaseTab.tsx', 'GeneralTab.tsx']],
-  ['histologic_type', ['DiseaseTab.tsx', 'GeneralTab.tsx']],
-  ['stage', ['DiseaseTab.tsx', 'GeneralTab.tsx']],
 ]);
 
 /**
