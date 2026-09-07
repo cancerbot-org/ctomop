@@ -117,6 +117,43 @@ STRATEGY_LEXICAL = 'lexical'
 ALL_STRATEGIES = [STRATEGY_UMLS, STRATEGY_VECTORS, STRATEGY_LEXICAL]
 
 
+def _find_source_concept(source_vocabulary_id, source_code):
+    """Look up the OMOP Concept for a source code, with ICD10CM_MERGE fallback.
+
+    ICD-10 (HT-One) codes are ICD-10-CM format (#1028), but Athena loads
+    concepts under vocabulary_id='ICD10CM'.  When the literal vocabulary has
+    no concept, try the merged-vocabulary alias so the source_concept and its
+    concept_name are still available for ranking and display.
+    """
+    if not source_vocabulary_id:
+        return None
+    concept = Concept.objects.filter(
+        vocabulary_id=source_vocabulary_id,
+        concept_code__iexact=source_code,
+    ).first()
+    if concept is not None:
+        return concept
+    # Fallback: try the canonical vocabulary this one merges into (or from).
+    from omop_core.services.source_vocabularies import ICD10CM_MERGE
+    # ICD10 → try ICD10CM
+    canonical = ICD10CM_MERGE.get(source_vocabulary_id)
+    if canonical:
+        return Concept.objects.filter(
+            vocabulary_id=canonical,
+            concept_code__iexact=source_code,
+        ).first()
+    # ICD10CM → try ICD10 (reverse direction, less likely but symmetric)
+    for alias, canon in ICD10CM_MERGE.items():
+        if canon == source_vocabulary_id:
+            hit = Concept.objects.filter(
+                vocabulary_id=alias,
+                concept_code__iexact=source_code,
+            ).first()
+            if hit:
+                return hit
+    return None
+
+
 def umls_candidates(source_code, source_vocabulary_id, domain_id=None):
     """Find standard OMOP concepts via UMLS CUI bridging.
 
@@ -550,10 +587,7 @@ def suggest_source_code(*, source_vocabulary_id, source_code, source_text, omop_
     if target is None:
         return None, ''
     _hk_vocabulary, domain_id, _concept_class_id, _slug_prefix = target
-    source_concept = Concept.objects.filter(
-        vocabulary_id=source_vocabulary_id,
-        concept_code__iexact=source_code,
-    ).first() if source_vocabulary_id else None
+    source_concept = _find_source_concept(source_vocabulary_id, source_code)
     description = source_text or (source_concept.concept_name if source_concept else '')
     candidates = lexical_candidates(description or source_code, domain_id)
     chosen, note = rank_candidates(
@@ -606,10 +640,7 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
         # evidence supplied by the source system, not an inference from code
         # punctuation. It makes ranking a code such as ``85319-5`` meaningful
         # without pretending the code itself is a display name.
-        source_concept = Concept.objects.filter(
-            vocabulary_id=src_vocab_id,
-            concept_code__iexact=source_value,
-        ).first() if src_vocab_id else None
+        source_concept = _find_source_concept(src_vocab_id, source_value)
         source_description = source_concept.concept_name if source_concept else ''
 
         # UMLS preferred name for the source code — canonical, read-only.
@@ -742,7 +773,7 @@ def suggest_one_mapping(source_code, source_vocabulary_id, omop_table, *, source
     if target is None:
         raise ValueError(f'No quarantine vocabulary for table {omop_table!r}.')
     _hk_vocabulary, domain_id, _class, _slug = target
-    source_concept = Concept.objects.filter(vocabulary_id=source_vocabulary_id, concept_code__iexact=source_code).first() if source_vocabulary_id else None
+    source_concept = _find_source_concept(source_vocabulary_id, source_code)
     description = source_description or (source_concept.concept_name if source_concept else '')
     chosen, note, candidates, strategy_used, umls_cui = None, '', [], None, None
     if STRATEGY_UMLS in strategies:
