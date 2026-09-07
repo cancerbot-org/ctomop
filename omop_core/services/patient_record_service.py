@@ -3417,14 +3417,19 @@ def _get_cll_data(person: Person, snapshot: OmopSnapshot = None) -> dict:
         if m:
             data[field] = float(m.value_as_number)
 
-    # A lymph-node size is a distinct clinical meaning from LOINC 21889-1
-    # (Size Tumor).  Require the explicit source qualifier so the same row can
-    # never populate both PatientRecord columns.
+    # Athena Cancer Modifier 36769292 (Dimension of Largest Lymph Node) is the
+    # specific standard concept for this field (#911).  Keep the qualified
+    # legacy LOINC form readable so historical imports remain intact.
     lymph_node = next(
         (m for m in measurements
-         if (getattr(m.measurement_concept, 'concept_code', None) == '21889-1'
-             or m.measurement_source_value == '21889-1')
-         and (m.qualifier_source_value or '').lower() == 'lymph-node'
+         if (
+             getattr(m.measurement_concept, 'concept_id', None) == 36769292
+             or (
+                 (getattr(m.measurement_concept, 'concept_code', None) == '21889-1'
+                  or m.measurement_source_value == '21889-1')
+                 and (m.qualifier_source_value or '').lower() == 'lymph-node'
+             )
+         )
          and m.value_as_number is not None),
         None,
     )

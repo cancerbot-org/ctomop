@@ -36,6 +36,21 @@ def _load_ucum(unit):
 
 
 class TestMappedFields:
+    def test_largest_lymph_node_recipe_uses_the_standard_cancer_modifier(self):
+        concept = ConceptFactory(
+            concept_id=36769292,
+            concept_code='largest-lymph-node-dimension',
+            concept_name='Dimension of Largest Lymph Node',
+            vocabulary=VocabularyFactory(vocabulary_id='Cancer Modifier'),
+        )
+
+        entry = build_writable_field_descriptor()['largest_lymph_node_size']
+
+        assert entry['writable'] is True
+        assert entry['concept_id'] == concept.concept_id
+        assert entry['vocabulary'] == 'Cancer Modifier'
+        assert entry['source_value'] == concept.concept_code
+
     def test_a_loaded_mapping_is_writable_with_a_full_fact_recipe(self):
         concept = _load_loinc('718-7')
         unit = _load_ucum('g/dL')

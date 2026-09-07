@@ -44,6 +44,10 @@ KIND_PROFILE = 'profile'        # a Person attribute, written at the persons end
 KIND_UNMAPPED = 'unmapped'      # no write path yet — grouped by WHY, not lumped
 KIND_AUTHORED = 'authored'      # written by authoring a different resource entirely
 
+# Athena Cancer Modifier: Dimension of Largest Lymph Node.  Unlike the generic
+# Size Tumor LOINC, this is the specific standard concept for the CLL field.
+CONCEPT_LARGEST_LYMPH_NODE_DIMENSION = 36769292
+
 # Why a field has no write path. Reported rather than omitted so the descriptor
 # documents the whole record: a reader can see every column and what stands
 # between it and being editable, instead of inferring it from an absence.
@@ -335,12 +339,6 @@ def mapping_table_is_writable(omop_table):
 # recipe is incomplete the claim is false, and a box that accepts input and
 # silently drops it is worse than one that says why it is disabled.
 _WRITE_RECIPE_INCOMPLETE = {
-    'largest_lymph_node_size': (
-        'Derivation also requires qualifier_source_value="lymph-node" — LOINC '
-        '21889-1 "Size Tumor" is shared with tumor_size, and the qualifier is '
-        'what tells them apart. The descriptor cannot carry a qualifier yet, so '
-        'a write against the code alone is not read back.'
-    ),
     'bone_only_metastasis_status': (
         'Derivation looks for an Observation whose concept name contains "bone '
         'only metastas", while the mapping here names a Measurement with a '
@@ -430,6 +428,9 @@ def build_writable_field_descriptor():
     derived_concepts = _resolve_concepts(
         {(vocab, code) for code, vocab, _fn in DERIVED_FIELD_TO_CODE.values()}
     )
+    largest_lymph_node_concept = Concept.objects.filter(
+        concept_id=CONCEPT_LARGEST_LYMPH_NODE_DIMENSION
+    ).only('concept_id', 'concept_code', 'concept_name', 'vocabulary_id').first()
 
     curated = _curated_writes()
     choice_options = {
@@ -594,6 +595,36 @@ def build_writable_field_descriptor():
             }
             continue
 
+        if field == 'largest_lymph_node_size':
+            if largest_lymph_node_concept is None:
+                descriptor[field] = {
+                    'kind': KIND_EDITABLE,
+                    'writable': False,
+                    'reason': (
+                        'Cancer Modifier 36769292 (Dimension of Largest Lymph '
+                        'Node) is not loaded in this deployment\'s vocabulary.'
+                    ),
+                    'concept_id': CONCEPT_LARGEST_LYMPH_NODE_DIMENSION,
+                    'vocabulary': 'Cancer Modifier',
+                }
+                continue
+            descriptor[field] = {
+                'kind': KIND_EDITABLE,
+                'writable': True,
+                'target': 'measurement',
+                'concept_id': largest_lymph_node_concept.concept_id,
+                'code': largest_lymph_node_concept.concept_code,
+                'vocabulary': largest_lymph_node_concept.vocabulary_id,
+                'display': largest_lymph_node_concept.concept_name,
+                'value_kind': 'number',
+                'unit': 'cm',
+                'unit_concept_id': unit_ids.get('cm'),
+                'type_concept_id': CONCEPT_PATIENT_REPORTED_TYPE,
+                'source_value': largest_lymph_node_concept.concept_code,
+                'attributed_from': '_get_cll_data',
+            }
+            continue
+
         derived = DERIVED_FIELD_TO_CODE.get(field)
         if derived is not None:
             code, vocabulary, extractor = derived
@@ -696,7 +727,6 @@ def build_writable_field_descriptor():
             'type_concept_id': CONCEPT_PATIENT_REPORTED_TYPE,
             'source_value': code,
         }
-
     # Fields the serializer adds that no PatientRecord column backs.
     #
     # The loop above walks PATIENT_RECORD_OMOP_MAPPED_FIELDS, so it can only

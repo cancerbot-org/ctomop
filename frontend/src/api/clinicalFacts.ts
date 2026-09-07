@@ -195,7 +195,6 @@ export async function writeClinicalFact(
   if (cfg.storesUnit && descriptor.unit) {
     payload.unit_source_value = descriptor.unit;
   }
-
   const created = await clinicalClient().post(clinicalUrl(cfg.base), payload);
   const createdId = (created.data?.[cfg.idField] ?? null) as number | null;
   return { supersededId, createdId };

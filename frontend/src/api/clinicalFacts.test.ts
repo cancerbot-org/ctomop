@@ -71,6 +71,19 @@ describe('writeClinicalFact', () => {
     });
   });
 
+  it('writes the standard Cancer Modifier measurement without a legacy qualifier', async () => {
+    await writeClinicalFact(3542, 'largest_lymph_node_size', {
+      ...HGB, concept_id: 36769292, code: 'largest-lymph-node-dimension',
+      vocabulary: 'Cancer Modifier', source_value: 'largest-lymph-node-dimension',
+    }, 2.7, '2026-08-21');
+
+    expect(mockPost).toHaveBeenCalledWith('/v1/measurements/', expect.objectContaining({
+      measurement_concept: 36769292,
+      measurement_source_value: 'largest-lymph-node-dimension',
+      value_as_number: 2.7,
+    }));
+  });
+
   it('routes an observation-domain field to the observation endpoint', async () => {
     mockPost.mockResolvedValue({ data: { observation_id: 7 } });
 
