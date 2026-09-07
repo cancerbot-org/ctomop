@@ -865,6 +865,12 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         # request below as a non-projection-owned field.
         patient_name, patch_data = _pop_patient_name(request.data)
         mutations = patch_data.pop('genetic_mutations', None) if 'genetic_mutations' in patch_data else None
+        # The editor PATCHes the complete GET representation.  A projected
+        # mutation list carried back unchanged is therefore an autosave echo,
+        # not an instruction to replace its OMOP rows (and it may be empty
+        # before the vocabulary has been loaded).
+        if mutations == PatientRecordSerializer(patient_info).data.get('genetic_mutations'):
+            mutations = None
 
         echoed = _echoed_unchanged_fields(patient_info, patch_data)
         mapped_fields = sorted((set(patch_data) & PATIENT_RECORD_OMOP_MAPPED_FIELDS) - echoed)
@@ -1165,6 +1171,10 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
 
         patient_name, patch_data = _pop_patient_name(request.data)
         mutations = patch_data.pop('genetic_mutations', None) if 'genetic_mutations' in patch_data else None
+        # See the provider PATCH route: unchanged projected mutations are an
+        # autosave echo and must not require write vocabulary concepts.
+        if mutations == PatientRecordSerializer(patient_info).data.get('genetic_mutations'):
+            mutations = None
         echoed = _echoed_unchanged_fields(patient_info, patch_data)
         mapped_fields = sorted((set(patch_data) & PATIENT_RECORD_OMOP_MAPPED_FIELDS) - echoed)
         if mapped_fields:
