@@ -511,6 +511,19 @@ def build_writable_field_descriptor():
             }
             continue
 
+        if field == 'wearable_coverage_ratio_30d':
+            descriptor[field] = {
+                'kind': KIND_COMPUTED,
+                'writable': False,
+                'inputs': sorted(set(_WEARABLE_METRIC.values())),
+                'window_days': 30,
+                'reason': (
+                    'Proportion of the 30-day window with any valid wearable '
+                    'reading, counting each day once across all device metrics.'
+                ),
+            }
+            continue
+
         if field in curated:
             descriptor[field] = curated[field]
             continue
