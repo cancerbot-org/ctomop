@@ -9367,13 +9367,21 @@ def code_mapping_accuracy(request):
         return Response({'detail': 'Organization admin access required.'}, status=status.HTTP_403_FORBIDDEN)
     base = SourceCodeConceptMapping.objects.filter(suggestion_model_version__gt='')
     latest = (_suggestion_versions(base) or [None])[0]
-    by_source_vocabulary = {}
+
+    # Group by canonical vocabulary (after merging aliases like ICD10CM→ICD10).
+    vocab_groups: dict[str, list[str]] = {}
     for vocabulary_id in base.values_list('source_vocabulary_id', flat=True).distinct():
-        scoped = base.filter(source_vocabulary_id=vocabulary_id)
+        canonical = source_vocabularies.ICD10CM_MERGE.get(vocabulary_id, vocabulary_id) or ''
+        vocab_groups.setdefault(canonical, []).append(vocabulary_id)
+
+    by_source_vocabulary = {}
+    for canonical, raw_vocabs in vocab_groups.items():
+        scoped = base.filter(source_vocabulary_id__in=raw_vocabs)
         version = (_suggestion_versions(scoped) or [None])[0]
         payload = _suggestion_accuracy_payload(scoped, version)
         payload['model_version'] = version
-        by_source_vocabulary[vocabulary_id or ''] = payload
+        by_source_vocabulary[canonical] = payload
+
     overall = _suggestion_accuracy_payload(base, latest)
     overall['model_version'] = latest
     return Response({
@@ -9414,6 +9422,26 @@ def _table_for_hk_vocabulary(vocabulary_id):
 SUGGEST_MAX_PER_CALL = 10
 
 
+def _merge_vocab_counts(counts):
+    """Fold aliased vocabularies into their canonical tab key, in-place.
+
+    Applied identically to both total counts and proposed counts so the
+    extras gate sees the same canonical keys in both dicts.
+    """
+    # Wearable sub-vocabularies → OpenWearables.
+    for sub in source_vocabularies.WEARABLE_SOURCE_VOCABULARIES - {'OpenWearables'}:
+        if sub in counts:
+            counts['OpenWearables'] = counts.get('OpenWearables', 0) + counts.pop(sub)
+    # ICD-10-CM → ICD-10 (curators see one vocabulary).
+    for sub, canonical in source_vocabularies.ICD10CM_MERGE.items():
+        if sub in counts:
+            counts[canonical] = counts.get(canonical, 0) + counts.pop(sub)
+    # FHIR OID aliases → canonical OMOP vocabulary.
+    for oid, canonical in source_vocabularies.VOCABULARY_OID_ALIASES.items():
+        if oid in counts:
+            counts[canonical] = counts.get(canonical, 0) + counts.pop(oid)
+
+
 def _source_vocabulary_tabs():
     """Source vocabulary tabs for the Code Mapping page.
 
@@ -9438,21 +9466,7 @@ def _source_vocabulary_tabs():
     if not vocab_counts:
         return []
 
-    # Merge wearable sub-vocabularies into OpenWearables.
-    wearable_subs = source_vocabularies.WEARABLE_SOURCE_VOCABULARIES - {'OpenWearables'}
-    for sub in wearable_subs:
-        if sub in vocab_counts:
-            vocab_counts['OpenWearables'] = vocab_counts.get('OpenWearables', 0) + vocab_counts.pop(sub)
-
-    # Merge ICD-10-CM into ICD-10 (curators see one vocabulary).
-    for sub, canonical in source_vocabularies.ICD10CM_MERGE.items():
-        if sub in vocab_counts:
-            vocab_counts[canonical] = vocab_counts.get(canonical, 0) + vocab_counts.pop(sub)
-
-    # Merge FHIR OID aliases into their canonical OMOP vocabulary.
-    for oid, canonical in source_vocabularies.VOCABULARY_OID_ALIASES.items():
-        if oid in vocab_counts:
-            vocab_counts[canonical] = vocab_counts.get(canonical, 0) + vocab_counts.pop(oid)
+    _merge_vocab_counts(vocab_counts)
 
     # Proposed counts — needed to decide whether extras qualify for a tab.
     proposed_counts = dict(
@@ -9462,17 +9476,7 @@ def _source_vocabulary_tabs():
         .annotate(cnt=Count('id'))
         .order_by()
     )
-    # Mirror the same vocab merges so the extras gate sees merged keys.
-    for sub, canonical in source_vocabularies.ICD10CM_MERGE.items():
-        if sub in proposed_counts:
-            proposed_counts[canonical] = proposed_counts.get(canonical, 0) + proposed_counts.pop(sub)
-    wearable_subs_p = source_vocabularies.WEARABLE_SOURCE_VOCABULARIES - {'OpenWearables'}
-    for sub in wearable_subs_p:
-        if sub in proposed_counts:
-            proposed_counts['OpenWearables'] = proposed_counts.get('OpenWearables', 0) + proposed_counts.pop(sub)
-    for oid, canonical in source_vocabularies.VOCABULARY_OID_ALIASES.items():
-        if oid in proposed_counts:
-            proposed_counts[canonical] = proposed_counts.get(canonical, 0) + proposed_counts.pop(oid)
+    _merge_vocab_counts(proposed_counts)
 
     ordered_set = set(source_vocabularies.SOURCE_TAB_ORDER)
     tabs = []

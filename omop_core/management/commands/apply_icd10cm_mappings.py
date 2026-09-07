@@ -24,6 +24,7 @@ Usage::
 """
 import logging
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
@@ -34,6 +35,21 @@ logger = logging.getLogger(__name__)
 
 _ORIGIN_FIELD = SourceCodeConceptMapping._meta.get_field('origin_system')
 _ORIGIN_MAX_LEN = _ORIGIN_FIELD.max_length or 50
+
+Identity = None  # resolved lazily to avoid import-time model registry issues
+
+
+def _get_system_reviewer():
+    """Get or create the 'system' Identity used for automated approvals."""
+    global Identity  # noqa: PLW0603
+    if Identity is None:
+        from django.apps import apps
+        Identity = apps.get_model(settings.AUTH_USER_MODEL)
+    reviewer, _ = Identity.objects.get_or_create(
+        issuer='system', sub='system',
+        defaults={'uid': 'system:system', 'name': 'system'},
+    )
+    return reviewer
 
 
 class Command(BaseCommand):
@@ -48,7 +64,9 @@ class Command(BaseCommand):
     def handle(self, **options):
         dry_run = options['dry_run']
 
-        # Build lookup: source_code → approved ICD10CM row
+        # Build lookup: source_code → approved ICD10CM row.
+        # The unique constraint (source_vocabulary_id, source_code) prevents
+        # duplicates at the DB level, so no dedup needed here.
         approved_icd10cm = {
             row.source_code: row
             for row in SourceCodeConceptMapping.objects.filter(
@@ -80,6 +98,7 @@ class Command(BaseCommand):
             return
 
         now = timezone.now()
+        reviewer = _get_system_reviewer()
         rows_to_update = []
         for row in pending_icd10.iterator():
             donor = approved_icd10cm[row.source_code]
@@ -87,6 +106,7 @@ class Command(BaseCommand):
             row.destination_vocabulary_id = donor.destination_vocabulary_id
             row.status = 'approved'
             row.reviewed_at = now
+            row.reviewer = reviewer
             new_origin = (
                 f'{row.origin_system}; auto-approved from ICD10CM'
                 if row.origin_system
@@ -97,7 +117,7 @@ class Command(BaseCommand):
 
         update_fields = [
             'target_concept', 'destination_vocabulary_id',
-            'status', 'reviewed_at', 'origin_system',
+            'status', 'reviewed_at', 'reviewer', 'origin_system',
         ]
         with transaction.atomic():
             SourceCodeConceptMapping.objects.bulk_update(
