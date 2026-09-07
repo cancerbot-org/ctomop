@@ -7641,6 +7641,42 @@ def concept_search(request):
 
 @api_view(['GET'])
 @permission_classes([ScopedTokenPermission])
+def concept_candidates(request):
+    """Return candidate SNOMED concepts for an ICD-10 code.
+
+    The candidates come from the ICD-10→SNOMED mapping file (copied from
+    HealthTree-One) and are resolved against the local Concept table.
+
+    Query params:
+        icd10_code   required — the ICD-10 code to look up (e.g. A09, C50.911)
+
+    Response 200: {icd10_code, total_in_file, resolved, candidates: [...]}
+    """
+    from omop_core.services.icd10_snomed_candidates import (
+        get_snomed_ids_for_icd10,
+        resolve_candidates,
+    )
+
+    icd10_code = (request.query_params.get('icd10_code') or '').strip()
+    if not icd10_code:
+        return Response(
+            {'detail': "Query parameter 'icd10_code' is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    raw_ids = get_snomed_ids_for_icd10(icd10_code)
+    candidates = resolve_candidates(icd10_code)
+
+    return Response({
+        'icd10_code': icd10_code,
+        'total_in_file': len(raw_ids),
+        'resolved': len(candidates),
+        'candidates': candidates,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([ScopedTokenPermission])
 def concept_list(request):
     """
     List OMOP concepts filtered by vocabulary, domain, concept class,
