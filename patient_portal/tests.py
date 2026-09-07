@@ -20662,6 +20662,25 @@ class FieldConceptMappingTest(TestCase):
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_serum_beta2_microglobulin_accepts_equivalent_loinc_assay(self):
+        """#999: 1952-1 is valid for the CLL-facing serum beta-2 field too."""
+        mapping = FieldConceptMapping.objects.create(
+            field_name='serum_beta2_microglobulin_level',
+            vocabulary_id='LOINC', concept_code='32731-2', status='proposed',
+        )
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.patch(
+            f'/api/v1/field-mappings/{mapping.pk}/', {
+                'vocabulary_id': 'LOINC',
+                'concept_code': '1952-1',
+            }, format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        mapping.refresh_from_db()
+        self.assertEqual(mapping.concept_code, '1952-1')
+
     def test_duplicate_vocab_code_allowed_when_write_key_differs(self):
         """Two fields may share a concept as long as they write distinct facts."""
         FieldConceptMapping.objects.create(
