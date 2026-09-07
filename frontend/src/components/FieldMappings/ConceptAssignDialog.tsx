@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Search, Sparkles, X } from "lucide-react";
 import api from "@/api/axios";
+import ConceptInputDetails from "@/components/UI/ConceptInputDetails";
 import { HelpTip, Field, ReadOnlyField, INPUT_CLASS } from "@/components/UI/MappingFormPrimitives";
 
 interface ConceptResult {
@@ -12,6 +13,7 @@ interface ConceptResult {
   concept_class_id: string;
   standard_concept: string | null;
   suggested_unit?: string;
+  measurement_type?: "qualitative" | "quantitative";
 }
 
 interface FieldChoiceInfo {
@@ -311,7 +313,10 @@ export function ConceptAssignDialog({
                     }`}
                   >
                     <span className="font-mono text-slate-700">{c.concept_code}</span>
-                    <span className="text-slate-900">{c.concept_name}</span>
+                    <span className="text-slate-900">
+                      {c.concept_name}
+                      <ConceptInputDetails {...c} />
+                    </span>
                     <span className="font-mono text-slate-500">{c.vocabulary_id}</span>
                   </button>
                 ))}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Pencil, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import api from "@/api/axios";
+import ConceptInputDetails from "@/components/UI/ConceptInputDetails";
 import { useAuth } from "@/hooks/useAuth";
 import { HelpTip, Field, ReadOnlyField, INPUT_CLASS } from "@/components/UI/MappingFormPrimitives";
 
@@ -1313,7 +1314,13 @@ export default function CodeMappingPage() {
                         <HelpTip tip={TIP.search_vocabulary} />
                       </div>
                       {(["umls", "vectors", "lexical"] as const).map((key) => (
-                        <label key={key} className="inline-flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" checked={strategies[key]} onChange={(e) => setStrategies((prev) => ({ ...prev, [key]: e.target.checked }))} />{key === "umls" ? "UMLS" : key === "vectors" ? "Vectors" : "Lexical"}</label>
+                        <div key={key} className="inline-flex items-center gap-1 text-xs text-slate-600">
+                          <label className="inline-flex items-center gap-1">
+                            <input type="checkbox" checked={strategies[key]} onChange={(e) => setStrategies((prev) => ({ ...prev, [key]: e.target.checked }))} />
+                            {key === "umls" ? "UMLS" : key === "vectors" ? "Vectors" : "Lexical"}
+                          </label>
+                          <HelpTip tip={key === "umls" ? "Find equivalent concepts using UMLS source codes." : key === "vectors" ? "Find concepts by semantic similarity." : "Find concepts by matching names and synonyms."} />
+                        </div>
                       ))}
                       <button
                         type="button"
@@ -1380,12 +1387,7 @@ export default function CodeMappingPage() {
                           <span className="text-slate-900">{concept.concept_name}</span>
                           <span className="font-mono text-slate-500">{concept.vocabulary_id}</span>
                         </span>
-                        {concept.measurement_type && (
-                          <span className="mt-1 block text-slate-500">
-                            {concept.measurement_type === "quantitative" ? "Quantitative" : "Qualitative"}
-                            {concept.suggested_unit && ` · Unit: ${concept.suggested_unit}`}
-                          </span>
-                        )}
+                        <ConceptInputDetails {...concept} />
                       </button>
                     ))}
                   </div>
