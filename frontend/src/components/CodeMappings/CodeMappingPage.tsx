@@ -203,6 +203,17 @@ function tabForRow(row: CodeMappingRow): string {
   return VOCABULARY_ALIASES[row.source_vocabulary_id] ?? row.source_vocabulary_id;
 }
 
+function sectionForRow(row: CodeMappingRow): string {
+  if (row.mapping_origin === "athena") return "Athena Mapped";
+  return row.status === "approved" ? "Mapped" : "Unmapped";
+}
+
+function mappingRowId(row: CodeMappingRow): string {
+  return `code-mapping-${row.mapping_id ?? encodeURIComponent(JSON.stringify([
+    row.source_vocabulary_id, row.source_code, row.destination_concept_id, sectionForRow(row),
+  ]))}`;
+}
+
 /**
  * OMOP domain -> the clinical table its facts land in. Only a fallback: the
  * reference endpoint is authoritative, and hardcoding the mapping in the
@@ -354,6 +365,7 @@ export default function CodeMappingPage() {
   const [mappedCollapsed, setMappedCollapsed] = useState(true);
   const [athenaCollapsed, setAthenaCollapsed] = useState(true);
   const [showRejected, setShowRejected] = useState(false);
+  const [navigationTarget, setNavigationTarget] = useState<{ id: string } | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   // "" while the field is mid-edit; coerced when sent. Coercing on every
@@ -461,6 +473,42 @@ export default function CodeMappingPage() {
   const selectedAccuracy = overallTab
     ? accuracy?.overall
     : accuracy?.by_source_vocabulary?.[selectedVocabulary] ?? accuracy?.overall;
+
+  // Audit the entire tab, not just expanded/search-visible rows. A hidden
+  // rejected mapping still owns its source code and can block re-creation.
+  const duplicateCodes = useMemo(() => {
+    const groups = new Map<string, { code: string; vocabulary: string; rows: CodeMappingRow[] }>();
+    for (const row of rows) {
+      const vocabulary = tabForRow(row);
+      if (!overallTab && vocabulary !== selectedVocabulary) continue;
+      const code = row.source_code.trim().toUpperCase();
+      if (!code) continue;
+      // Overall must not treat, for example, LOINC:123 and ICD10:123 as duplicates.
+      const key = JSON.stringify([vocabulary, code]);
+      const group = groups.get(key) ?? { code, vocabulary, rows: [] };
+      group.rows.push(row);
+      groups.set(key, group);
+    }
+    return [...groups.values()].filter((group) => group.rows.length > 1)
+      .sort((a, b) => a.vocabulary.localeCompare(b.vocabulary) || a.code.localeCompare(b.code));
+  }, [rows, overallTab, selectedVocabulary]);
+
+  const revealDuplicate = (row: CodeMappingRow) => {
+    setSearchQuery("");
+    if (row.status === "rejected") setShowRejected(true);
+    if (row.mapping_origin === "athena") setAthenaCollapsed(false);
+    else if (row.status === "approved") setMappedCollapsed(false);
+    else setUnmappedCollapsed(false);
+    // An object also retriggers navigation when the same link is clicked twice.
+    setNavigationTarget({ id: mappingRowId(row) });
+  };
+
+  useEffect(() => {
+    if (!navigationTarget) return;
+    const target = document.getElementById(navigationTarget.id);
+    target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    target?.focus({ preventScroll: true });
+  }, [navigationTarget]);
 
   const visibleRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -755,7 +803,7 @@ export default function CodeMappingPage() {
           : undefined;
       const message =
         detail && typeof detail === "object" && !Array.isArray(detail)
-          ? Object.entries(detail).map(([field, value]) => `${field}: ${Array.isArray(value) ? value.join(", ") : value}`).join(" ")
+          ? Object.entries(detail).map(([field, value]) => `${field === "detail" ? "" : `${field}: `}${Array.isArray(value) ? value.join(", ") : value}`).join(" ")
           : "";
       setError(message || "Failed to save code mapping.");
       setRepointing(null);
@@ -856,8 +904,9 @@ export default function CodeMappingPage() {
           + ". Patient records queued for re-derivation.",
         );
       }
-    } catch {
-      setError("Failed to update code mapping status.");
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail || "Failed to update code mapping status.");
     }
   };
 
@@ -892,7 +941,8 @@ export default function CodeMappingPage() {
         <tbody className="divide-y divide-slate-100">
           {sectionRows.map((row) => (
             <tr
-              key={row.mapping_id ?? `c-${row.destination_concept_id}`}
+              key={mappingRowId(row)}
+              id={mappingRowId(row)}
               role="button"
               tabIndex={0}
               onClick={() => openEditDialog(row)}
@@ -902,7 +952,9 @@ export default function CodeMappingPage() {
                   openEditDialog(row);
                 }
               }}
-              className="cursor-pointer hover:bg-slate-50"
+              className={`scroll-mt-24 cursor-pointer hover:bg-slate-50 focus:outline-2 focus:outline-red-600 ${
+                navigationTarget?.id === mappingRowId(row) ? "bg-red-50" : ""
+              }`}
             >
               <td className="px-4 py-3 text-xs text-slate-700">{row.origin_system || "—"}</td>
               <td className="px-4 py-3 font-mono text-xs text-slate-900">{row.source_code}</td>
@@ -1003,8 +1055,8 @@ export default function CodeMappingPage() {
           </button>
         </div>
 
-        {error && (
-          <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        {error && !dialogMode && (
+          <div role="alert" className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         )}
@@ -1069,6 +1121,35 @@ export default function CodeMappingPage() {
             );
           })}
         </div>
+
+        {duplicateCodes.length > 0 && (
+          <div role="alert" className="mb-4 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <p className="font-semibold">Error: {duplicateCodes.length} duplicate source code{duplicateCodes.length === 1 ? "" : "s"} on this tab</p>
+            <p className="mt-1">These source codes occur in multiple mapping rows. Follow a link, then select the row to open its edit dialog and delete unwanted duplicates. Hidden rejected mappings are included.</p>
+            <ul aria-label="Duplicate source codes" className="mt-2 max-h-60 space-y-2 overflow-y-auto">
+              {duplicateCodes.map((group) => (
+                <li key={JSON.stringify([group.vocabulary, group.code])}>
+                  <span className="font-mono font-semibold">{group.vocabulary || "Uncoded"}: {group.code}</span>
+                  <ul className="ml-4 list-disc">
+                    {group.rows.map((row) => (
+                      <li key={mappingRowId(row)}>
+                        <a
+                          href={`#${mappingRowId(row)}`}
+                          onClick={(event) => { event.preventDefault(); revealDuplicate(row); }}
+                          className="rounded underline hover:text-red-950 focus:outline-2 focus:outline-red-600"
+                        >
+                          {row.source_code} — {sectionForRow(row)} · {row.source_vocabulary_id || "Uncoded"}
+                          {row.status === "rejected" ? " · rejected" : ""}
+                          {row.mapping_id != null ? ` · mapping #${row.mapping_id}` : ""}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* At the top of the tab, not buried in a section header: this is how
             an empty queue gets filled, so it has to be visible before there is
@@ -1218,6 +1299,11 @@ export default function CodeMappingPage() {
             </div>
 
             <div className="max-h-[70vh] overflow-y-auto px-5 py-5">
+              {error && (
+                <div role="alert" className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {error}
+                </div>
+              )}
               {/* ── SOURCE ───────────────────────────────────────────────── */}
               <fieldset
                 data-testid="source-block"
