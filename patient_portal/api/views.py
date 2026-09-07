@@ -5146,6 +5146,10 @@ class PersonViewSet(viewsets.GenericViewSet):
                         # holder link is authoritative, so return it without
                         # clobbering either row.
                         pass
+                # A historical find_or_create call could have left the linked
+                # person without its derived read model. Provision it here so
+                # the refresh endpoint can rebuild the record after an ETL load.
+                PatientRecord.objects.get_or_create(person=person)
                 return Response(
                     {'person_id': person.person_id, 'created': False},
                     status=status.HTTP_200_OK,
@@ -5162,6 +5166,9 @@ class PersonViewSet(viewsets.GenericViewSet):
             # Concurrent first-call race: another request won the INSERT
             person = Person.objects.get(actor_iss=actor_iss, actor_sub=actor_sub)
             created = False
+        # This endpoint is an ETL entry point. A Person it returns must always
+        # be refreshable, including an existing row from a concurrent request.
+        PatientRecord.objects.get_or_create(person=person)
         http_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response({'person_id': person.person_id, 'created': created}, status=http_status)
 
