@@ -20,7 +20,8 @@ fields cannot tell "you may not edit this" from "I forgot to send it".
 from omop_core.models import Concept, FieldChoice, PatientRecord
 from omop_core.services.demographics import choices as demographic_choices
 from omop_core.services.mappings import (
-    CONCEPT_EHR_TYPE, CONCEPT_LAB_TYPE, DERIVED_FIELD_TO_CODE, LAB_FIELD_TO_LOINC,
+    CONCEPT_EHR_TYPE, CONCEPT_LAB_TYPE, CONCEPT_PATIENT_REPORTED_TYPE,
+    DERIVED_FIELD_TO_CODE, LAB_FIELD_TO_LOINC,
 )
 from omop_core.services.patient_record_service import (
     PATIENT_RECORD_OMOP_MAPPED_FIELDS,
@@ -652,7 +653,9 @@ def build_writable_field_descriptor():
             'value_kind': 'number',
             'unit': unit,
             'unit_concept_id': unit_ids.get(unit),
-            'type_concept_id': CONCEPT_LAB_TYPE,
+            # This descriptor drives a clinician/patient edit, not a lab
+            # import. Keeping it distinct preserves same-day imported facts.
+            'type_concept_id': CONCEPT_PATIENT_REPORTED_TYPE,
             'source_value': code,
         }
 

@@ -241,6 +241,7 @@ THERAPY_LINE_FIELDS = frozenset(
 # remap_generic_lab_fallback for the repair.
 CONCEPT_GENERIC_LAB       = 0         # No matching concept (OMOP CDM sentinel)
 CONCEPT_LAB_TYPE          = 32856     # Lab (measurement type)
+CONCEPT_PATIENT_REPORTED_TYPE = 32865 # Patient self-report (measurement type)
 CONCEPT_EHR_TYPE          = 32817     # EHR (condition type)
 CONCEPT_TREATMENT_REGIMEN = 32531     # Treatment Regimen (episode concept)
 CONCEPT_DRUG_EXPOSURE_FIELD = 1147094  # drug_exposure_id field concept (EpisodeEvent)
@@ -331,7 +332,7 @@ WEARABLE_ARTIFACT_BOUNDS = {
 # Do not reintroduce a fallback here. The previous code used 32883 ('Survey')
 # and fell back to 32856 ('Lab'), mislabelling every wearable row's provenance
 # (#441).
-WEARABLE_TYPE_CONCEPT_ID = 32865
+WEARABLE_TYPE_CONCEPT_ID = CONCEPT_PATIENT_REPORTED_TYPE
 
 # Minimum valid days required to emit a metric (else field stays None)
 WEARABLE_MIN_VALID_DAYS = 7
