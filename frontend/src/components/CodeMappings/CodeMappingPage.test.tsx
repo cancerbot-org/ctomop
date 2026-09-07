@@ -142,6 +142,8 @@ const loincHit = {
 type TestMappingRow = Omit<typeof proposedRow, "status"> & {
   status: "proposed" | "approved" | "rejected" | "unmapped";
   mapping_origin?: "athena" | "healthkey";
+  source_retired?: boolean | null;
+  source_retirement_evidence?: string[];
 };
 
 function renderPage(rows: TestMappingRow[] = [proposedRow, approvedRow]) {
@@ -294,6 +296,77 @@ describe("CodeMappingPage", () => {
     expect(mockPatch).toHaveBeenCalledWith("/v1/code-mappings/7/", expect.any(Object));
   });
 
+  describe("source retirement and section sorting", () => {
+    const high: TestMappingRow = { ...proposedRow, mapping_id: 31, source_vocabulary_id: "ICD10", source_code: "Z10",
+      origin_system: "Zulu", source_code_description: "Zebra", destination_concept_name: "Zinc", destination_concept_id: 20,
+      source_retired: true, source_retirement_evidence: ["Athena ICD10CM concept 45582496: invalid reason D; validity ended 2022-09-30"], status: "unmapped" };
+    const low: TestMappingRow = { ...high, mapping_id: 32, source_code: "A2", origin_system: "Alpha",
+      source_code_description: "Apple", destination_concept_name: "Apple", destination_concept_id: 3, source_retired: false,
+      source_retirement_evidence: [], status: "proposed" };
+    const ids = (table: HTMLElement) => Array.from(table.querySelectorAll("tbody tr[id]")).map((row) => row.id);
+
+    it("places source retirement immediately after Source code and shows evidence in the dialog", async () => {
+      renderPage([high, low]);
+      const table = await screen.findByRole("table", { name: "Unmapped mappings" });
+      const headers = within(table).getAllByRole("columnheader");
+      expect(headers[1]).toHaveTextContent("Source code");
+      expect(headers[2]).toHaveTextContent("Retired");
+      const row = document.getElementById("code-mapping-31")!;
+      expect(within(row).getAllByRole("cell")[2]).toHaveTextContent("Retired");
+      expect(within(row).getAllByRole("cell")[2]).toHaveAttribute("title", expect.stringContaining("Athena ICD10CM"));
+      fireEvent.click(within(row).getByRole("button", { name: "Edit Z10" }));
+      expect(screen.getByTestId("source-retirement")).toHaveValue("Retired");
+      expect(within(screen.getByRole("dialog")).getByRole("status")).toHaveTextContent("invalid reason D");
+      fireEvent.change(screen.getByLabelText("Source Code Value"), { target: { value: "A3" } });
+      expect(screen.getByTestId("source-retirement")).toHaveValue("Unknown");
+      expect(within(screen.getByRole("dialog")).queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it.each(["Provenance", "Source code", "Retired", "Source description", "Destination concept", "Concept ID", "Status"])(
+      "sorts %s ascending and descending", async (column) => {
+        renderPage([high, low]);
+        const table = await screen.findByRole("table", { name: "Unmapped mappings" });
+        const button = within(table).getByRole("button", { name: column });
+        fireEvent.click(button);
+        expect(ids(table)).toEqual(["code-mapping-32", "code-mapping-31"]);
+        expect(button.closest("th")).toHaveAttribute("aria-sort", "ascending");
+        fireEvent.click(button);
+        expect(ids(table)).toEqual(["code-mapping-31", "code-mapping-32"]);
+        expect(button.closest("th")).toHaveAttribute("aria-sort", "descending");
+      },
+    );
+
+    it("keeps each section's sort independent without moving mappings between sections", async () => {
+      renderPage([high, low,
+        { ...high, mapping_id: 41, status: "approved" }, { ...low, mapping_id: 42, status: "approved" },
+        { ...high, mapping_id: 51, status: "approved", mapping_origin: "athena" },
+        { ...low, mapping_id: 52, status: "approved", mapping_origin: "athena" }]);
+      const unmapped = await screen.findByRole("table", { name: "Unmapped mappings" });
+      fireEvent.click(screen.getByRole("button", { name: /^Mapped \(/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^Athena Mapped \(/ }));
+      const mapped = screen.getByRole("table", { name: "Mapped mappings" });
+      const athena = screen.getByRole("table", { name: "Athena Mapped mappings" });
+      for (const table of [unmapped, mapped, athena]) {
+        fireEvent.click(within(table).getByRole("button", { name: "Concept ID" }));
+      }
+      fireEvent.click(within(mapped).getByRole("button", { name: "Concept ID" }));
+      expect(ids(unmapped)).toEqual(["code-mapping-32", "code-mapping-31"]);
+      expect(ids(mapped)).toEqual(["code-mapping-41", "code-mapping-42"]);
+      expect(ids(athena)).toEqual(["code-mapping-52", "code-mapping-51"]);
+      expect(within(athena).queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
+    });
+
+    it("shows missing retirement metadata as Unknown and sorts it last", async () => {
+      renderPage([high, low, { ...low, mapping_id: 33, source_code: "A3", source_retired: null }]);
+      const table = await screen.findByRole("table", { name: "Unmapped mappings" });
+      const button = within(table).getByRole("button", { name: "Retired" });
+      fireEvent.click(button);
+      expect(ids(table)).toEqual(["code-mapping-32", "code-mapping-31", "code-mapping-33"]);
+      fireEvent.click(button);
+      expect(ids(table)).toEqual(["code-mapping-31", "code-mapping-32", "code-mapping-33"]);
+    });
+  });
+
   it("puts the source code first without repeating the selected source-system tab", async () => {
     renderPage();
     const row = (await screen.findByText("M-PROTEIN, SERUM", { selector: "td" })).closest("tr")!;
@@ -306,7 +379,7 @@ describe("CodeMappingPage", () => {
     renderPage();
     const row = (await screen.findByText("M-PROTEIN, SERUM", { selector: "td" })).closest("tr")!;
     const cells = within(row).getAllByRole("cell");
-    expect(cells[2]).toHaveTextContent("M-protein, serum");
+    expect(cells[3]).toHaveTextContent("M-protein, serum");
     expect(screen.getByRole("columnheader", { name: "Source description" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "OMOP table" })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Seen" })).not.toBeInTheDocument();
@@ -477,6 +550,7 @@ describe("CodeMappingPage", () => {
         "Source Code Value",
         "Source Description",
         "Source Concept ID",
+        "Source code retirement",
       ]);
       expect((screen.getByLabelText("Domain") as HTMLSelectElement).value).toBe("Measurement");
     });
