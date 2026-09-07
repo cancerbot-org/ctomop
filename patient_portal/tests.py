@@ -7510,6 +7510,34 @@ class ConceptSearchTest(_ConceptFixtureBase):
             {item['concept_id'] for item in resp.json()['results']},
         )
 
+    def test_search_by_omop_id_and_code_respects_all_filters(self):
+        for query in (str(self.diabetes.concept_id), self.diabetes.concept_code):
+            with self.subTest(query=query):
+                filters = {
+                    'vocabulary_id': 'SNOMED', 'domain_id': 'Condition',
+                    'concept_class_id': 'Clinical Finding', 'standard_concept': 'S',
+                }
+                response = self.client.get(self.URL, {'q': query, **filters}, **self._auth())
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertIn(self.diabetes.concept_id, [r['concept_id'] for r in response.json()['results']])
+                for field, value in (
+                    ('vocabulary_id', 'LOINC'), ('domain_id', 'Measurement'),
+                    ('concept_class_id', 'Lab Test'), ('standard_concept', 'C'),
+                ):
+                    with self.subTest(field=field):
+                        response = self.client.get(
+                            self.URL, {'q': query, **filters, field: value}, **self._auth(),
+                        )
+                        self.assertEqual(response.status_code, status.HTTP_200_OK)
+                        self.assertNotIn(self.diabetes.concept_id, [r['concept_id'] for r in response.json()['results']])
+
+    def test_large_numeric_code_does_not_overflow_omop_id_lookup(self):
+        code = '9' * 50
+        Concept.objects.filter(pk=self.diabetes.pk).update(concept_code=code)
+        response = self.client.get(self.URL, {'q': code}, **self._auth())
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(self.diabetes.concept_id, [r['concept_id'] for r in response.json()['results']])
+
     def test_search_result_shape(self):
         resp = self.client.get(
             self.URL, {'q': 'Type 2 diabetes', 'page_size': 100}, **self._auth(),

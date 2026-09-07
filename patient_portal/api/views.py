@@ -7147,7 +7147,7 @@ def _measurement_input_type(concept_name, suggested_unit):
 @permission_classes([ScopedTokenPermission])
 def concept_search(request):
     """
-    Search OMOP concepts by name (case-insensitive substring).
+    Search OMOP concepts by name, exact vocabulary code, or OMOP concept ID.
 
     Query params:
         q                 required, minimum 3 characters
@@ -7169,10 +7169,16 @@ def concept_search(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    search_filter = _concept_name_search_filter(query) | Q(concept_code__iexact=query)
+    # Numeric vocabulary codes and OMOP IDs share the same search box. Keep
+    # both interpretations, but never cast an arbitrary-length code to a DB ID.
+    numeric_id = query.lstrip('0') or '0'
+    if numeric_id.isascii() and numeric_id.isdecimal() and len(numeric_id) <= 10:
+        concept_id = int(numeric_id)
+        if concept_id <= 2_147_483_647:
+            search_filter |= Q(concept_id=concept_id)
     queryset = _apply_concept_filters(
-        Concept.objects.filter(
-            _concept_name_search_filter(query) | Q(concept_code__iexact=query),
-        ),
+        Concept.objects.filter(search_filter),
         request.query_params,
     )
     # Show a curator what kind of input a Measurement mapping expects when the
