@@ -90,6 +90,18 @@ LAB_FIELD_ALIAS_TO_CANONICAL = {
     'ldh':                  'ldh_u_l',
 }
 
+# Additional LOINC tests that are clinically equivalent to a PatientRecord
+# field, but whose primary write-through owner is another legacy field.  These
+# are deliberately separate from LAB_FIELD_ALIAS_TO_CANONICAL: that dictionary
+# routes writes, whereas this one permits a curator to record the equivalent
+# concept on a second read-model field without creating a second write path.
+LAB_FIELD_CONCEPT_ALIASES = {
+    # 1952-1 "Beta-2-Microglobulin [Mass/volume] in Serum or Plasma" is the
+    # broadly used serum assay.  ``beta2_microglobulin`` owns its legacy lab
+    # write-through; this CLL-facing field may also be curated against it.
+    'serum_beta2_microglobulin_level': {'1952-1'},
+}
+
 # Common unit options for fields where multiple units are used in US clinical
 # practice. The first entry is the US default. Used by the mapping UI to
 # render a unit dropdown.

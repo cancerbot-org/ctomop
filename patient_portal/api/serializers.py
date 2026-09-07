@@ -1075,13 +1075,18 @@ class FieldConceptMappingSerializer(serializers.ModelSerializer):
     def validate_concept_code(self, value):
         if not value:
             return value
-        from omop_core.services.mappings import LAB_FIELD_TO_LOINC
+        from omop_core.services.mappings import (
+            LAB_FIELD_CONCEPT_ALIASES,
+            LAB_FIELD_TO_LOINC,
+        )
         vocab_id = self.initial_data.get('vocabulary_id', '')
         field_name = self.initial_data.get(
             'field_name', getattr(self.instance, 'field_name', ''),
         )
         # Check collision with LAB_FIELD_TO_LOINC (hardcoded LOINC mappings).
         if vocab_id == 'LOINC':
+            if value in LAB_FIELD_CONCEPT_ALIASES.get(field_name, set()):
+                return value
             for _field, (code, _unit, _display) in LAB_FIELD_TO_LOINC.items():
                 if code == value and _field != field_name:
                     raise serializers.ValidationError(
