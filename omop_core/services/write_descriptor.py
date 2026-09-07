@@ -17,7 +17,10 @@ writable with a reason, rather than omitted. A client that only sees writable
 fields cannot tell "you may not edit this" from "I forgot to send it".
 """
 
-from omop_core.models import Concept, FieldChoice, PatientRecord
+from omop_core.models import (
+    Concept, ConditionOccurrence, DrugExposure, FieldChoice, Measurement,
+    Observation, PatientRecord, ProcedureOccurrence,
+)
 from omop_core.services.demographics import choices as demographic_choices
 from omop_core.services.mappings import (
     CONCEPT_EHR_TYPE, CONCEPT_LAB_TYPE, CONCEPT_PATIENT_REPORTED_TYPE,
@@ -322,6 +325,14 @@ _MAPPING_ENDPOINTS = {
     'procedure': 'POST /api/v1/procedures/',
 }
 
+_MAPPING_SOURCE_FIELDS = {
+    'measurement': Measurement._meta.get_field('measurement_source_value'),
+    'observation': Observation._meta.get_field('observation_source_value'),
+    'condition': ConditionOccurrence._meta.get_field('condition_source_value'),
+    'drug_exposure': DrugExposure._meta.get_field('drug_source_value'),
+    'procedure': ProcedureOccurrence._meta.get_field('procedure_source_value'),
+}
+
 
 def mapping_target_for(omop_table):
     return _MAPPING_TARGETS.get((omop_table or '').strip().lower())
@@ -377,6 +388,23 @@ def _curated_writes():
         target = mapping_target_for(row.omop_table)
         concept_id = row.concept_id
         if target is None or concept_id is None:
+            continue
+        source_field = _MAPPING_SOURCE_FIELDS[target]
+        width = source_field.max_length
+        if width is not None and len(row.source_value) > width:
+            # Preserve the curator's key: truncating it would break derivation's
+            # exact source-value match. Keep an entry so no fallback write recipe
+            # can hide this invalid approved mapping.
+            entries[row.field_name] = {
+                'kind': KIND_EDITABLE,
+                'writable': False,
+                'curated': True,
+                'reason': (
+                    f'Approved mapping source_value exceeds the {width}-character '
+                    f'limit of {source_field.model._meta.db_table}.{source_field.name}. '
+                    'Shorten the mapping source_value before writing this field.'
+                ),
+            }
             continue
         entry = {
             'kind': KIND_EDITABLE,
