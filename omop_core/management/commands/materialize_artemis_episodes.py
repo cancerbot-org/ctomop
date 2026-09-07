@@ -26,8 +26,8 @@ class Command(BaseCommand):
             raise CommandError(f"Could not read ARTEMIS JSON: {exc}") from exc
 
         try:
-            records = validate_artemis_output(payload)
             if options["dry_run"]:
+                records = validate_artemis_output(payload)
                 self.stdout.write(f"[DRY RUN] Validated {len(records)} ARTEMIS episode(s); no rows written.")
                 return
             result = materialize_artemis_output(payload)
