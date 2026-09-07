@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 VOCAB_SCOPE = frozenset({
     'HemOnc', 'RxNorm', 'RxNorm Extension', 'ATC', 'LOINC', 'UCUM',
+    # CIEL 45917997 is the clinically appropriate Measurement concept for
+    # ``spleen_size`` (#1000). Keep CIEL in scope so this Athena-owned concept
+    # is available to curators instead of minting a local substitute.
+    'CIEL',
     # Curated measurement concepts used by field mappings.  In particular,
     # OMOP Extension 718584 is the PD-L1 by Immune stain measurement (#989).
     'OMOP Extension',

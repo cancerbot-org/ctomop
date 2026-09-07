@@ -98,6 +98,7 @@ _DRUG_SYSTEMS = (
 _MEASUREMENT_SYSTEMS = (
     ('LOINC', 'LOINC — OMOP standard for labs and measurements'),
     ('SNOMED', 'SNOMED CT — findings and qualitative results'),
+    ('CIEL', 'CIEL — interface terminology'),
     ('OpenWearables', 'OpenWearables — unified wearable device metrics'),
     ('Apple', 'Apple — Apple HealthKit wearable metrics'),
     ('Garmin', 'Garmin — Garmin FIT wearable metrics'),
