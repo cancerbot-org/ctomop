@@ -8976,7 +8976,7 @@ def _user_display(user):
     )
 
 
-def _serialize_code_mapping_row(concept, mapping=None):
+def _serialize_code_mapping_row(concept, mapping=None, source_metadata=None):
     """One row of the Code Mapping list: a source code and where it lands.
 
     Keys read in the direction of the mapping. The source side never falls back
@@ -8985,10 +8985,16 @@ def _serialize_code_mapping_row(concept, mapping=None):
     code system reports '', which is a real state: paper labs and clinicians'
     notes carry no code system at all.
     """
+    if source_metadata is None:
+        from omop_core.services.source_retirement import mapping_source_retirement
+        source_metadata = mapping_source_retirement([mapping]).get(mapping.pk) if mapping else {
+            'source_retired': None, 'source_retirement_evidence': [],
+        }
     # A mapping can legitimately have no destination yet: a code seen at ingest
     # whose concept is not loaded is a review-queue row, not an error.
     if concept is None:
         return {
+            **source_metadata,
             'destination_concept_id': None,
             'destination_concept_name': '',
             'destination_concept_code': '',
@@ -9035,6 +9041,7 @@ def _serialize_code_mapping_row(concept, mapping=None):
             'concept_class_id': '',
         }
     return {
+        **source_metadata,
         # Destination
         'destination_concept_id': concept.concept_id,
         'destination_concept_name': concept.concept_name,
@@ -9497,9 +9504,12 @@ def code_mapping_list(request):
             if q.isdigit():
                 search_filter |= Q(target_concept_id=int(q))
             mappings = mappings.filter(search_filter)
+        mappings = list(mappings.order_by('source_vocabulary_id', 'source_code', 'id'))
+        from omop_core.services.source_retirement import mapping_source_retirement
+        source_metadata = mapping_source_retirement(mappings)
         rows = [
-            _serialize_code_mapping_row(mapping.target_concept, mapping)
-            for mapping in mappings.order_by('source_vocabulary_id', 'source_code', 'id')
+            _serialize_code_mapping_row(mapping.target_concept, mapping, source_metadata[mapping.pk])
+            for mapping in mappings
         ]
         status_filter = request.query_params.get('status')
         if status_filter:

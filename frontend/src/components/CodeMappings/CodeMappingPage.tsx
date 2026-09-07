@@ -34,6 +34,8 @@ interface CodeMappingRow {
   source_code: string;
   source_code_description: string;
   source_concept_id?: number | null;
+  source_retired?: boolean | null;
+  source_retirement_evidence?: string[];
   umls_source_name?: string;
   destination_concept_id: number;
   destination_concept_name: string;
@@ -214,6 +216,36 @@ function mappingRowId(row: CodeMappingRow): string {
   ]))}`;
 }
 
+type MappingSection = "Unmapped" | "Mapped" | "Athena Mapped";
+type SortColumn = "origin_system" | "source_code" | "source_retired" | "source_code_description"
+  | "destination_concept_name" | "destination_concept_id" | "status";
+type SectionSort = { column: SortColumn; descending: boolean };
+
+function retirementLabel(row: CodeMappingRow | null): string {
+  return row?.source_retired === true ? "Retired" : row?.source_retired === false ? "No" : "Unknown";
+}
+
+function retirementDetail(row: CodeMappingRow | null): string {
+  return row?.source_retirement_evidence?.join("; ")
+    || (row?.source_retired === false ? "No retirement indication in the loaded source metadata."
+      : "No source retirement metadata available. Missing metadata does not mean the code is retired.");
+}
+
+function sortMappingRows(rows: CodeMappingRow[], sort?: SectionSort): CodeMappingRow[] {
+  if (!sort) return rows;
+  return [...rows].sort((a, b) => {
+    const left = a[sort.column];
+    const right = b[sort.column];
+    // Unknown values stay last in either direction.
+    if (left == null) return right == null ? 0 : 1;
+    if (right == null) return -1;
+    const comparison = typeof left === "number" || typeof left === "boolean"
+      ? Number(left) - Number(right)
+      : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
+    return sort.descending ? -comparison : comparison;
+  });
+}
+
 /**
  * OMOP domain -> the clinical table its facts land in. Only a fallback: the
  * reference endpoint is authoritative, and hardcoding the mapping in the
@@ -365,6 +397,7 @@ export default function CodeMappingPage() {
   const [mappedCollapsed, setMappedCollapsed] = useState(true);
   const [athenaCollapsed, setAthenaCollapsed] = useState(true);
   const [showRejected, setShowRejected] = useState(false);
+  const [sectionSorts, setSectionSorts] = useState<Partial<Record<MappingSection, SectionSort>>>({});
   const [navigationTarget, setNavigationTarget] = useState<{ id: string } | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
@@ -922,24 +955,36 @@ export default function CodeMappingPage() {
     }
   };
 
-  const renderTable = (sectionRows: CodeMappingRow[], emptyText: string, { hideStatus = false }: { hideStatus?: boolean } = {}) => {
-    const colCount = 5 + (hideStatus ? 0 : 2);
+  const renderTable = (sectionRows: CodeMappingRow[], emptyText: string, section: MappingSection, { hideStatus = false }: { hideStatus?: boolean } = {}) => {
+    const colCount = 6 + (hideStatus ? 0 : 2);
+    const sort = sectionSorts[section];
+    const header = (label: string, column: SortColumn) => (
+      <th className="px-4 py-3 font-semibold" aria-sort={sort?.column === column ? (sort.descending ? "descending" : "ascending") : "none"}>
+        <button type="button" title={`Sort ${section} by ${label}`} className="inline-flex items-center gap-1 hover:underline focus:outline-2"
+          onClick={() => setSectionSorts((previous) => ({ ...previous, [section]: {
+            column, descending: previous[section]?.column === column ? !previous[section]?.descending : false,
+          } }))}>
+          {label}<span aria-hidden="true">{sort?.column === column ? (sort.descending ? "↓" : "↑") : "↕"}</span>
+        </button>
+      </th>
+    );
     return (
     <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
-      <table className="w-full border-collapse text-left text-sm">
+      <table aria-label={`${section} mappings`} className="w-full border-collapse text-left text-sm">
         <thead className="bg-slate-100 text-xs uppercase text-slate-600">
           <tr>
-            <th className="px-4 py-3 font-semibold">Provenance</th>
-            <th className="px-4 py-3 font-semibold">Source code</th>
-            <th className="px-4 py-3 font-semibold">Source description</th>
-            <th className="px-4 py-3 font-semibold">Destination concept</th>
-            <th className="px-4 py-3 font-semibold">Concept ID</th>
-            {!hideStatus && <th className="px-4 py-3 font-semibold">Status</th>}
+            {header("Provenance", "origin_system")}
+            {header("Source code", "source_code")}
+            {header("Retired", "source_retired")}
+            {header("Source description", "source_code_description")}
+            {header("Destination concept", "destination_concept_name")}
+            {header("Concept ID", "destination_concept_id")}
+            {!hideStatus && header("Status", "status")}
             {!hideStatus && <th className="w-16 px-4 py-3 font-semibold" aria-label="Actions" />}
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {sectionRows.map((row) => (
+          {sortMappingRows(sectionRows, sort).map((row) => (
             <tr
               key={mappingRowId(row)}
               id={mappingRowId(row)}
@@ -958,6 +1003,9 @@ export default function CodeMappingPage() {
             >
               <td className="px-4 py-3 text-xs text-slate-700">{row.origin_system || "—"}</td>
               <td className="px-4 py-3 font-mono text-xs text-slate-900">{row.source_code}</td>
+              <td className={`px-4 py-3 text-xs ${row.source_retired ? "font-semibold text-red-700" : "text-slate-600"}`} title={retirementDetail(row)}>
+                {retirementLabel(row)}
+              </td>
               <td className="px-4 py-3 text-xs text-slate-700">{row.source_code_description || "—"}</td>
               <td className="px-4 py-3">
                 <div className="font-medium text-slate-950">{row.destination_concept_name}</div>
@@ -1244,7 +1292,7 @@ export default function CodeMappingPage() {
               </label>
             )}
           </div>
-          {renderTable(unmappedRows, "Nothing awaiting review in this vocabulary.")}
+          {renderTable(unmappedRows, "Nothing awaiting review in this vocabulary.", "Unmapped")}
             </>
           )}
         </section>
@@ -1258,7 +1306,7 @@ export default function CodeMappingPage() {
             {mappedCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
             Mapped <span className="font-normal text-slate-500">({mappedRows.length})</span>
           </button>
-          {!mappedCollapsed && renderTable(mappedRows, "No approved mappings in this vocabulary.")}
+          {!mappedCollapsed && renderTable(mappedRows, "No approved mappings in this vocabulary.", "Mapped")}
         </section>
 
         {athenaRows.length > 0 && (
@@ -1271,7 +1319,7 @@ export default function CodeMappingPage() {
               {athenaCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
               Athena Mapped <span className="font-normal text-slate-500">({athenaRows.length})</span>
             </button>
-            {!athenaCollapsed && renderTable(athenaRows, "No Athena mappings in this vocabulary.", { hideStatus: true })}
+            {!athenaCollapsed && renderTable(athenaRows, "No Athena mappings in this vocabulary.", "Athena Mapped", { hideStatus: true })}
           </section>
         )}
       </div>
@@ -1388,6 +1436,18 @@ export default function CodeMappingPage() {
                     value={form.source_concept_id}
                     testId="source-concept-id"
                   />
+                  <ReadOnlyField
+                    id="source_retirement"
+                    label="Source code retirement"
+                    tip="Retirement is based on the source vocabulary's invalid reason or expired validity date, never the destination or UMLS preference flag."
+                    value={retirementLabel(selectedRow && form.source_code === selectedRow.source_code
+                      && form.source_vocabulary_id === selectedRow.source_vocabulary_id ? selectedRow : null)}
+                    testId="source-retirement"
+                  />
+                  {selectedRow?.source_retired && form.source_code === selectedRow.source_code
+                    && form.source_vocabulary_id === selectedRow.source_vocabulary_id && (
+                    <p className="text-sm font-semibold text-red-700" role="status">Source code is retired. {retirementDetail(selectedRow)}</p>
+                  )}
                   {selectedRow?.umls_source_name && (
                     <ReadOnlyField
                       id="umls_source_name"
