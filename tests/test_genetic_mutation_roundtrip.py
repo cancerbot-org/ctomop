@@ -26,6 +26,8 @@ def test_patient_patch_writes_gene_mutation_to_omop_and_returns_projection():
         concept_code='32865',
         concept_name='Patient self-report',
     )
+    ConceptFactory(concept_id=255395001, concept_code='255395001', concept_name='Germline')
+    ConceptFactory(concept_id=30166007, concept_code='30166007', concept_name='Pathogenic')
     staff = Identity.objects.create_user(
         email='mutation-editor@example.test', password='pw', is_staff=True,
     )
@@ -33,6 +35,7 @@ def test_patient_patch_writes_gene_mutation_to_omop_and_returns_projection():
         f'/api/v1/persons/{person.person_id}/',
         {'genetic_mutations': [{
             'gene': 'BRCA1', 'mutation': 'c.68_69delAG', 'test_date': '2024-01-15',
+            'origin': 'germline', 'interpretation': 'pathogenic',
         }]},
         format='json',
     )
@@ -47,8 +50,11 @@ def test_patient_patch_writes_gene_mutation_to_omop_and_returns_projection():
     assert row.measurement_concept_id == 45876022
     assert row.qualifier_source_value == 'BRCA1'
     assert row.value_as_string == 'c.68_69delAG'
+    assert row.qualifier_concept_id == 255395001
+    assert row.value_as_concept_id == 30166007
     record = PatientRecord.objects.get(person=person)
     assert record.genetic_mutations == [{
         'gene': 'brca1', 'variant': 'c.68_69delAG', 'test_date': '2024-01-15',
+        'origin': 'germline', 'interpretation': 'pathogenic',
     }]
     assert response.data['genetic_mutations'] == record.genetic_mutations

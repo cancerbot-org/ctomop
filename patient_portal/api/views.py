@@ -129,6 +129,10 @@ logger = logging.getLogger(__name__)
 
 _GENETIC_MUTATION_CODE = '36908-2'
 _GENETIC_MUTATION_SOURCE_PREFIX = 'promop-genetic-mutation:'
+_MUTATION_ORIGIN_CONCEPTS = {'germline': 255395001, 'somatic': 255461003}
+_MUTATION_INTERPRETATION_CONCEPTS = {
+    'pathogenic': 30166007, 'benign': 10828004, 'vus': 42425007,
+}
 
 
 def _write_genetic_mutations(person, mutations):
@@ -150,6 +154,10 @@ def _write_genetic_mutations(person, mutations):
     ).first()
     if question is None or type_concept is None:
         raise ValidationError({'genetic_mutations': 'Required OMOP vocabulary concepts are unavailable.'})
+    concepts_by_id = Concept.objects.in_bulk(
+        set(_MUTATION_ORIGIN_CONCEPTS.values()) | set(_MUTATION_INTERPRETATION_CONCEPTS.values()),
+        field_name='concept_id',
+    )
 
     rows = []
     for mutation in mutations:
@@ -160,6 +168,8 @@ def _write_genetic_mutations(person, mutations):
         if not gene or not variant:
             raise ValidationError({'genetic_mutations': 'Each mutation requires gene and mutation.'})
         test_date = parse_date(str(mutation.get('test_date') or '')) or localdate()
+        origin = str(mutation.get('origin') or '').strip().lower()
+        interpretation = str(mutation.get('interpretation') or '').strip().lower()
         rows.append(Measurement(
             measurement_id=next_pk(Measurement, 'measurement_id'),
             person=person,
@@ -170,6 +180,8 @@ def _write_genetic_mutations(person, mutations):
             measurement_source_value=_GENETIC_MUTATION_CODE,
             qualifier_source_value=gene[:50],
             value_source_value=_GENETIC_MUTATION_SOURCE_PREFIX + gene,
+            qualifier_concept=concepts_by_id.get(_MUTATION_ORIGIN_CONCEPTS.get(origin)),
+            value_as_concept=concepts_by_id.get(_MUTATION_INTERPRETATION_CONCEPTS.get(interpretation)),
         ))
 
     Measurement.objects.filter(
