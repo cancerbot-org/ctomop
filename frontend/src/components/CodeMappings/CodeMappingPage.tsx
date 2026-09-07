@@ -195,6 +195,7 @@ const strategyLabel: Record<string, string> = {
 const VOCABULARY_ALIASES: Record<string, string> = {
   Apple: "OpenWearables",
   Garmin: "OpenWearables",
+  ICD10CM: "ICD10",
   "urn:oid:2.16.840.1.113883.6.96": "SNOMED",
 };
 function tabForRow(row: CodeMappingRow): string {

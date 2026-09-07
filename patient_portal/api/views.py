@@ -9444,6 +9444,11 @@ def _source_vocabulary_tabs():
         if sub in vocab_counts:
             vocab_counts['OpenWearables'] = vocab_counts.get('OpenWearables', 0) + vocab_counts.pop(sub)
 
+    # Merge ICD-10-CM into ICD-10 (curators see one vocabulary).
+    for sub, canonical in source_vocabularies.ICD10CM_MERGE.items():
+        if sub in vocab_counts:
+            vocab_counts[canonical] = vocab_counts.get(canonical, 0) + vocab_counts.pop(sub)
+
     # Merge FHIR OID aliases into their canonical OMOP vocabulary.
     for oid, canonical in source_vocabularies.VOCABULARY_OID_ALIASES.items():
         if oid in vocab_counts:

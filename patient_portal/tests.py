@@ -23552,9 +23552,10 @@ class CodeMappingSourceVocabTabsTest(TestCase):
         self.assertIn('source_vocabulary_tabs', resp.data)
         tabs = resp.data['source_vocabulary_tabs']
         self.assertTrue(len(tabs) > 0)
-        icd_tab = next((t for t in tabs if t['vocabulary_id'] == 'ICD10CM'), None)
+        # ICD10CM is merged into the ICD10 tab (#1028).
+        icd_tab = next((t for t in tabs if t['vocabulary_id'] == 'ICD10'), None)
         self.assertIsNotNone(icd_tab)
-        self.assertEqual(icd_tab['label'], 'ICD-10-CM')
+        self.assertEqual(icd_tab['label'], 'ICD-10')
         self.assertFalse(icd_tab['is_standard'])
         self.assertIn('MedDRA', [tab['vocabulary_id'] for tab in tabs])
         self.assertIn('PartnerCodes', [tab['vocabulary_id'] for tab in tabs])

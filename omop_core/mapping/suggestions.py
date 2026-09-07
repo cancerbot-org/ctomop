@@ -83,6 +83,7 @@ SYNONYM_BONUS = 0.05
 VOCAB_TO_UMLS_ROOT = {
     'SNOMED': 'SNOMEDCT_US',
     'ICD10CM': 'ICD10CM',
+    'ICD10': 'ICD10CM',       # HT-One ICD-10 codes are ICD-10-CM format
     'ICD10PCS': 'ICD10PCS',
     'LOINC': 'LNC',
     'RxNorm': 'RXNORM',
@@ -96,7 +97,12 @@ VOCAB_TO_UMLS_ROOT = {
 }
 
 # Reverse: UMLS SAB → OMOP vocabulary_id (for sibling-code lookups).
-_UMLS_ROOT_TO_VOCAB = {v: k for k, v in VOCAB_TO_UMLS_ROOT.items()}
+# Multiple OMOP vocabs can map to the same UMLS SAB (ICD10CM and ICD10 both
+# map to ICD10CM SAB).  When that happens, prefer the canonical OMOP vocab
+# (ICD10CM over ICD10) — first-seen wins, so iterate forward and skip dupes.
+_UMLS_ROOT_TO_VOCAB: dict[str, str] = {}
+for _k, _v in VOCAB_TO_UMLS_ROOT.items():
+    _UMLS_ROOT_TO_VOCAB.setdefault(_v, _k)
 
 # ---------------------------------------------------------------------------
 # Strategy labels
