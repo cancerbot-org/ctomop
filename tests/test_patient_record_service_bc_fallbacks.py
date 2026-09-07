@@ -58,6 +58,24 @@ def test_genetic_mutations_use_measurement_source_value_fallback():
     ]
 
 
+def test_generic_gene_mutation_loinc_round_trips_gene_from_qualifier():
+    """The #905 LOINC question preserves a UI-selected gene and its variant."""
+    person = PersonFactory()
+
+    MeasurementFactory(
+        person=person,
+        measurement_source_value='36908-2',
+        qualifier_source_value='BRCA1',
+        value_as_string='c.68_69delAG',
+    )
+
+    assert _get_genetic_mutations(person)['genetic_mutations'] == [{
+        'gene': 'brca1',
+        'variant': 'c.68_69delAG',
+        'test_date': '2024-01-15',
+    }]
+
+
 def test_genomics_pathology_fields_use_dated_loinc_measurements():
     person = PersonFactory()
     result = ConceptFactory(concept_name='Positive')

@@ -64,7 +64,7 @@ from omop_core.services.patient_cleanup import delete_omop_clinical_rows
 from omop_core.services.prolog_cleanup import delete_prolog_data_for_persons
 from omop_core.services.lot_inference_service import infer_lot_for_person
 from omop_core.services.episode_service import upsert_therapy_line_episode
-from omop_core.services.mappings import CONCEPT_GENERIC_LAB, get_gender_concept
+from omop_core.services.mappings import CONCEPT_GENERIC_LAB, CONCEPT_PATIENT_REPORTED_TYPE, get_gender_concept
 from omop_core.services.demographics import resolve_concept as resolve_demographic_concept
 from omop_core.services.pk import next_pk, next_pk_batch
 from omop_core.signals import suppress_patient_record_refresh
@@ -126,6 +126,71 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 
 logger = logging.getLogger(__name__)
+
+
+_GENETIC_MUTATION_CODE = '36908-2'
+_GENETIC_MUTATION_SOURCE_PREFIX = 'promop-genetic-mutation:'
+_MUTATION_ORIGIN_CONCEPTS = {'germline': 255395001, 'somatic': 255461003}
+_MUTATION_INTERPRETATION_CONCEPTS = {
+    'pathogenic': 30166007, 'benign': 10828004, 'vus': 42425007,
+}
+
+
+def _write_genetic_mutations(person, mutations):
+    """Replace clinician-authored mutations with canonical OMOP Measurements.
+
+    ``PatientRecord.genetic_mutations`` is a projection, so accepting the UI
+    payload directly would make it disappear at the next refresh.  The generic
+    LOINC Gene mutations tested for question (Athena 45876022) is repeatable;
+    each answer retains its gene in ``qualifier_source_value``.
+    """
+    if not isinstance(mutations, list):
+        raise ValidationError({'genetic_mutations': 'Expected a list of mutations.'})
+
+    question = Concept.objects.filter(
+        vocabulary_id='LOINC', concept_code=_GENETIC_MUTATION_CODE,
+    ).first()
+    type_concept = Concept.objects.filter(
+        concept_id=CONCEPT_PATIENT_REPORTED_TYPE,
+    ).first()
+    if question is None or type_concept is None:
+        raise ValidationError({'genetic_mutations': 'Required OMOP vocabulary concepts are unavailable.'})
+    concepts_by_id = Concept.objects.in_bulk(
+        set(_MUTATION_ORIGIN_CONCEPTS.values()) | set(_MUTATION_INTERPRETATION_CONCEPTS.values()),
+        field_name='concept_id',
+    )
+
+    rows = []
+    for mutation in mutations:
+        if not isinstance(mutation, dict):
+            raise ValidationError({'genetic_mutations': 'Each mutation must be an object.'})
+        gene = str(mutation.get('gene') or '').strip().upper()
+        variant = str(mutation.get('mutation') or mutation.get('variant') or '').strip()
+        if not gene or not variant:
+            raise ValidationError({'genetic_mutations': 'Each mutation requires gene and mutation.'})
+        test_date = parse_date(str(mutation.get('test_date') or '')) or localdate()
+        origin = str(mutation.get('origin') or '').strip().lower()
+        interpretation = str(mutation.get('interpretation') or '').strip().lower()
+        rows.append(Measurement(
+            measurement_id=next_pk(Measurement, 'measurement_id'),
+            person=person,
+            measurement_concept=question,
+            measurement_date=test_date,
+            measurement_type_concept=type_concept,
+            value_as_string=variant[:60],
+            measurement_source_value=_GENETIC_MUTATION_CODE,
+            qualifier_source_value=gene[:50],
+            value_source_value=_GENETIC_MUTATION_SOURCE_PREFIX + gene,
+            qualifier_concept=concepts_by_id.get(_MUTATION_ORIGIN_CONCEPTS.get(origin)),
+            value_as_concept=concepts_by_id.get(_MUTATION_INTERPRETATION_CONCEPTS.get(interpretation)),
+        ))
+
+    Measurement.objects.filter(
+        person=person,
+        value_source_value__startswith=_GENETIC_MUTATION_SOURCE_PREFIX,
+    ).delete()
+    Measurement.objects.bulk_create(rows)
+    refresh_patient_record(person)
 
 
 class PatientRecordPagination(PageNumberPagination):
@@ -800,6 +865,13 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         # the provider UI PATCHes, and leaving the key in the body would 405 the
         # request below as a non-projection-owned field.
         patient_name, patch_data = _pop_patient_name(request.data)
+        mutations = patch_data.pop('genetic_mutations', None) if 'genetic_mutations' in patch_data else None
+        # The editor PATCHes the complete GET representation.  A projected
+        # mutation list carried back unchanged is therefore an autosave echo,
+        # not an instruction to replace its OMOP rows (and it may be empty
+        # before the vocabulary has been loaded).
+        if mutations == PatientRecordSerializer(patient_info).data.get('genetic_mutations'):
+            mutations = None
 
         echoed = _echoed_unchanged_fields(patient_info, patch_data)
         mapped_fields = sorted((set(patch_data) & PATIENT_RECORD_OMOP_MAPPED_FIELDS) - echoed)
@@ -843,6 +915,9 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         }
         with transaction.atomic():
             _apply_patient_name(person, patient_name)
+            if mutations is not None:
+                _write_genetic_mutations(person, mutations)
+                patient_info.refresh_from_db()
             serializer.save()
             _write_record_revisions(patient_info, previous_values, request)
 
@@ -1096,6 +1171,11 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
             })
 
         patient_name, patch_data = _pop_patient_name(request.data)
+        mutations = patch_data.pop('genetic_mutations', None) if 'genetic_mutations' in patch_data else None
+        # See the provider PATCH route: unchanged projected mutations are an
+        # autosave echo and must not require write vocabulary concepts.
+        if mutations == PatientRecordSerializer(patient_info).data.get('genetic_mutations'):
+            mutations = None
         echoed = _echoed_unchanged_fields(patient_info, patch_data)
         mapped_fields = sorted((set(patch_data) & PATIENT_RECORD_OMOP_MAPPED_FIELDS) - echoed)
         if mapped_fields:
@@ -1122,7 +1202,7 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_405_METHOD_NOT_ALLOWED,
             )
 
-        if not patch_data and 'patient_name' not in request.data:
+        if not patch_data and mutations is None and 'patient_name' not in request.data:
             return Response(
                 {'detail': 'Supply patient_name or a projection-owned PatientRecord field.'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1139,6 +1219,9 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         }
         with transaction.atomic():
             _apply_patient_name(person, patient_name)
+            if mutations is not None:
+                _write_genetic_mutations(person, mutations)
+                patient_info.refresh_from_db()
             serializer.save()
             _write_record_revisions(patient_info, previous_values, request)
 
