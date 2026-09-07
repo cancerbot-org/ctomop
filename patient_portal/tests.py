@@ -23136,17 +23136,16 @@ class VocabScopeAndSuggestedCodesTest(TestCase):
     mapping and that SUGGESTED_FIELD_CODES entries are correct."""
 
     def test_mesh_in_vocab_scope(self):
-        """MeSH must be loaded so concept 19138268 (Chromosome Aberrations)
-        is available for cytogenetic_markers (#803)."""
+        """MeSH remains available for the existing mapping-vocabulary scope."""
         from omop_core.management.commands.load_athena_vocabularies import VOCAB_SCOPE
         self.assertIn('MeSH', VOCAB_SCOPE)
 
-    def test_cytogenic_markers_suggested_code(self):
-        """cytogenic_markers should suggest MeSH D002869 (#803)."""
+    def test_cytogenetic_markers_suggested_code(self):
+        """Cytogenetic markers use a standard LOINC question concept (#1047)."""
         from omop_core.services.mappings import SUGGESTED_FIELD_CODES
-        code, vocab = SUGGESTED_FIELD_CODES['cytogenic_markers']
-        self.assertEqual(code, 'D002869')
-        self.assertEqual(vocab, 'MeSH')
+        code, vocab = SUGGESTED_FIELD_CODES['cytogenetic_markers']
+        self.assertEqual(code, '69548-6')
+        self.assertEqual(vocab, 'LOINC')
 
 
 # =============================================================================
