@@ -36,7 +36,9 @@ interface FieldDescriptor {
     reviewer: string | null;
     reviewed_at: string | null;
     notes: string;
+    candidate_count?: number;
   } | null;
+  candidate_count?: number;
   suggestion: {
     concept_code: string;
     vocabulary_id: string | null;
@@ -282,8 +284,9 @@ export default function FieldMappingPage() {
     }
   };
 
-  /** Render the concept cell content (code + status badge). */
+  /** Render the concept cell content (code + status badge + candidate count). */
   const renderConceptCell = (f: FieldDescriptor) => {
+    const candidateCount = f.mapping?.candidate_count ?? f.candidate_count ?? 0;
     if (f.mapping) {
       return (
         <span className="inline-flex items-center gap-1.5">
@@ -291,6 +294,14 @@ export default function FieldMappingPage() {
             <span className="font-mono">{f.mapping.concept_code}</span>
             {f.mapping.concept_name && <span className="ml-1 break-words text-gray-600">— {f.mapping.concept_name}</span>}
           </span>
+          {candidateCount > 0 && (
+            <span
+              className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+              title={`${candidateCount} SNOMED candidate concept${candidateCount !== 1 ? "s" : ""} from ICD-10 mapping`}
+            >
+              {candidateCount}
+            </span>
+          )}
           <span
             className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
               STATUS_BADGE[f.mapping.status] || "bg-gray-100"

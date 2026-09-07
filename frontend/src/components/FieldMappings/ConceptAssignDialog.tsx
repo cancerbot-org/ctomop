@@ -23,6 +23,13 @@ interface FieldChoiceInfo {
   codes: { code: string; vocabulary_id: string; display: string; is_primary: boolean }[];
 }
 
+interface CandidateResponse {
+  icd10_code: string;
+  total_in_file: number;
+  resolved: number;
+  candidates: ConceptResult[];
+}
+
 interface Props {
   fieldName: string;
   fieldType: string;
@@ -61,6 +68,8 @@ const TIP = {
     "The OMOP clinical table this field's data is stored in. Measurement for labs, Observation for clinical findings, etc.",
   search:
     "Search OMOP concepts by name or code. Suggest seeds the search from the field name.",
+  icd10_lookup:
+    "Enter an ICD-10 code to see all candidate SNOMED concepts from the ICD-10\u2192SNOMED mapping file. Pick one to select it.",
   unit:
     "The unit of measurement for this field, e.g. mg/dL, cells/uL.",
   notes:
@@ -108,6 +117,12 @@ export function ConceptAssignDialog({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
 
+  // ICD-10 candidate lookup state
+  const [icd10Code, setIcd10Code] = useState("");
+  const [icd10Loading, setIcd10Loading] = useState(false);
+  const [icd10Result, setIcd10Result] = useState<CandidateResponse | null>(null);
+  const icd10DebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const unitChoices = commonUnits || [];
   const hasCommonUnits = unitChoices.length > 0;
   const isCustomUnit = hasCommonUnits && unit !== "" && !unitChoices.includes(unit);
@@ -153,6 +168,34 @@ export function ConceptAssignDialog({
     debounceRef.current = setTimeout(() => doSearch(searchQuery), 300);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [searchQuery, doSearch]);
+
+  // ICD-10 candidate lookup
+  const doIcd10Lookup = useCallback(async (code: string) => {
+    const trimmed = code.trim();
+    if (!trimmed) {
+      setIcd10Result(null);
+      return;
+    }
+    setIcd10Loading(true);
+    try {
+      const resp = await api.get("/v1/concepts/candidates/", { params: { icd10_code: trimmed } });
+      setIcd10Result(resp.data);
+    } catch (err: unknown) {
+      if (err && typeof err === "object" && "response" in err) {
+        const status = (err as { response: { status: number } }).response?.status;
+        if (status === 401 || status === 403) throw err;
+      }
+      setIcd10Result(null);
+    } finally {
+      setIcd10Loading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (icd10DebounceRef.current) clearTimeout(icd10DebounceRef.current);
+    icd10DebounceRef.current = setTimeout(() => doIcd10Lookup(icd10Code), 400);
+    return () => { if (icd10DebounceRef.current) clearTimeout(icd10DebounceRef.current); };
+  }, [icd10Code, doIcd10Lookup]);
 
   const effectiveUnit = isCustomUnit ? customUnit || unit : unit;
 
@@ -209,6 +252,13 @@ export function ConceptAssignDialog({
     } else {
       setUnit(value);
       setCustomUnit("");
+    }
+  };
+
+  const handleSelectCandidate = (c: ConceptResult) => {
+    setSelected(c);
+    if (c.suggested_unit && !unit) {
+      setUnit(c.suggested_unit);
     }
   };
 
@@ -303,12 +353,7 @@ export function ConceptAssignDialog({
                   <button
                     key={c.concept_id}
                     type="button"
-                    onClick={() => {
-                      setSelected(c);
-                      if (c.suggested_unit && !unit) {
-                        setUnit(c.suggested_unit);
-                      }
-                    }}
+                    onClick={() => handleSelectCandidate(c)}
                     className={`grid w-full grid-cols-[8rem_1fr_6rem] gap-2 border-b border-slate-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-slate-50 ${
                       selected?.concept_id === c.concept_id ? "bg-blue-50" : ""
                     }`}
@@ -398,6 +443,66 @@ export function ConceptAssignDialog({
                 </select>
               </Field>
             </div>
+          </fieldset>
+
+          {/* ── ICD-10 CANDIDATE LOOKUP ─────────────────────────────── */}
+          <fieldset className="mb-4 rounded-md border border-blue-200 bg-blue-50/30 p-4">
+            <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-blue-600">
+              ICD-10 Candidate Lookup
+            </legend>
+            <div className="mb-2 flex items-center gap-1">
+              <label className="text-sm font-medium text-slate-700" htmlFor="icd10-code-input">
+                ICD-10 Code
+              </label>
+              <HelpTip tip={TIP.icd10_lookup} />
+            </div>
+            <input
+              id="icd10-code-input"
+              type="text"
+              placeholder="e.g. C50.911, A09, D47.1"
+              value={icd10Code}
+              onChange={(e) => setIcd10Code(e.target.value)}
+              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-blue-500"
+            />
+            {icd10Loading && (
+              <div className="mt-2 text-sm text-slate-500">Looking up candidates...</div>
+            )}
+            {!icd10Loading && icd10Result && (
+              <div className="mt-2">
+                <div className="mb-1 flex items-center gap-2 text-xs text-slate-600">
+                  <span className="font-medium">{icd10Result.icd10_code}</span>
+                  <span>{icd10Result.total_in_file} SNOMED mapping{icd10Result.total_in_file !== 1 ? "s" : ""} in file</span>
+                  <span>{icd10Result.resolved} resolved in local DB</span>
+                </div>
+                {icd10Result.candidates.length > 0 ? (
+                  <div className="max-h-48 overflow-y-auto rounded-md border border-blue-200 bg-white">
+                    {icd10Result.candidates.map((c) => (
+                      <button
+                        key={c.concept_id}
+                        type="button"
+                        onClick={() => handleSelectCandidate(c)}
+                        className={`grid w-full grid-cols-[6rem_1fr_5rem_4rem] gap-2 border-b border-slate-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-blue-50 ${
+                          selected?.concept_id === c.concept_id ? "bg-blue-100" : ""
+                        }`}
+                      >
+                        <span className="font-mono text-slate-700">{c.concept_id}</span>
+                        <span className="text-slate-900">{c.concept_name}</span>
+                        <span className="font-mono text-slate-500">{c.concept_code}</span>
+                        <span className="text-slate-400">{c.standard_concept === "S" ? "Std" : ""}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : icd10Result.total_in_file > 0 ? (
+                  <div className="rounded-md border border-dashed border-slate-300 px-3 py-1.5 text-xs text-slate-400">
+                    {icd10Result.total_in_file} SNOMED codes in the mapping file, but none are loaded in the local concept table.
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed border-slate-300 px-3 py-1.5 text-xs text-slate-400">
+                    No mappings found for this ICD-10 code.
+                  </div>
+                )}
+              </div>
+            )}
           </fieldset>
 
           {/* Unit */}
