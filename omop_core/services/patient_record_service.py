@@ -1021,7 +1021,16 @@ def _get_location_data(person: Person, snapshot: OmopSnapshot = None) -> dict:
 # Keyed by lowercased concept name; only exact matches are remapped, so
 # unrelated conditions pass through untouched.
 _DISEASE_ALIASES = {
-    'myeloma': 'multiple myeloma',
+    'myeloma': 'Multiple Myeloma',
+    'myeloma (disorder)': 'Multiple Myeloma',
+    'multiple myeloma': 'Multiple Myeloma',
+    'multiple myeloma (disorder)': 'Multiple Myeloma',
+    'follicular lymphoma': 'Follicular Lymphoma',
+    'follicular lymphoma (disorder)': 'Follicular Lymphoma',
+    'chronic lymphocytic leukemia': 'Chronic Lymphocytic Leukemia',
+    'chronic lymphocytic leukemia (disorder)': 'Chronic Lymphocytic Leukemia',
+    'mantle cell lymphoma': 'Mantle Cell Lymphoma',
+    'mantle cell lymphoma (disorder)': 'Mantle Cell Lymphoma',
     # Breast cancer — all common OMOP/SNOMED surface forms → single canonical title
     'breast cancer': 'Breast Cancer',
     'breast cancer (disorder)': 'Breast Cancer',

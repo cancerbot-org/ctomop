@@ -322,9 +322,9 @@ class CanonicalizeDiseaseTest(_OmopBase):
 
     def test_canonicalize_helper_maps_known_aliases(self):
         from omop_core.services.patient_record_service import _canonicalize_disease
-        self.assertEqual(_canonicalize_disease('myeloma'), 'multiple myeloma')
-        self.assertEqual(_canonicalize_disease('Myeloma'), 'multiple myeloma')
-        self.assertEqual(_canonicalize_disease('  MYELOMA  '), 'multiple myeloma')
+        self.assertEqual(_canonicalize_disease('myeloma'), 'Multiple Myeloma')
+        self.assertEqual(_canonicalize_disease('Myeloma'), 'Multiple Myeloma')
+        self.assertEqual(_canonicalize_disease('  MYELOMA  '), 'Multiple Myeloma')
         self.assertEqual(_canonicalize_disease('breast cancer'), 'Breast Cancer')
         self.assertEqual(_canonicalize_disease('Breast cancer'), 'Breast Cancer')
         self.assertEqual(_canonicalize_disease('Breast Cancer (disorder)'), 'Breast Cancer')
@@ -337,6 +337,39 @@ class CanonicalizeDiseaseTest(_OmopBase):
         self.assertEqual(_canonicalize_disease(''), '')
         self.assertIsNone(_canonicalize_disease(None))
 
+    def test_supported_disease_titles_are_consistent(self):
+        from omop_core.services.patient_record_service import _canonicalize_disease
+        for title in (
+            'Multiple Myeloma', 'Follicular Lymphoma', 'Breast Cancer',
+            'Chronic Lymphocytic Leukemia', 'Mantle Cell Lymphoma',
+        ):
+            for raw in (title, title.lower(), f'  {title.upper()}  ', f'{title.lower()} (disorder)'):
+                with self.subTest(raw=raw):
+                    self.assertEqual(_canonicalize_disease(raw), title)
+
+    def test_refresh_uses_canonical_titles_for_mapped_and_unmapped_conditions(self):
+        concept = _concept(90002, 'placeholder', self.dom_cond, self.vocab, self.cc)
+        condition = ConditionOccurrence.objects.create(
+            condition_occurrence_id=92204, person=self.person,
+            condition_concept=concept, condition_start_date=date(2022, 3, 1),
+            condition_type_concept=self.type_concept,
+        )
+        for title in (
+            'Multiple Myeloma', 'Follicular Lymphoma', 'Breast Cancer',
+            'Chronic Lymphocytic Leukemia', 'Mantle Cell Lymphoma',
+        ):
+            concept.concept_name = title.lower()
+            concept.save(update_fields=['concept_name'])
+            for mapped in (True, False):
+                with self.subTest(title=title, mapped=mapped):
+                    condition.condition_concept_id = concept.pk if mapped else 0
+                    condition.condition_source_value = title.lower()
+                    condition.save()
+                    record = refresh_patient_record(self.person)
+                    record.refresh_from_db()
+                    self.assertEqual(record.disease, title)
+                    self.assertEqual(record.disease_slug, title.lower().replace(' ', '-'))
+
     def test_refresh_canonicalizes_bare_myeloma_condition(self):
         myeloma_concept = _concept(90002, 'myeloma', self.dom_cond, self.vocab, self.cc)
         ConditionOccurrence.objects.create(
@@ -347,7 +380,7 @@ class CanonicalizeDiseaseTest(_OmopBase):
             condition_type_concept=self.type_concept,
         )
         pi = refresh_patient_record(self.person)
-        self.assertEqual(pi.disease, 'multiple myeloma')
+        self.assertEqual(pi.disease, 'Multiple Myeloma')
         self.assertEqual(pi.disease_slug, 'multiple-myeloma')
 
 
