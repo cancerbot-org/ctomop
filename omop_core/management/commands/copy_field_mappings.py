@@ -46,6 +46,7 @@ _TABLE_LABELS = {
     'choices': 'FieldChoice (+ codes)',
     'formulas': 'FieldFormula',
     'synonyms': 'FieldSynonym',
+    'code_mappings': 'SourceCodeConceptMapping',
 }
 
 
@@ -112,7 +113,10 @@ class Command(BaseCommand):
             '--tables', nargs='+', choices=TABLES, default=list(DEFAULT_TABLES),
             help=(
                 'Which tables to copy. Default: mappings and synonyms. '
-                'Related curation tables are available explicitly.'
+                'Related curation tables are available explicitly. '
+                'code_mappings is the separate /code-mappings screen '
+                '(SourceCodeConceptMapping); approved rows there steer '
+                'ingest, so it is never copied unless named.'
             ),
         )
         parser.add_argument(
