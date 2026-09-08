@@ -18,6 +18,10 @@ export interface PatientInfoBridgeProps
   extends Omit<PatientInfoProps, "apiClient" | "queryClient" | "apiBasePath">,
     BridgeConnectionProps {}
 
+// The default export is a Module Federation provider factory, not a component,
+// so this file can never take part in Fast Refresh: the host loads it through
+// `loadRemote`, and a refresh boundary here would have nothing to update.
+// eslint-disable-next-line react-refresh/only-export-components
 function PatientInfoBridgeRoot({
   baseUrl,
   apiBasePath = "/api",
