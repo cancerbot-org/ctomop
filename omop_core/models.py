@@ -8,6 +8,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex, OpClass
 from django.db.models.functions import Upper
 import re
+import uuid
 
 from pgvector.django import VectorField
 
@@ -4150,6 +4151,69 @@ class UmlsConcept(models.Model):
 
     class Meta:
         db_table = 'umls_concept'
+
+
+class SuggestRun(models.Model):
+    """One Suggest click: what it is working through, and how far it has got.
+
+    Suggest is queued rather than answered inside the request — a code costs
+    ~3.5s and a tab holds dozens, so the synchronous version could not finish
+    inside a gunicorn worker's timeout.  A queued job needs somewhere to report
+    from, and this is it.
+
+    A database row rather than Celery's own task metadata, for three reasons:
+    the progress counts have to survive a worker restart; the poll can land on
+    any gunicorn worker, so nothing process-local will do; and the inline
+    dispatcher a machine with no broker falls back to has no result backend to
+    write metadata into.  One row means one contract for both paths.
+
+    Rows are small and few — one per click — so nothing prunes them; they are
+    also the record of what a given suggestion model version was asked to do.
+    """
+    QUEUED = 'queued'
+    RUNNING = 'running'
+    SUCCESS = 'success'
+    FAILURE = 'failure'
+    STATES = [
+        (QUEUED, 'Queued'),
+        (RUNNING, 'Running'),
+        (SUCCESS, 'Success'),
+        (FAILURE, 'Failure'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # NULL means every vocabulary; '' is the Uncoded tab, which is a real tab
+    # and the one Suggest actually works on.
+    source_vocabulary_id = models.CharField(max_length=50, null=True, blank=True)
+    state = models.CharField(max_length=10, choices=STATES, default=QUEUED)
+
+    total = models.IntegerField(default=0)
+    # Split because retrieval is 67% of the run and finishes for every code
+    # before the first destination is written. Reporting only `done` would leave
+    # the progress bar at zero for two thirds of the wait.
+    retrieved = models.IntegerField(default=0)
+    done = models.IntegerField(default=0)
+    updated = models.IntegerField(default=0)
+    ranked = models.IntegerField(default=0)
+
+    strategy_counts = models.JSONField(default=dict, blank=True)
+    landed_in = models.JSONField(default=dict, blank=True)
+    model_version = models.CharField(max_length=20, blank=True, default='')
+    error = models.TextField(blank=True, default='')
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'suggest_run'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'SuggestRun {self.id} ({self.state} {self.done}/{self.total})'
 
 
 class ConceptEmbedding(models.Model):

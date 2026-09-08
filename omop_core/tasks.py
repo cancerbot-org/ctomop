@@ -33,3 +33,27 @@ def refresh_patient_record_task(person_id: int) -> dict[str, Any]:
         'derived_at': derived_at.isoformat() if derived_at else None,
         'derivation_version': getattr(record, 'derivation_version', None),
     }
+
+
+@shared_task(name='omop_core.suggest_mappings')
+def suggest_mappings_task(run_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Run one queued Code Mapping Suggest job.
+
+    Failures are recorded on the SuggestRun row rather than raised: the page
+    polls that row, so an exception that only reached the worker log would leave
+    the curator watching a progress bar that never moves.
+    """
+    from omop_core.services.suggest_jobs import execute_run
+    from omop_core.models import SuggestRun
+
+    execute_run(run_id, params)
+    run = SuggestRun.objects.filter(pk=run_id).first()
+    if run is None:
+        return {'run_id': run_id, 'state': 'missing'}
+    return {
+        'run_id': run_id,
+        'state': run.state,
+        'done': run.done,
+        'total': run.total,
+        'updated': run.updated,
+    }

@@ -2,9 +2,10 @@
 
 Covers:
 - UMLS CUI-bridge lookup (`umls_candidates`)
-- Vector similarity search (`vector_candidates`)
-- Waterfall orchestration (early exit, strategy filtering)
-- API endpoint strategy parameter validation
+- Vector reranking of a retrieved shortlist (`vector_rerank`)
+- Which queue rows a run is allowed to touch (`suggestable_mappings`)
+- Pipeline orchestration (UMLS early exit, strategy filtering)
+- API endpoint parameter validation
 """
 import pytest
 
@@ -19,21 +20,26 @@ from omop_core.models import (
 )
 from omop_core.services.mapping_suggestions import (
     ALL_STRATEGIES,
+    CANDIDATE_LIMIT,
     STRATEGY_LEXICAL,
     STRATEGY_UMLS,
     STRATEGY_VECTORS,
     VOCAB_TO_UMLS_ROOT,
     _UMLS_ROOT_TO_VOCAB,
+    suggestable_mappings,
     umls_candidates,
-    vector_candidates,
+    vector_rerank,
 )
 from omop_core.services.mapping_suggestions import suggest_mappings
+from omop_core.services.suggest_jobs import (
+    FakeDispatcher as FakeSuggestDispatcher,
+    InlineDispatcher as InlineSuggestDispatcher,
+    use_dispatcher as use_suggest_dispatcher,
+)
 from tests.factories import (
     ConceptClassFactory,
     ConceptFactory,
     DomainFactory,
-    MeasurementFactory,
-    PersonFactory,
     VocabularyFactory,
 )
 
@@ -67,6 +73,30 @@ def icd10cm_vocab():
 @pytest.fixture()
 def concept_class():
     return ConceptClassFactory(concept_class_id='Clinical Finding')
+
+
+@pytest.fixture()
+def measurement_domain():
+    return DomainFactory(domain_id='Measurement', domain_name='Measurement')
+
+
+@pytest.fixture()
+def loinc_vocab():
+    return VocabularyFactory(vocabulary_id='LOINC', vocabulary_name='LOINC')
+
+
+@pytest.fixture()
+def lab_class():
+    return ConceptClassFactory(concept_class_id='Lab Test')
+
+
+@pytest.fixture()
+def measurement_concept(measurement_domain, loinc_vocab, lab_class):
+    return ConceptFactory(
+        concept_id=3004501, concept_name='Glucose [Mass/volume] in Serum or Plasma',
+        concept_code='2345-7', vocabulary=loinc_vocab, domain=measurement_domain,
+        concept_class=lab_class, standard_concept='S',
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -238,34 +268,154 @@ class TestVocabToUmlsRootMapping:
 
 
 # ---------------------------------------------------------------------------
-# Vector tier tests
+# Helpers
 # ---------------------------------------------------------------------------
 
-class TestVectorCandidates:
-    """Test vector_candidates() — graceful degradation when not populated."""
+def queue_row(source_code, **kwargs):
+    """A Code Mapping queue row, the way ingest leaves one.
 
-    def test_empty_table_returns_empty(self, condition_domain):
-        """When concept_embedding is empty, vector search returns nothing."""
-        # Ensure the table exists (migration should have run).
+    Suggest reads the tab, so this — not a clinical row — is what puts a code
+    in front of it.
+    """
+    defaults = {
+        'source_vocabulary_id': '',
+        'source_code_description': '',
+        'domain_id': 'Measurement',
+        'omop_table': 'measurement',
+        'status': 'proposed',
+        'origin': 'import',
+        'origin_system': '',
+        'occurrence_count': 12,
+    }
+    defaults.update(kwargs)
+    return SourceCodeConceptMapping.objects.create(source_code=source_code, **defaults)
+
+
+# ---------------------------------------------------------------------------
+# Vector reranking
+# ---------------------------------------------------------------------------
+
+class TestVectorRerank:
+    """Reranking reorders a shortlist; it never invents or drops candidates."""
+
+    def _candidates(self, *concept_ids):
+        return [
+            {'concept_id': cid, 'concept_name': f'C{cid}', 'concept_code': str(cid),
+             'vocabulary_id': 'LOINC', 'concept_class_id': 'Lab Test',
+             'lexical_score': 0.5, 'retrieval': STRATEGY_LEXICAL}
+            for cid in concept_ids
+        ]
+
+    def test_no_embeddings_leaves_the_order_alone(self, condition_domain):
+        """concept_embedding is empty here, so retrieval order has to stand."""
         with connection.cursor() as cur:
             cur.execute(
-                "SELECT EXISTS ("
-                "  SELECT 1 FROM information_schema.tables "
-                "  WHERE table_name = 'concept_embedding'"
-                ")"
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'concept_embedding')"
             )
-            exists = cur.fetchone()[0]
-        if not exists:
-            pytest.skip('concept_embedding table not created yet')
+            if not cur.fetchone()[0]:
+                pytest.skip('concept_embedding table not created yet')
 
-        results = vector_candidates('hypertension', 'Condition')
-        assert results == []
+        candidates = self._candidates(1, 2, 3)
+        reranked, applied = vector_rerank('hypertension', candidates)
+        assert applied is False
+        assert [c['concept_id'] for c in reranked] == [1, 2, 3]
 
-    def test_short_query_returns_empty(self):
-        assert vector_candidates('ab', 'Condition') == []
+    def test_short_query_is_not_reranked(self):
+        assert vector_rerank('ab', self._candidates(1, 2))[1] is False
 
-    def test_blank_query_returns_empty(self):
-        assert vector_candidates('', 'Condition') == []
+    def test_blank_query_is_not_reranked(self):
+        assert vector_rerank('', self._candidates(1, 2))[1] is False
+
+    def test_a_single_candidate_needs_no_reranking(self):
+        """There is no order to change, and embedding costs a model load."""
+        assert vector_rerank('hypertension', self._candidates(1))[1] is False
+
+
+# ---------------------------------------------------------------------------
+# Which rows a run may touch
+# ---------------------------------------------------------------------------
+
+class TestSuggestableMappings:
+    """The candidate set is the tab, filtered by provenance and review state."""
+
+    def test_empty_provenance_is_eligible(self):
+        queue_row('UNCLAIMED')
+        assert [m.source_code for m in suggestable_mappings('measurement')] == ['UNCLAIMED']
+
+    def test_a_previous_suggestion_is_eligible(self):
+        """Only a Suggest run ever set it, so a better run may reset it."""
+        queue_row('MACHINE GUESS', origin_system='suggest v0.1')
+        assert [m.source_code for m in suggestable_mappings('measurement')] == ['MACHINE GUESS']
+
+    @pytest.mark.parametrize('provenance', ['HT-One', 'HT-FHIR', 'athena', 'hk-labs',
+                                            'open-wearables-seed', 'fhir-upload'])
+    def test_an_importer_row_is_left_alone(self, provenance):
+        """75,257 of staging's 85,318 rows. Their importer knew more than the
+        source text does, and re-deriving would cost a model call to make the
+        answer worse."""
+        queue_row('IMPORTED', origin_system=provenance)
+        assert suggestable_mappings('measurement') == []
+
+    def test_provenance_match_is_case_insensitive(self):
+        queue_row('SHOUTED', origin_system='Suggest v0.2')
+        assert len(suggestable_mappings('measurement')) == 1
+
+    def test_approved_is_a_decision(self):
+        queue_row('SIGNED OFF', status='approved')
+        assert suggestable_mappings('measurement') == []
+
+    def test_rejected_is_equally_a_decision(self):
+        """Re-proposing put it back at the front of the queue on every run,
+        where it spent a model call and created nothing."""
+        queue_row('TURNED DOWN', status='rejected')
+        assert suggestable_mappings('measurement') == []
+
+    def test_a_row_that_already_has_a_destination_is_skipped(self, measurement_concept):
+        queue_row('ANSWERED', target_concept=measurement_concept)
+        assert suggestable_mappings('measurement') == []
+
+    def test_resuggest_reaches_rows_that_already_have_one(self, measurement_concept):
+        """The only way a model-version bump reaches what the last one answered."""
+        queue_row('ANSWERED', target_concept=measurement_concept)
+        assert len(suggestable_mappings('measurement', resuggest=True)) == 1
+
+    def test_below_the_threshold_is_skipped(self):
+        """43% of unmapped source values appear exactly once."""
+        queue_row('SEEN ONCE', occurrence_count=1)
+        queue_row('SEEN OFTEN', occurrence_count=12)
+        codes = [m.source_code for m in suggestable_mappings('measurement', min_occurrences=10)]
+        assert codes == ['SEEN OFTEN']
+
+    def test_a_threshold_of_one_keeps_uncounted_rows(self):
+        """A seeded row can carry no count at all; comparing against 1 hides it."""
+        queue_row('NEVER COUNTED', occurrence_count=0)
+        assert len(suggestable_mappings('measurement', min_occurrences=1)) == 1
+
+    def test_the_busiest_code_comes_first(self):
+        queue_row('QUIET', occurrence_count=10)
+        queue_row('BUSY', occurrence_count=30)
+        assert suggestable_mappings('measurement')[0].source_code == 'BUSY'
+
+    def test_another_tab_is_not_touched(self):
+        queue_row('MINE', source_vocabulary_id='LOINC')
+        queue_row('THEIRS', source_vocabulary_id='RxNorm')
+        codes = [m.source_code for m in
+                 suggestable_mappings('measurement', source_vocabulary_id='LOINC')]
+        assert codes == ['MINE']
+
+    def test_the_icd10_tab_covers_its_merged_alias(self):
+        """HT-One sends ICD-10-CM-format codes under ICD10; Athena loads the
+        concepts under ICD10CM. Both are one tab."""
+        queue_row('A00.0', source_vocabulary_id='ICD10', omop_table='condition')
+        queue_row('A00.1', source_vocabulary_id='ICD10CM', omop_table='condition')
+        codes = {m.source_code for m in
+                 suggestable_mappings('condition', source_vocabulary_id='ICD10')}
+        assert codes == {'A00.0', 'A00.1'}
+
+    def test_another_table_is_not_touched(self):
+        queue_row('DRUGGY', omop_table='drug_exposure', domain_id='Drug')
+        assert suggestable_mappings('measurement') == []
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +423,7 @@ class TestVectorCandidates:
 # ---------------------------------------------------------------------------
 
 class TestSuggestAPIStrategies:
-    """Test strategy parameter validation on the suggest endpoint."""
+    """Test parameter validation on the suggest endpoint."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, django_user_model):
@@ -285,213 +435,282 @@ class TestSuggestAPIStrategies:
         api_client.force_authenticate(user=user)
         self.client = api_client
 
-    def test_invalid_strategy_name_rejected(self):
-        resp = self.client.post(
-            '/api/v1/code-mappings/suggest/',
-            data={
-                'source_vocabulary_id': 'ICD10CM',
-                'strategies': ['umls', 'bogus'],
-            },
-            format='json',
+    def _post(self, **payload):
+        payload.setdefault('source_vocabulary_id', 'ICD10CM')
+        return self.client.post(
+            '/api/v1/code-mappings/suggest/', data=payload, format='json',
         )
+
+    def test_invalid_strategy_name_rejected(self):
+        resp = self._post(strategies=['umls', 'bogus'])
         assert resp.status_code == 400
         assert 'bogus' in str(resp.data)
 
     def test_empty_strategies_rejected(self):
-        resp = self.client.post(
-            '/api/v1/code-mappings/suggest/',
-            data={
-                'source_vocabulary_id': 'ICD10CM',
-                'strategies': [],
-            },
-            format='json',
-        )
-        assert resp.status_code == 400
+        assert self._post(strategies=[]).status_code == 400
 
     def test_non_list_strategies_rejected(self):
+        assert self._post(strategies='umls').status_code == 400
+
+    def test_valid_strategies_accepted(self):
+        """Valid strategies don't cause a validation error."""
+        resp = self._post(strategies=['umls', 'lexical'], min_occurrences=99999)
+        assert resp.status_code == 202
+
+    def test_lexical_limit_must_be_a_number(self):
+        assert self._post(lexical_limit='lots').status_code == 400
+
+    def test_lexical_limit_is_capped(self):
+        """The shortlist goes into one prompt per source code, so an unbounded
+        value is an unbounded token bill."""
+        resp = self._post(lexical_limit=100000)
+        assert resp.status_code == 400
+        assert 'lexical_limit' in resp.data
+
+    def test_lexical_limit_reaches_the_runner(self):
+        with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
+            self._post(lexical_limit=5, min_occurrences=99999)
+        assert fake.calls[0][1]['lexical_limit'] == 5
+
+    def test_lexical_limit_defaults_when_absent(self):
+        with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
+            self._post(min_occurrences=99999)
+        assert fake.calls[0][1]['lexical_limit'] == CANDIDATE_LIMIT
+
+    def test_replace_requires_a_vocabulary(self):
         resp = self.client.post(
             '/api/v1/code-mappings/suggest/',
-            data={
-                'source_vocabulary_id': 'ICD10CM',
-                'strategies': 'umls',
-            },
+            data={'destination_vocabulary_id': 'HK-Labs', 'replace': True},
             format='json',
         )
         assert resp.status_code == 400
 
-    def test_valid_strategies_accepted(self):
-        """Valid strategies don't cause a validation error (may return 200/201)."""
-        resp = self.client.post(
-            '/api/v1/code-mappings/suggest/',
-            data={
-                'source_vocabulary_id': 'ICD10CM',
-                'strategies': ['umls', 'lexical'],
-                'min_occurrences': 99999,  # high threshold → no work
-            },
-            format='json',
+
+class TestSuggestRunLifecycle:
+    """The queued contract: 202 with a run id, then poll that run."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, django_user_model):
+        from rest_framework.test import APIClient
+        self.user = django_user_model.objects.create_user(
+            email='runs@test.com', password='pass', is_staff=True,
         )
-        # 200 = no mappings created (expected with high threshold), not 400.
-        assert resp.status_code in (200, 201)
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def _post(self, **payload):
+        payload.setdefault('source_vocabulary_id', '')
+        return self.client.post(
+            '/api/v1/code-mappings/suggest/', data=payload, format='json',
+        )
+
+    def test_post_returns_202_and_a_run_id(self):
+        with use_suggest_dispatcher(FakeSuggestDispatcher()):
+            resp = self._post(min_occurrences=1)
+        assert resp.status_code == 202
+        assert resp.data['run_id']
+        assert resp.data['state'] == 'queued'
+
+    def test_the_total_is_known_before_any_work_runs(self):
+        """The strip needs a denominator on its first poll, not a bar filling
+        against a moving total."""
+        queue_row('ONE', occurrence_count=12)
+        queue_row('TWO', occurrence_count=12)
+        with use_suggest_dispatcher(FakeSuggestDispatcher()):
+            resp = self._post(min_occurrences=1)
+        assert resp.data['total'] == 2
+
+    def test_the_run_is_dispatched_with_the_tab_it_was_asked_for(self):
+        with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
+            self._post(source_vocabulary_id='LOINC', min_occurrences=1)
+        assert fake.calls[0][1]['source_vocabulary_id'] == 'LOINC'
+
+    def test_progress_is_pollable_by_run_id(self):
+        with use_suggest_dispatcher(FakeSuggestDispatcher()):
+            resp = self._post(min_occurrences=1)
+        run_id = resp.data['run_id']
+        poll = self.client.get(f'/api/v1/code-mappings/suggest-runs/{run_id}/')
+        assert poll.status_code == 200
+        assert poll.data['run_id'] == run_id
+        assert poll.data['state'] == 'queued'
+
+    def test_an_unknown_run_is_404_not_a_stuck_bar(self):
+        import uuid as _uuid
+        resp = self.client.get(f'/api/v1/code-mappings/suggest-runs/{_uuid.uuid4()}/')
+        assert resp.status_code == 404
+
+    def test_polling_needs_the_same_permission_as_running(self):
+        from rest_framework.test import APIClient
+        with use_suggest_dispatcher(FakeSuggestDispatcher()):
+            run_id = self._post(min_occurrences=1).data['run_id']
+        outsider = APIClient()
+        assert outsider.get(
+            f'/api/v1/code-mappings/suggest-runs/{run_id}/'
+        ).status_code in (401, 403)
+
+    def test_the_inline_path_finishes_before_it_answers(self, measurement_concept):
+        """A machine with no broker runs it in the request. Same wire contract,
+        so the page needs one code path either way."""
+        # On the Uncoded tab, which is the tab _post asks for and the one
+        # Suggest actually works on.
+        queue_row('2345-7')
+        with use_suggest_dispatcher(InlineSuggestDispatcher()):
+            resp = self._post(min_occurrences=1)
+        assert resp.status_code == 202
+        assert resp.data['state'] == 'success'
+        assert resp.data['total'] == 1
+
+    def test_a_failure_lands_on_the_row_not_in_a_worker_log(self, monkeypatch):
+        """The page polls the row; an exception that only reached the log would
+        leave the curator watching a bar that never moves."""
+        queue_row('BOOM')
+
+        def explode(*args, **kwargs):
+            raise RuntimeError('retrieval exploded')
+
+        monkeypatch.setattr(
+            'omop_core.mapping.suggestions.lexical_candidates', explode,
+        )
+        with use_suggest_dispatcher(InlineSuggestDispatcher()):
+            resp = self._post(min_occurrences=1)
+        assert resp.status_code == 202
+        assert resp.data['state'] == 'failure'
+        assert 'retrieval exploded' in resp.data['error']
+
+    def test_progress_is_reported_as_the_run_moves(self, measurement_concept):
+        """suggest_mappings reports retrieval and writing separately, because
+        retrieval is two thirds of the wait and finishes first."""
+        queue_row('2345-7', source_vocabulary_id='LOINC')
+        queue_row('OTHER CODE', source_vocabulary_id='LOINC')
+        seen = []
+        suggest_mappings(
+            'measurement', min_occurrences=1, strategies=['lexical'], dry_run=True,
+            progress=lambda stage, done, total: seen.append((stage, done, total)),
+        )
+        assert ('retrieving', 0, 2) in seen
+        assert ('retrieving', 2, 2) in seen
+        assert ('writing', 2, 2) in seen
+        # Retrieval must be fully reported before the first write is.
+        assert seen.index(('retrieving', 2, 2)) < seen.index(('writing', 1, 2))
 
 
 # ---------------------------------------------------------------------------
-# Waterfall integration tests
+# Pipeline integration tests
 # ---------------------------------------------------------------------------
 
-class TestWaterfallIntegration:
-    """End-to-end: unmapped rows → suggest_mappings → correct strategy chosen."""
+class TestPipelineIntegration:
+    """End-to-end: queue rows → suggest_mappings → correct strategy chosen."""
 
     @pytest.fixture()
-    def measurement_domain(self):
-        return DomainFactory(domain_id='Measurement', domain_name='Measurement')
-
-    @pytest.fixture()
-    def loinc_vocab(self):
-        return VocabularyFactory(vocabulary_id='LOINC', vocabulary_name='LOINC')
-
-    @pytest.fixture()
-    def lab_class(self):
-        return ConceptClassFactory(concept_class_id='Lab Test')
-
-    @pytest.fixture()
-    def zero_concept(self, measurement_domain, lab_class):
-        """The concept_id=0 placeholder for unmapped rows."""
-        return ConceptFactory(
-            concept_id=0,
-            concept_name='No matching concept',
-            concept_code='0',
-            vocabulary=VocabularyFactory(vocabulary_id='None', vocabulary_name='None'),
-            domain=measurement_domain,
-            concept_class=lab_class,
-            standard_concept=None,
-        )
-
-    @pytest.fixture()
-    def unmapped_measurements(self, zero_concept, loinc_vocab):
-        """Create 10+ measurement rows at concept_id=0 with the same source value.
-
-        The source_vocabulary_id comes from the source_concept FK; when that
-        FK is 0, unmapped_source_values infers vocabulary_id=''.
-        We set measurement_source_concept to a LOINC concept so the pipeline
-        knows the vocabulary.
-        """
-        person = PersonFactory()
-        loinc_source_concept = ConceptFactory(
-            concept_name='Glucose [Mass/volume] in Serum',
-            concept_code='2345-7',
-            vocabulary=loinc_vocab,
-            standard_concept=None,  # source concept, not standard
-        )
-        for _ in range(12):
-            MeasurementFactory(
-                person=person,
-                measurement_concept=zero_concept,
-                measurement_source_value='2345-7',
-                measurement_source_concept=loinc_source_concept,
-            )
-
-    def test_umls_strategy_resolves_and_skips_lexical(
-        self, unmapped_measurements, umls_release,
-        measurement_domain, loinc_vocab, lab_class,
-    ):
-        """When UMLS finds a single standard concept, lexical is never needed."""
-        # Set up UMLS bridge: LOINC 2345-7 → CUI → LOINC standard concept
+    def glucose_bridge(self, umls_release, measurement_domain, loinc_vocab, lab_class):
+        """LOINC 2345-7 → CUI → a standard SNOMED concept."""
         cui = UmlsConcept.objects.create(
-            cui='C0017725', preferred_name='Glucose measurement',
-            release=umls_release,
+            cui='C0017725', preferred_name='Glucose measurement', release=umls_release,
         )
         UmlsSourceCode.objects.create(
             concept=cui, root_source='LNC', code='2345-7',
             term_type='PT', name='Glucose [Mass/volume] in Serum or Plasma',
+            is_preferred=True,
         )
-        # Sibling in SNOMED
         snomed_vocab = VocabularyFactory(vocabulary_id='SNOMED', vocabulary_name='SNOMED')
-        snomed_concept = ConceptFactory(
-            concept_id=4144235,
-            concept_name='Glucose measurement',
-            concept_code='33747003',
-            vocabulary=snomed_vocab,
-            domain=measurement_domain,
-            concept_class=lab_class,
-            standard_concept='S',
+        concept = ConceptFactory(
+            concept_id=4144235, concept_name='Glucose measurement',
+            concept_code='33747003', vocabulary=snomed_vocab,
+            domain=measurement_domain, concept_class=lab_class, standard_concept='S',
         )
         UmlsSourceCode.objects.create(
             concept=cui, root_source='SNOMEDCT_US', code='33747003',
             term_type='PT', name='Glucose measurement',
         )
+        return concept
 
-        results = suggest_mappings(
-            'measurement',
-            min_occurrences=10,
-            strategies=['umls'],
-            dry_run=True,
-        )
+    def test_umls_resolves_without_a_model_call(self, glucose_bridge):
+        """A single NLM-curated equivalency is the answer; ranking it would be
+        four seconds spent to agree."""
+        queue_row('2345-7', source_vocabulary_id='LOINC')
 
-        assert len(results) >= 1
+        results = suggest_mappings('measurement', min_occurrences=10,
+                                   strategies=['umls'], dry_run=True)
+
+        assert len(results) == 1
         r = results[0]
-        assert r['strategy_used'] == 'umls'
-        assert r['umls_cui'] is not None
-        assert r['suggested'] is not None
-        assert r['suggested']['concept_id'] == 4144235
+        assert r['strategy_used'] == STRATEGY_UMLS
+        assert r['umls_cui'] == 'C0017725'
+        assert r['suggested']['concept_id'] == glucose_bridge.concept_id
 
-    def test_lexical_only_when_umls_disabled(
-        self, unmapped_measurements, umls_release,
-        measurement_domain, loinc_vocab, lab_class,
-    ):
-        """With UMLS unchecked, even if UMLS data exists, lexical is used."""
-        # Set up the same UMLS bridge data.
-        cui = UmlsConcept.objects.create(
-            cui='C0017726', preferred_name='Glucose',
-            release=umls_release,
-        )
-        UmlsSourceCode.objects.create(
-            concept=cui, root_source='LNC', code='2345-7',
-            term_type='PT', name='Glucose',
-        )
-        snomed_vocab = VocabularyFactory(vocabulary_id='SNOMED', vocabulary_name='SNOMED')
-        ConceptFactory(
-            concept_id=4144236,
-            concept_name='Glucose measurement serum',
-            concept_code='33747004',
-            vocabulary=snomed_vocab,
-            domain=measurement_domain,
-            concept_class=lab_class,
-            standard_concept='S',
-        )
-        UmlsSourceCode.objects.create(
-            concept=cui, root_source='SNOMEDCT_US', code='33747004',
-            term_type='PT', name='Glucose measurement serum',
-        )
+    def test_umls_data_is_ignored_when_the_strategy_is_off(self, glucose_bridge):
+        queue_row('2345-7', source_vocabulary_id='LOINC')
 
-        # Run with only lexical — UMLS data exists but won't be consulted.
-        results = suggest_mappings(
-            'measurement',
-            min_occurrences=10,
-            strategies=['lexical'],
-            dry_run=True,
-        )
+        results = suggest_mappings('measurement', min_occurrences=10,
+                                   strategies=['lexical'], dry_run=True)
 
-        assert len(results) >= 1
-        r = results[0]
-        # strategy_used will be 'lexical' or None (if no lexical match).
-        # Crucially it will NOT be 'umls'.
-        assert r['strategy_used'] != 'umls'
+        assert len(results) == 1
+        assert results[0]['strategy_used'] != STRATEGY_UMLS
 
-    def test_no_strategies_selected_returns_no_suggestion(
-        self, unmapped_measurements, measurement_domain,
-    ):
-        """With an empty strategy list, nothing is suggested."""
-        results = suggest_mappings(
-            'measurement',
-            min_occurrences=10,
-            strategies=[],
-            dry_run=True,
-        )
+    def test_no_strategies_selected_suggests_nothing(self):
+        queue_row('2345-7', source_vocabulary_id='LOINC')
 
-        assert len(results) >= 1
-        for r in results:
-            assert r['suggested'] is None
-            assert r['strategy_used'] is None
+        results = suggest_mappings('measurement', min_occurrences=10,
+                                   strategies=[], dry_run=True)
+
+        assert len(results) == 1
+        assert results[0]['suggested'] is None
+        assert results[0]['strategy_used'] is None
+        assert results[0]['note'] == 'No candidate concept found by any enabled strategy.'
+
+    def test_a_run_writes_onto_the_existing_row(self, glucose_bridge):
+        """No row is created: ingest made it, Suggest fills in the destination."""
+        row = queue_row('2345-7', source_vocabulary_id='LOINC')
+        before = SourceCodeConceptMapping.objects.count()
+
+        results = suggest_mappings('measurement', min_occurrences=10,
+                                   strategies=['umls'])
+
+        assert SourceCodeConceptMapping.objects.count() == before
+        assert results[0]['updated'] is True
+        assert results[0]['mapping_id'] == row.id
+        row.refresh_from_db()
+        assert row.target_concept_id == glucose_bridge.concept_id
+        assert row.suggested_target_concept_id == glucose_bridge.concept_id
+        assert row.origin_system.startswith('suggest ')
+        assert row.suggest_strategy == STRATEGY_UMLS
+        assert row.umls_cui == 'C0017725'
+        assert row.status == 'proposed', 'a machine guess is not a decision'
+
+    def test_the_occurrence_count_survives_a_run(self, glucose_bridge):
+        """Replace used to delete the row, taking its count and first_seen."""
+        row = queue_row('2345-7', source_vocabulary_id='LOINC', occurrence_count=417)
+        suggest_mappings('measurement', min_occurrences=10, strategies=['umls'])
+        row.refresh_from_db()
+        assert row.occurrence_count == 417
+
+    def test_dry_run_writes_nothing(self, glucose_bridge):
+        row = queue_row('2345-7', source_vocabulary_id='LOINC')
+        suggest_mappings('measurement', min_occurrences=10,
+                         strategies=['umls'], dry_run=True)
+        row.refresh_from_db()
+        assert row.target_concept_id is None
+        assert row.origin_system == ''
+
+    def test_an_importer_row_is_never_rewritten(self, glucose_bridge):
+        row = queue_row('2345-7', source_vocabulary_id='LOINC', origin_system='HT-One')
+        results = suggest_mappings('measurement', min_occurrences=10, strategies=['umls'])
+        assert results == []
+        row.refresh_from_db()
+        assert row.origin_system == 'HT-One'
+        assert row.target_concept_id is None
+
+    def test_an_unmatchable_code_keeps_no_destination(self, measurement_domain,
+                                                      loinc_vocab, lab_class):
+        """A raw code is evidence, not a meaningful HK-* concept name."""
+        row = queue_row('ZZQQ NOTHING LIKE THIS', source_vocabulary_id='LOINC')
+        suggest_mappings('measurement', min_occurrences=10)
+        row.refresh_from_db()
+        assert row.target_concept_id is None
+        assert row.destination_vocabulary_id == ''
+        assert not Concept.objects.filter(
+            vocabulary_id='HK-Labs', concept_name='ZZQQ NOTHING LIKE THIS',
+        ).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -501,152 +720,89 @@ class TestWaterfallIntegration:
 class TestSourceEnrichment:
     """Verify suggest_mappings persists source-side metadata on SCCM rows."""
 
-    @pytest.fixture()
-    def measurement_domain(self):
-        return DomainFactory(domain_id='Measurement')
-
-    @pytest.fixture()
-    def loinc_vocab(self):
-        return VocabularyFactory(vocabulary_id='LOINC', vocabulary_name='LOINC')
-
-    @pytest.fixture()
-    def lab_class(self):
-        return ConceptClassFactory(concept_class_id='Lab Test')
-
-    @pytest.fixture()
-    def zero_concept(self, measurement_domain, loinc_vocab, lab_class):
-        return ConceptFactory(
-            concept_id=0, concept_name='No matching concept',
-            concept_code='0', vocabulary=loinc_vocab,
-            domain=measurement_domain, concept_class=lab_class,
-        )
-
-    @pytest.fixture()
-    def unmapped_glucose(self, zero_concept, loinc_vocab, measurement_domain, lab_class):
-        """12 unmapped measurement rows with LOINC source concept."""
-        person = PersonFactory()
-        loinc_source_concept = ConceptFactory(
-            concept_name='Glucose [Mass/volume] in Serum',
-            concept_code='2345-7',
-            vocabulary=loinc_vocab,
-            standard_concept=None,
-        )
-        for _ in range(12):
-            MeasurementFactory(
-                person=person,
-                measurement_concept=zero_concept,
-                measurement_source_value='2345-7',
-                measurement_source_concept=loinc_source_concept,
-            )
-        return loinc_source_concept
-
     def test_persists_source_concept_and_umls_name(
-        self, unmapped_glucose, measurement_domain, loinc_vocab, lab_class,
+        self, umls_release, measurement_domain, loinc_vocab, lab_class,
     ):
-        """Non-dry-run stores source_concept and umls_source_name on SCCM."""
-        umls_release = UmlsRelease.objects.create(release_version='2024AB')
+        loinc_source_concept = ConceptFactory(
+            concept_name='Glucose [Mass/volume] in Serum', concept_code='2345-7',
+            vocabulary=loinc_vocab, domain=measurement_domain,
+            concept_class=lab_class, standard_concept=None,
+        )
         cui = UmlsConcept.objects.create(
-            cui='C0017725', preferred_name='Glucose measurement',
-            release=umls_release,
+            cui='C0017725', preferred_name='Glucose measurement', release=umls_release,
         )
         UmlsSourceCode.objects.create(
-            concept=cui, root_source='LNC', code='2345-7',
-            term_type='PT', name='Glucose [Mass/volume] in Serum or Plasma',
-            is_preferred=True,
+            concept=cui, root_source='LNC', code='2345-7', term_type='PT',
+            name='Glucose [Mass/volume] in Serum or Plasma', is_preferred=True,
         )
         snomed_vocab = VocabularyFactory(vocabulary_id='SNOMED', vocabulary_name='SNOMED')
-        snomed_concept = ConceptFactory(
-            concept_id=4144237,
-            concept_name='Glucose measurement',
-            concept_code='33747005',
-            vocabulary=snomed_vocab,
-            domain=measurement_domain,
-            concept_class=lab_class,
-            standard_concept='S',
+        ConceptFactory(
+            concept_id=4144237, concept_name='Glucose measurement',
+            concept_code='33747005', vocabulary=snomed_vocab,
+            domain=measurement_domain, concept_class=lab_class, standard_concept='S',
         )
         UmlsSourceCode.objects.create(
             concept=cui, root_source='SNOMEDCT_US', code='33747005',
             term_type='PT', name='Glucose measurement',
         )
+        queue_row('2345-7', source_vocabulary_id='LOINC')
 
-        results = suggest_mappings(
-            'measurement',
-            min_occurrences=10,
-            strategies=['umls'],
-            dry_run=False,
-        )
+        results = suggest_mappings('measurement', min_occurrences=10,
+                                   strategies=['umls'], dry_run=False)
 
-        assert len(results) >= 1
-        r = results[0]
-        assert r['created'] is True
-
-        mapping = SourceCodeConceptMapping.objects.get(id=r['mapping_id'])
-        # source_concept should be the LOINC concept for 2345-7
-        assert mapping.source_concept == unmapped_glucose
+        assert results[0]['updated'] is True
+        mapping = SourceCodeConceptMapping.objects.get(id=results[0]['mapping_id'])
+        assert mapping.source_concept == loinc_source_concept
         assert mapping.umls_source_name == 'Glucose [Mass/volume] in Serum or Plasma'
 
     def test_umls_name_used_as_description_fallback(
-        self, zero_concept, measurement_domain, loinc_vocab, lab_class,
+        self, umls_release, measurement_domain, loinc_vocab, lab_class,
     ):
-        """When OMOP concept has no name but UMLS does, UMLS name fills description."""
-        # Create a source concept with an empty name — the vocabulary is needed
-        # for unmapped_source_values to resolve src_vocab_id, but the concept
-        # name is blank so source_description starts empty.
-        nameless_source = ConceptFactory(
-            concept_name='',
-            concept_code='99999-9',
-            vocabulary=loinc_vocab,
-            domain=measurement_domain,
-            concept_class=lab_class,
-            standard_concept=None,
-        )
-        person = PersonFactory()
-        for _ in range(12):
-            MeasurementFactory(
-                person=person,
-                measurement_concept=zero_concept,
-                measurement_source_value='99999-9',
-                measurement_source_concept=nameless_source,
-            )
-
-        umls_release = UmlsRelease.objects.create(release_version='2024AC')
+        """No OMOP concept and no importer description, but UMLS has a name."""
         cui = UmlsConcept.objects.create(
-            cui='C9999999', preferred_name='Fictional analyte',
-            release=umls_release,
+            cui='C9999999', preferred_name='Fictional analyte', release=umls_release,
         )
         UmlsSourceCode.objects.create(
-            concept=cui, root_source='LNC', code='99999-9',
-            term_type='PT', name='Fictional Analyte Level in Serum',
-            is_preferred=True,
+            concept=cui, root_source='LNC', code='99999-9', term_type='PT',
+            name='Fictional Analyte Level in Serum', is_preferred=True,
         )
         snomed_vocab = VocabularyFactory(vocabulary_id='SNOMED', vocabulary_name='SNOMED')
         ConceptFactory(
-            concept_id=9999998,
-            concept_name='Fictional analyte measurement',
-            concept_code='99999998',
-            vocabulary=snomed_vocab,
-            domain=measurement_domain,
-            concept_class=lab_class,
-            standard_concept='S',
+            concept_id=9999998, concept_name='Fictional analyte measurement',
+            concept_code='99999998', vocabulary=snomed_vocab,
+            domain=measurement_domain, concept_class=lab_class, standard_concept='S',
         )
         UmlsSourceCode.objects.create(
             concept=cui, root_source='SNOMEDCT_US', code='99999998',
             term_type='PT', name='Fictional analyte measurement',
         )
+        queue_row('99999-9', source_vocabulary_id='LOINC')
 
-        results = suggest_mappings(
-            'measurement',
-            min_occurrences=10,
-            strategies=['umls'],
-            dry_run=False,
-        )
+        results = suggest_mappings('measurement', min_occurrences=10,
+                                   strategies=['umls'], dry_run=False)
 
-        hit = next((r for r in results if r['source_code'] == '99999-9'), None)
-        assert hit is not None
-        mapping = SourceCodeConceptMapping.objects.get(id=hit['mapping_id'])
-        # UMLS name should be used as the description fallback
-        assert mapping.source_code_description == 'Fictional Analyte Level in Serum'[:255]
+        mapping = SourceCodeConceptMapping.objects.get(id=results[0]['mapping_id'])
+        assert mapping.source_code_description == 'Fictional Analyte Level in Serum'
         assert mapping.umls_source_name == 'Fictional Analyte Level in Serum'
+
+    def test_a_curator_description_is_not_overwritten(
+        self, umls_release, measurement_domain, loinc_vocab, lab_class,
+    ):
+        """These describe the code, not the suggestion."""
+        cui = UmlsConcept.objects.create(
+            cui='C0017725', preferred_name='Glucose', release=umls_release,
+        )
+        UmlsSourceCode.objects.create(
+            concept=cui, root_source='LNC', code='2345-7', term_type='PT',
+            name='Glucose [Mass/volume] in Serum or Plasma', is_preferred=True,
+        )
+        queue_row('2345-7', source_vocabulary_id='LOINC',
+                  source_code_description='What the lab actually calls it')
+
+        suggest_mappings('measurement', min_occurrences=10, strategies=['umls'])
+
+        mapping = SourceCodeConceptMapping.objects.get(source_code='2345-7')
+        assert mapping.source_code_description == 'What the lab actually calls it'
 
 
 # ---------------------------------------------------------------------------

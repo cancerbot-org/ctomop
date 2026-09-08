@@ -27,7 +27,7 @@ from django.core.validators import validate_email
 from omop_core.models import (
     Organization,
     Person, PatientRecord, Concept, ConceptClass, Domain, ProvenanceRecord, Vocabulary,
-    SourceCodeConceptMapping, UmlsSourceCode,
+    SourceCodeConceptMapping, SuggestRun, UmlsSourceCode,
     ConditionOccurrence, DrugExposure, Measurement, MeasurementOwnership,
     Observation, ProcedureOccurrence, VisitOccurrence, VisitDetail, Location, Death,
     PatientDocument, PatientTrialEnrollment, PatientGroupMembership,
@@ -79,12 +79,15 @@ from omop_core.mapping.code_resolution import (
 )
 from omop_core.mapping.suggestions import (
     ALL_STRATEGIES,
+    CANDIDATE_LIMIT,
     DEFAULT_MIN_OCCURRENCES,
+    LEXICAL_LIMIT_MAX,
     SUGGESTION_MODEL_VERSION,
     VOCAB_TO_UMLS_ROOT,
     suggest_one_mapping,
-    suggest_mappings,
+    suggestable_mappings,
 )
+from omop_core.services.suggest_jobs import get_dispatcher as get_suggest_dispatcher
 from omop_core.services.write_descriptor import mapping_table_is_writable
 from omop_core.services import source_vocabularies
 from omop_core.mapping.therapy import (
@@ -9692,15 +9695,23 @@ def code_mapping_detail(request, mapping_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def code_mapping_suggest(request):
-    """Propose mappings for unmapped source codes in one source vocabulary.
+    """Queue a Suggest run for the unanswered queue rows on one source tab.
+
+    Returns ``202`` with a ``run_id``; the page polls
+    ``/v1/code-mappings/suggest-runs/<run_id>/`` for progress.  It is queued
+    rather than answered here because a code costs ~3.5s and a tab holds dozens,
+    which does not fit a gunicorn worker's timeout — production runs bare
+    gunicorn, whose default is 30s.
 
     Accepts ``source_vocabulary_id`` (new) or ``destination_vocabulary_id``
-    (legacy, deprecated). The source vocabulary determines which clinical
-    tables to scan for concept-0 rows.
+    (legacy, deprecated).
 
-    Defaults to codes seen ten or more times. Staging has 10,483 distinct
-    unmapped source values and 43% of them appear exactly once, so proposing
-    for everything would bury the 512 that carry the traffic.
+    The candidate set is the tab itself: mappings whose provenance is empty or
+    begins with ``suggest`` and which have no destination yet.  It is not a scan
+    of the clinical tables — that grouped a whole table per request, cost 4-7s
+    each, and by the time ingest was queueing every code it met it returned
+    nothing on the tabs with an actual backlog.  ``manage.py
+    enqueue_unmapped_source_codes`` does that scan as a batch job.
     """
     if not _can_manage_field_mappings(request.user):
         return Response({'detail': 'Organization admin access required.'}, status=status.HTTP_403_FORBIDDEN)
@@ -9736,19 +9747,30 @@ def code_mapping_suggest(request):
                         status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        limit = int(request.data.get('limit') or SUGGEST_MAX_PER_CALL)
+        limit = int(request.data.get('limit') or SUGGEST_MAX_PER_RUN)
     except (TypeError, ValueError):
         return Response({'limit': 'Enter a whole number.'},
                         status=status.HTTP_400_BAD_REQUEST)
     if limit < 1:
         return Response({'limit': 'Must be at least 1.'},
                         status=status.HTTP_400_BAD_REQUEST)
-    limit = min(limit, SUGGEST_MAX_PER_CALL)
+    limit = min(limit, SUGGEST_MAX_PER_RUN)
+
+    # How many trigram survivors reach the reranker and the ranker's prompt.
+    # Capped, because the shortlist is sent in one prompt per source code.
+    try:
+        lexical_limit = int(request.data.get('lexical_limit') or CANDIDATE_LIMIT)
+    except (TypeError, ValueError):
+        return Response({'lexical_limit': 'Enter a whole number.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    if not 1 <= lexical_limit <= LEXICAL_LIMIT_MAX:
+        return Response({'lexical_limit': f'Must be between 1 and {LEXICAL_LIMIT_MAX}.'},
+                        status=status.HTTP_400_BAD_REQUEST)
 
     dry_run = bool(request.data.get('dry_run'))
     replace = bool(request.data.get('replace'))
 
-    # Retrieval strategies (new: multi-strategy waterfall).
+    # Retrieval strategies.
     raw_strategies = request.data.get('strategies')
     if raw_strategies is not None:
         if not isinstance(raw_strategies, list):
@@ -9769,67 +9791,79 @@ def code_mapping_suggest(request):
             )
         strategies = raw_strategies
     else:
-        strategies = None  # suggest_mappings() defaults to all
+        strategies = list(ALL_STRATEGIES)
 
-    # Replace mode: delete existing proposed suggestions so they get re-suggested.
-    replaced = 0
-    if replace and not dry_run:
-        if not source_vocab:
-            return Response(
-                {'replace': 'replace requires source_vocabulary_id.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        with transaction.atomic():
-            qs = SourceCodeConceptMapping.objects.filter(
-                status='proposed',
-                suggestion_model_version__gt='',
-                source_vocabulary_id=source_vocab,
-            )
-            _, deleted_counts = qs.delete()
-            replaced = sum(deleted_counts.values())
-
-    # Multi-table: scan each relevant table, merge results by occurrence.
-    all_results = []
-    for tbl in tables:
-        tbl_results = suggest_mappings(
-            tbl, min_occurrences=min_occurrences, limit=limit,
-            dry_run=dry_run,
-            source_vocabulary_id=source_vocab,
-            strategies=strategies,
+    # Replace mode re-answers rows a previous run already answered, rather than
+    # deleting them. Deleting was right while the candidate set came from a scan
+    # of the clinical tables, which would find the code again and recreate the
+    # row. Now that Suggest reads the tab, a deleted row is a code that has left
+    # the queue for good, taking its occurrence count and first_seen with it.
+    if replace and source_vocab is None:
+        return Response(
+            {'replace': 'replace requires source_vocabulary_id.'},
+            status=status.HTTP_400_BAD_REQUEST,
         )
-        all_results.extend(tbl_results)
 
-    # Sort by occurrence descending, take top `limit`.
-    all_results.sort(key=lambda r: r.get('occurrences', 0), reverse=True)
-    results = all_results[:limit]
+    # Counted before the run starts so the page has a denominator to show from
+    # the first poll, rather than a bar that fills against a moving total.
+    expected = 0
+    for tbl in tables:
+        expected += len(suggestable_mappings(
+            tbl, source_vocabulary_id=source_vocab,
+            min_occurrences=min_occurrences, limit=limit, resuggest=replace,
+        ))
 
-    created = [r for r in results if r.get('created')]
-    landed = {}
-    for entry in created:
-        suggested = entry.get('suggested')
-        vocab = suggested['vocabulary_id'] if suggested else (source_vocab or '')
-        landed[vocab] = landed.get(vocab, 0) + 1
-
-    # Strategy breakdown: how many results each tier resolved.
-    strategy_counts = {}
-    for r in results:
-        s = r.get('strategy_used')
-        if s:
-            strategy_counts[s] = strategy_counts.get(s, 0) + 1
-
-    return Response({
-        'landed_in': landed,
-        'source_vocabulary_id': source_vocab,
+    run = SuggestRun.objects.create(
+        source_vocabulary_id=source_vocab,
+        total=expected,
+        model_version=SUGGESTION_MODEL_VERSION,
+        created_by=request.user if request.user.is_authenticated else None,
+    )
+    get_suggest_dispatcher().dispatch(run, {
+        'tables': list(tables),
         'min_occurrences': min_occurrences,
-        'considered': len(results),
-        'created': len(created),
-        'ranked': sum(1 for r in results if r.get('suggested')),
-        'strategy_counts': strategy_counts,
-        'results': results,
-        'truncated': len(all_results) > limit,
-        'model_version': SUGGESTION_MODEL_VERSION,
-        'replaced': replaced,
-    }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        'limit': limit,
+        'dry_run': dry_run,
+        'source_vocabulary_id': source_vocab,
+        'strategies': strategies,
+        'lexical_limit': lexical_limit,
+        'resuggest': replace,
+    })
+    run.refresh_from_db()
+    return Response(_serialize_suggest_run(run), status=status.HTTP_202_ACCEPTED)
+
+
+def _serialize_suggest_run(run):
+    """One Suggest run, as the page's progress strip reads it."""
+    return {
+        'run_id': str(run.id),
+        'state': run.state,
+        'source_vocabulary_id': run.source_vocabulary_id,
+        'total': run.total,
+        'retrieved': run.retrieved,
+        'done': run.done,
+        'updated': run.updated,
+        'ranked': run.ranked,
+        'strategy_counts': run.strategy_counts or {},
+        'landed_in': run.landed_in or {},
+        'model_version': run.model_version,
+        'error': run.error,
+        'created_at': run.created_at,
+        'finished_at': run.finished_at,
+    }
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def code_mapping_suggest_run(request, run_id):
+    """Progress of one queued Suggest run."""
+    if not _can_manage_field_mappings(request.user):
+        return Response({'detail': 'Organization admin access required.'},
+                        status=status.HTTP_403_FORBIDDEN)
+    run = SuggestRun.objects.filter(pk=run_id).first()
+    if run is None:
+        return Response({'detail': 'No such suggest run.'}, status=status.HTTP_404_NOT_FOUND)
+    return Response(_serialize_suggest_run(run))
 
 
 @api_view(['POST'])
@@ -9842,8 +9876,16 @@ def code_mapping_suggest_one(request):
     strategies = request.data.get('strategies') or list(ALL_STRATEGIES)
     if not source_code or not omop_table or not isinstance(strategies, list) or any(s not in ALL_STRATEGIES for s in strategies):
         return Response({'detail': 'source_code, omop_table, and valid strategies are required.'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        lexical_limit = int(request.data.get('lexical_limit') or CANDIDATE_LIMIT)
+    except (TypeError, ValueError):
+        return Response({'lexical_limit': 'Enter a whole number.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not 1 <= lexical_limit <= LEXICAL_LIMIT_MAX:
+        return Response({'lexical_limit': f'Must be between 1 and {LEXICAL_LIMIT_MAX}.'},
+                        status=status.HTTP_400_BAD_REQUEST)
     return Response(suggest_one_mapping(source_code, str(request.data.get('source_vocabulary_id') or ''), omop_table,
-        source_description=str(request.data.get('source_code_description') or ''), strategies=strategies))
+        source_description=str(request.data.get('source_code_description') or ''), strategies=strategies,
+        lexical_limit=lexical_limit))
 
 
 @api_view(['POST'])
@@ -10011,7 +10053,15 @@ def _table_for_hk_vocabulary(vocabulary_id):
 # browser saw a 502, and the proposals already committed were invisible because
 # the client never refetched. Ten leaves headroom, and the response says when
 # more remain.
-SUGGEST_MAX_PER_CALL = 10
+# A ceiling on one run, not on one request: the run is queued, so the gunicorn
+# timeout no longer sets it. What does is CELERY_TASK_TIME_LIMIT (900s default)
+# against ~3.5s per code, measured on staging. Fifty leaves a wide margin and is
+# more than any tab's current backlog, so a curator drains a tab in one click.
+#
+# The cost is linear in retrieval, not in ranking: ranking calls run
+# concurrently and add ~3.5s to a run of any size, while each extra code adds
+# another ~2s trigram query.
+SUGGEST_MAX_PER_RUN = 50
 
 
 def _merge_vocab_counts(counts):

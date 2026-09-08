@@ -146,6 +146,25 @@ type TestMappingRow = Omit<typeof proposedRow, "status"> & {
   source_retirement_evidence?: string[];
 };
 
+/** A /suggest-runs/<id>/ payload, defaulted to a finished run. */
+function suggestRun(overrides: Record<string, unknown> = {}) {
+  return {
+    run_id: "11111111-1111-1111-1111-111111111111",
+    state: "success",
+    source_vocabulary_id: "",
+    total: 0,
+    retrieved: 0,
+    done: 0,
+    updated: 0,
+    ranked: 0,
+    strategy_counts: {},
+    landed_in: {},
+    model_version: "v0.2",
+    error: "",
+    ...overrides,
+  };
+}
+
 function renderPage(rows: TestMappingRow[] = [proposedRow, approvedRow]) {
   mockGet.mockImplementation((url: string) => {
     if (url === "/v1/code-mappings/") return Promise.resolve({ data: [...rows] });
@@ -999,7 +1018,7 @@ describe("CodeMappingPage", () => {
     it("defaults the threshold to 10 and sends it", async () => {
       // 43% of staging's unmapped codes appear exactly once; proposing for them
       // buries the 512 that carry the traffic.
-      mockPost.mockResolvedValue({ data: { created: 3, considered: 5, ranked: 2 } });
+      mockPost.mockResolvedValue({ data: suggestRun({ updated: 3, total: 5, ranked: 2 }) });
       renderPage();
       await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
       expect(screen.getByLabelText(/seen at least/i)).toHaveValue(10);
@@ -1015,23 +1034,87 @@ describe("CodeMappingPage", () => {
 
     it("reports what it proposed", async () => {
       mockPost.mockResolvedValue({
-        data: { created: 3, considered: 5, ranked: 2, truncated: true },
+        data: suggestRun({ updated: 3, total: 5, ranked: 2, landed_in: { LOINC: 3 } }),
       });
       renderPage();
       await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
       fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
 
-      const status = await screen.findByRole("status");
-      expect(status).toHaveTextContent("Proposed 3 mapping(s) from 5 unmapped code(s)");
-      expect(status).toHaveTextContent("More remain");
+      await waitFor(() =>
+        expect(screen.getByTestId("suggest-progress")).toHaveTextContent(
+          "Done — proposed a destination for 3 of 5 code(s).",
+        ));
+      expect(screen.getByTestId("suggest-progress")).toHaveTextContent("5/5");
     });
 
-    it("says so when nothing meets the threshold", async () => {
-      mockPost.mockResolvedValue({ data: { created: 0, considered: 0, ranked: 0 } });
+    it("says so when nothing on the tab is awaiting a suggestion", async () => {
+      // Importer rows are deliberately left alone, so an empty result is a
+      // normal state and not a failure.
+      mockPost.mockResolvedValue({ data: suggestRun({ updated: 0, total: 0, ranked: 0 }) });
       renderPage();
       await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
       fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
-      expect(await screen.findByRole("status")).toHaveTextContent("No unmapped codes seen 10+ times");
+      await waitFor(() =>
+        expect(screen.getByTestId("suggest-progress"))
+          .toHaveTextContent("nothing on this tab was awaiting a suggestion"));
+    });
+
+    it("sends the lexical candidate count", async () => {
+      mockPost.mockResolvedValue({ data: suggestRun({}) });
+      renderPage();
+      await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
+      fireEvent.change(screen.getByLabelText(/lexical candidates per code/i), {
+        target: { value: "4" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
+      await waitFor(() => expect(mockPost).toHaveBeenCalled());
+      expect(mockPost.mock.calls[0][1]).toMatchObject({ lexical_limit: 4 });
+    });
+
+    it("shows incremental progress while the run is still working", async () => {
+      // The run is queued and a code costs seconds, so a curator has to be able
+      // to tell a working run from a stuck one.
+      mockPost.mockResolvedValue({
+        data: suggestRun({ state: "running", total: 4, retrieved: 1, done: 0 }),
+      });
+      mockGet.mockImplementation((url: string) => {
+        if (url.startsWith("/v1/code-mappings/suggest-runs/")) {
+          return Promise.resolve({
+            data: suggestRun({ state: "success", total: 4, done: 4, updated: 4 }),
+          });
+        }
+        if (url === "/v1/code-mappings/") return Promise.resolve({ data: [proposedRow] });
+        if (url === "/v1/code-mappings/reference/") return Promise.resolve({ data: reference });
+        return Promise.resolve({ data: {} });
+      });
+      render(
+        <MemoryRouter>
+          <CodeMappingPage />
+        </MemoryRouter>,
+      );
+      await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
+      fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
+
+      // The in-flight phase names what it is doing, against a known denominator.
+      await waitFor(() =>
+        expect(screen.getByTestId("suggest-progress"))
+          .toHaveTextContent("Searching for candidates… 1 of 4"));
+      // Then it polls to completion.
+      await waitFor(() =>
+        expect(screen.getByTestId("suggest-progress"))
+          .toHaveTextContent("Done — proposed a destination for 4 of 4 code(s)."),
+        { timeout: 4000 });
+    });
+
+    it("surfaces a failed run rather than leaving the bar stuck", async () => {
+      mockPost.mockResolvedValue({
+        data: suggestRun({ state: "failure", error: "retrieval exploded" }),
+      });
+      renderPage();
+      await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
+      fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
+      await waitFor(() =>
+        expect(screen.getByTestId("suggest-progress")).toHaveTextContent("retrieval exploded"));
     });
 
     it("shows a proposal with no destination yet in its domain's tab", async () => {
