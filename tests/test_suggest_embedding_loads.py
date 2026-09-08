@@ -99,6 +99,25 @@ def test_deleted_embedding_is_rebuilt_without_retrieval(queue, encoder):
     assert encoder[1].encode.call_count == 2
 
 
+def test_limited_snapshot_tracks_attempt_order(queue, encoder):
+    from omop_core.mapping.suggestions import SUGGESTION_MODEL_VERSION
+
+    first, mapping = queue
+    second = ConceptFactory(concept_name='Unrelated candidate')
+    SourceCodeConceptMapping.objects.create(
+        source_code='second', source_code_description=second.concept_name,
+        omop_table='measurement', domain_id='Measurement', status='proposed',
+        occurrence_count=10,
+    )
+    precompute(limit=1)
+    assert ConceptEmbedding.objects.filter(concept=first).exists()
+    assert not ConceptEmbedding.objects.filter(concept=second).exists()
+    mapping.last_suggest_attempt = SUGGESTION_MODEL_VERSION
+    mapping.save(update_fields=['last_suggest_attempt'])
+    precompute(limit=1)
+    assert ConceptEmbedding.objects.filter(concept=second).exists()
+
+
 def test_new_candidate_after_vocabulary_load_is_embedded(queue, encoder):
     precompute()
     new = ConceptFactory(concept_name='Serum glucose concentrations')

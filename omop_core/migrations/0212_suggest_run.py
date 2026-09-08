@@ -20,6 +20,11 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.AddField(
+            model_name='sourcecodeconceptmapping',
+            name='last_suggest_attempt',
+            field=models.CharField(blank=True, db_index=True, default='', help_text='Suggestion model version that last examined this code, whether or not it proposed anything.', max_length=20),
+        ),
         migrations.AlterField(
             model_name='sourcecodeconceptmapping',
             name='suggestion_model_version',

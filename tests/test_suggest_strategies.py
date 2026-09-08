@@ -428,7 +428,7 @@ class TestSuggestableMappings:
     def test_a_declined_code_stays_eligible(self):
         """It has no destination, so it is still work to do."""
         queue_row('DECLINED', origin_system=SUGGESTION_PROVENANCE,
-                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+                  last_suggest_attempt=SUGGESTION_MODEL_VERSION)
         assert len(suggestable_mappings('measurement')) == 1
 
     def test_untried_codes_come_before_ones_this_version_declined(self):
@@ -438,7 +438,7 @@ class TestSuggestableMappings:
         top slots was declined, so they would never free up."""
         queue_row('DECLINED BUT BUSY', occurrence_count=900,
                   origin_system=SUGGESTION_PROVENANCE,
-                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+                  last_suggest_attempt=SUGGESTION_MODEL_VERSION)
         queue_row('NEVER TRIED', occurrence_count=12)
         codes = [m.source_code for m in suggestable_mappings('measurement')]
         assert codes == ['NEVER TRIED', 'DECLINED BUT BUSY']
@@ -446,17 +446,29 @@ class TestSuggestableMappings:
     def test_a_declined_code_comes_round_again_once_the_tab_is_drained(self):
         queue_row('DECLINED', occurrence_count=900,
                   origin_system=SUGGESTION_PROVENANCE,
-                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+                  last_suggest_attempt=SUGGESTION_MODEL_VERSION)
         assert [m.source_code for m in suggestable_mappings('measurement')] == ['DECLINED']
 
     def test_an_older_model_version_sorts_as_untried(self):
         queue_row('OLD GUESS', occurrence_count=12, origin_system='suggest v0.1',
-                  suggestion_model_version='v0.1')
+                  last_suggest_attempt='v0.1')
         queue_row('THIS VERSION', occurrence_count=900,
                   origin_system=SUGGESTION_PROVENANCE,
-                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+                  last_suggest_attempt=SUGGESTION_MODEL_VERSION)
         codes = [m.source_code for m in suggestable_mappings('measurement')]
         assert codes == ['OLD GUESS', 'THIS VERSION']
+
+    def test_a_row_with_no_domain_is_not_guessed_at(self):
+        """lexical filters on domain_id='' and finds nothing while UMLS skips
+        the filter entirely, so a single cross-domain sibling would come back
+        definitive and land a Drug concept on a measurement row."""
+        from omop_core.mapping.suggestions import retrieval_pool
+        candidates, cui, definitive = retrieval_pool(
+            source_code='X', source_vocabulary_id='LOINC', source_text='glucose',
+            domain_id='', strategies=list(ALL_STRATEGIES),
+        )
+        assert candidates == []
+        assert definitive is False
 
     def test_another_table_is_not_touched(self):
         queue_row('DRUGGY', omop_table='drug_exposure', domain_id='Drug')
@@ -493,12 +505,12 @@ class TestSuggestableMappings:
         its whole budget re-trying declined gaps and never reach a replacement."""
         queue_row('GAP TRIED', occurrence_count=900,
                   origin_system=SUGGESTION_PROVENANCE,
-                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+                  last_suggest_attempt=SUGGESTION_MODEL_VERSION)
         queue_row('GAP UNTRIED', occurrence_count=10)
         queue_row('ANSWERED TRIED', occurrence_count=900,
                   origin_system=SUGGESTION_PROVENANCE,
                   target_concept=measurement_concept,
-                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+                  last_suggest_attempt=SUGGESTION_MODEL_VERSION)
         queue_row('ANSWERED UNTRIED', occurrence_count=10,
                   origin_system=SUGGESTION_PROVENANCE,
                   target_concept=measurement_concept)
@@ -873,13 +885,35 @@ class TestPipelineIntegration:
         assert row.target_concept_id == measurement_concept.concept_id
 
     def test_an_importer_row_with_no_destination_is_filled_in(self, glucose_bridge):
-        """Nothing to overwrite, and 69 such rows on staging."""
+        """Nothing to overwrite, and 69 such rows on staging. Once a
+        destination is proposed the provenance is the suggestion's, which is
+        what set it."""
         row = queue_row('2345-7', source_vocabulary_id='LOINC',
                         origin_system='open-wearables-seed')
         results = suggest_mappings('measurement', min_occurrences=10, strategies=['umls'])
         assert len(results) == 1
         row.refresh_from_db()
         assert row.target_concept_id == glucose_bridge.concept_id
+        assert row.origin_system == SUGGESTION_PROVENANCE
+        assert row.suggestion_model_version == SUGGESTION_MODEL_VERSION
+
+    def test_a_declined_row_keeps_the_provenance_that_raised_it(self):
+        """Nothing was proposed, so nothing here is a suggestion. Stamping the
+        provenance anyway would erase the ingest channel *and* enrol the code in
+        the accuracy figures: code_mapping_detail reads an origin_system
+        beginning "suggest" as one, so a curator's own hand-picked concept
+        would later be recorded as having overridden a suggestion."""
+        row = queue_row('ZZQQ NOTHING LIKE THIS', origin_system='hk-labs')
+
+        suggest_mappings('measurement', min_occurrences=10)
+
+        row.refresh_from_db()
+        assert row.target_concept_id is None
+        assert row.origin_system == 'hk-labs'
+        assert row.suggestion_model_version == ''
+        assert row.last_suggest_attempt == SUGGESTION_MODEL_VERSION, (
+            'but it must still record that it tried, or it retries for ever'
+        )
 
     def test_an_unmatchable_code_keeps_no_destination(self, measurement_domain,
                                                       loinc_vocab, lab_class):
@@ -966,20 +1000,36 @@ class TestSourceEnrichment:
         assert mapping.source_code_description == 'Fictional Analyte Level in Serum'
         assert mapping.umls_source_name == 'Fictional Analyte Level in Serum'
 
-    def test_a_curator_note_is_not_overwritten(self, umls_release, measurement_domain,
-                                               loinc_vocab, lab_class):
+    def test_a_curator_note_is_not_overwritten(self, django_user_model,
+                                               measurement_domain, loinc_vocab,
+                                               lab_class):
         """The candidate set is every queue row with no destination, whatever
-        raised it, so the row may carry a note a person wrote."""
+        raised it, so the row may carry a note a person wrote. updated_by is the
+        signal: the curator edit path is its only writer."""
+        curator = django_user_model.objects.create_user(
+            email='curator@test.com', password='pass', is_staff=True,
+        )
         queue_row('2345-7', source_vocabulary_id='LOINC', origin_system='hk-labs',
-                  notes='waiting on lab confirmation')
+                  notes='waiting on lab confirmation', updated_by=curator,
+                  last_suggest_attempt='v0.1')
 
         suggest_mappings('measurement', min_occurrences=10, strategies=['lexical'])
 
         mapping = SourceCodeConceptMapping.objects.get(source_code='2345-7')
         assert mapping.notes == 'waiting on lab confirmation'
-        assert mapping.suggestion_model_version == SUGGESTION_MODEL_VERSION, (
+        assert mapping.last_suggest_attempt == SUGGESTION_MODEL_VERSION, (
             'the run still records that it tried'
         )
+
+    def test_an_ingest_note_survives_the_first_run(self, measurement_domain,
+                                                   loinc_vocab, lab_class):
+        """_record_proposal can supply a note, and on the first run nothing here
+        has written one yet, so there is nothing of ours to refresh."""
+        queue_row('2345-7', source_vocabulary_id='LOINC', origin_system='hk-labs',
+                  notes='code arrived without a display name')
+        suggest_mappings('measurement', min_occurrences=10, strategies=['lexical'])
+        assert SourceCodeConceptMapping.objects.get(
+            source_code='2345-7').notes == 'code arrived without a display name'
 
     def test_a_blank_note_is_filled_in(self, measurement_domain, loinc_vocab, lab_class):
         queue_row('2345-7', source_vocabulary_id='LOINC', notes='')
@@ -988,10 +1038,10 @@ class TestSourceEnrichment:
 
     def test_a_previous_runs_note_is_replaced(self, measurement_domain, loinc_vocab,
                                               lab_class):
-        """suggestion_model_version is only ever set beside notes here, so it is
-        the record of who wrote what is there now."""
+        """Nobody has edited the row and a previous run wrote the note, so it is
+        ours to refresh."""
         queue_row('2345-7', source_vocabulary_id='LOINC',
-                  origin_system='suggest v0.1', suggestion_model_version='v0.1',
+                  origin_system='suggest v0.1', last_suggest_attempt='v0.1',
                   notes='an older run said this')
         suggest_mappings('measurement', min_occurrences=10, strategies=['lexical'])
         mapping = SourceCodeConceptMapping.objects.get(source_code='2345-7')

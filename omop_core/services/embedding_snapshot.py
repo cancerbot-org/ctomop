@@ -17,7 +17,7 @@ def read_snapshot(key):
     queue_sql, queue_params = eligible.order_by().values(
         'id', 'source_vocabulary_id', 'source_code', 'source_code_description',
         'umls_source_name', 'source_concept_id', 'domain_id', 'omop_table',
-        'occurrence_count', 'target_concept_id', 'suggestion_model_version',
+        'occurrence_count', 'target_concept_id', 'last_suggest_attempt',
     ).query.sql_with_params()
     # Order-independent content checksums detect bulk SQL loads and same-count
     # replacements, neither of which emits Django signals. Numeric sums avoid

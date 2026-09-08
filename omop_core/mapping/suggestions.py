@@ -425,9 +425,14 @@ def suggestable_queryset(omop_table=None, *, source_vocabulary_id=None,
     staging sample every code in the top slots was declined, so those slots would
     never free up.  Putting "no destination" above it has the same failure in the
     replacing case: a run would spend its whole budget re-trying declined gaps
-    and never reach a replacement.  Sorting on what the current
-    ``suggestion_model_version`` has not attempted means every run advances, and
-    declined codes come round again once the tab is drained.
+    and never reach a replacement.  Sorting on what the current model version has
+    not attempted means every run advances, and declined codes come round again
+    once the tab is drained.
+
+    "Attempted" is ``last_suggest_attempt``, not ``suggestion_model_version``: a
+    run that proposed nothing has still tried, and has to say so or it re-tries
+    the same codes for ever -- but it must not claim to have made a suggestion,
+    which is what the second field means and what the accuracy figures count.
 
     Then, within untried and within tried alike, a code with no destination comes
     before one being replaced: an empty destination is a gap, a replaceable one
@@ -478,7 +483,7 @@ def _suggestable_queryset_ordered(rows):
             output_field=IntegerField(),
         ),
         already_tried=Case(
-            When(suggestion_model_version=SUGGESTION_MODEL_VERSION, then=Value(1)),
+            When(last_suggest_attempt=SUGGESTION_MODEL_VERSION, then=Value(1)),
             default=Value(0),
             output_field=IntegerField(),
         ),
@@ -769,7 +774,7 @@ def rank_candidates(source_value, candidates, source_description=''):
 
 
 def retrieval_pool(*, source_code, source_vocabulary_id, source_text, domain_id,
-                   strategies, lexical_limit=CANDIDATE_LIMIT):
+                   strategies, lexical_limit=CANDIDATE_LIMIT):  # noqa: C901
     """Candidates for one source code, in the order the ranker should see them.
 
     Returns ``(candidates, umls_cui, definitive)``.  ``definitive`` means UMLS
@@ -777,6 +782,20 @@ def retrieval_pool(*, source_code, source_vocabulary_id, source_text, domain_id,
     equivalency, so the pipeline stops there and spends no model call.
     """
     candidates, umls_cui = [], None
+
+    # Without a domain there is nothing to scope retrieval to, and the two tiers
+    # fail differently: lexical filters on domain_id='' and returns nothing,
+    # while umls_candidates skips the filter entirely -- so a single
+    # cross-domain sibling would come back "definitive" and be written straight
+    # onto the row with no model call, landing a Drug concept on a measurement.
+    # A queue row always carries a domain in practice; refusing is the safe
+    # answer when one does not.
+    if not domain_id:
+        logger.warning(
+            'No domain for %s:%s; skipping retrieval rather than guessing.',
+            source_vocabulary_id or '(none)', source_code,
+        )
+        return [], None, False
 
     if STRATEGY_UMLS in strategies:
         umls_hits, umls_cui = umls_candidates(source_code, source_vocabulary_id, domain_id)
@@ -797,7 +816,18 @@ def retrieval_pool(*, source_code, source_vocabulary_id, source_text, domain_id,
         ]
 
     if STRATEGY_VECTORS in strategies:
-        candidates, _reranked = vector_rerank(source_text or source_code, candidates)
+        # Reranked within each tier, not across them. Sorting the merged list on
+        # cosine alone would let a trigram hit overtake an NLM-curated UMLS
+        # equivalency -- and `rank_candidates` returns `candidates[0]` whenever
+        # it degrades (no API key, no network, unparseable reply), so on the
+        # documented degrade path the worse candidate would become the written
+        # destination.
+        umls_tier = [c for c in candidates if c.get('retrieval') == STRATEGY_UMLS]
+        lexical_tier = [c for c in candidates if c.get('retrieval') != STRATEGY_UMLS]
+        query = source_text or source_code
+        umls_tier, _ = vector_rerank(query, umls_tier)
+        lexical_tier, _ = vector_rerank(query, lexical_tier)
+        candidates = umls_tier + lexical_tier
 
     return candidates, umls_cui, False
 
@@ -1061,6 +1091,14 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             chosen, note = None, ATHENA_DUPLICATE_MESSAGE
             job['strategy_used'] = None
             entry.update(suggested=None, note=note, strategy_used=None)
+            # Nothing is proposed, and nothing is taken away either. Under
+            # Replace the row may already hold a destination a previous run
+            # proposed and a curator has lived with; falling through to the
+            # write with `concept = None` would clear it, so "Replace" would
+            # turn a working mapping into an empty one.
+            athena_duplicate = True
+        else:
+            athena_duplicate = False
         if dry_run:
             results.append(entry)
             report('writing', len(results))
@@ -1070,30 +1108,57 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             Concept.objects.filter(concept_id=chosen['concept_id']).first()
             if chosen else None
         )
-        mapping.target_concept = concept
-        mapping.suggested_target_concept = concept
-        mapping.destination_vocabulary_id = concept.vocabulary_id if concept else ''
-        mapping.origin_system = SUGGESTION_PROVENANCE
+        # Read before it is overwritten below: it is how we tell a note this
+        # code left on an earlier run from one ingest or a curator supplied.
+        attempted_before = bool(mapping.last_suggest_attempt)
+        # Recorded on every row the run examined, so the next run does not
+        # re-retrieve and re-rank the same codes. Says nothing about whether a
+        # suggestion was made -- see the field's own note on the model.
+        mapping.last_suggest_attempt = SUGGESTION_MODEL_VERSION
         mapping.suggest_strategy = job['strategy_used'] or ''
         mapping.umls_cui = job['umls_cui'] or ''
-        fields = [
-            'target_concept', 'suggested_target_concept', 'destination_vocabulary_id',
-            'origin_system', 'suggestion_model_version', 'suggest_strategy',
-            'umls_cui', 'updated_at',
-        ]
+        fields = ['last_suggest_attempt', 'suggest_strategy', 'umls_cui', 'updated_at']
+
+        if concept is not None and not athena_duplicate:
+            mapping.target_concept = concept
+            mapping.suggested_target_concept = concept
+            mapping.destination_vocabulary_id = concept.vocabulary_id
+            # Only now is this a suggestion. Stamping the provenance and the
+            # model version on a row we proposed nothing for would overwrite the
+            # ingest channel that raised it -- the candidate set is every queue
+            # row with no destination, whatever raised it -- and would enrol a
+            # code the pipeline never answered in the accuracy figures:
+            # code_mapping_detail treats an origin_system beginning "suggest" as
+            # a suggestion, so a curator's own hand-picked concept would later
+            # be recorded as having overridden one.
+            mapping.origin_system = SUGGESTION_PROVENANCE
+            mapping.suggestion_model_version = SUGGESTION_MODEL_VERSION
+            fields += [
+                'target_concept', 'suggested_target_concept',
+                'destination_vocabulary_id', 'origin_system',
+                'suggestion_model_version',
+            ]
         # Notes is a free-text field a curator writes in, and the row we are
         # writing to may not be one a Suggest run created -- the candidate set is
         # every queue row with no destination, whatever raised it. Replacing
         # "waiting on lab confirmation" with "No candidate concept found by any
         # enabled strategy." loses the only copy of something a person wrote.
         #
-        # A blank note, or one a previous run wrote, is ours to replace:
-        # suggestion_model_version is only ever set alongside notes here, so it
-        # is the record of who wrote what is there now.
-        if not mapping.notes or mapping.suggestion_model_version:
+        # `updated_by` is the test, not the model version: the curator edit
+        # path (_upsert_source_code_mapping) is the only writer of it in the
+        # codebase and stamps it on every save, while ingest and this path never
+        # do -- so a null means only machines have ever written here and the
+        # note is a previous run's to replace. Keying on the model version
+        # instead would protect a note only until the first run touched the row,
+        # which after one run is every row.
+        #
+        # `last_suggest_attempt` narrows it further: on the first run the field
+        # is blank, so a note ingest supplied through _record_proposal survives
+        # too. Only a note left by a previous run of this code is rewritten.
+        ours = attempted_before and mapping.updated_by_id is None
+        if not mapping.notes or ours:
             mapping.notes = note
             fields.append('notes')
-        mapping.suggestion_model_version = SUGGESTION_MODEL_VERSION
         # Source-side enrichment is written only when it was missing: these
         # describe the code, not the suggestion, and a curator may have
         # corrected them.
