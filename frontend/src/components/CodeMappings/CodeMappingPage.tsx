@@ -107,6 +107,7 @@ interface SourceVocabularyTab {
 }
 
 interface Reference {
+  suggest_max_per_run?: number;
   domains: DomainRef[];
   source_code_systems_by_domain: Record<string, SourceCodeSystemRef[]>;
   destination_vocabularies: VocabularyRef[];
@@ -453,6 +454,10 @@ export default function CodeMappingPage() {
   const [navigationTarget, setNavigationTarget] = useState<{ id: string } | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
+  const [suggestionLimit, setSuggestionLimit] = useState<number | "">(50);
+  const maxSuggestions = reference.suggest_max_per_run || 50;
+  const validSuggestionLimit = suggestionLimit !== "" && Number.isInteger(suggestionLimit)
+    && suggestionLimit >= 1 && suggestionLimit <= maxSuggestions;
   const [strategies, setStrategies] = useState({
     umls: true, vectors: true, lexical: true,
   });
@@ -513,6 +518,7 @@ export default function CodeMappingPage() {
       ]);
       setRows(rowResp.data);
       setReference({ ...emptyReference, ...(refResp.data || {}) });
+      setSuggestionLimit((current) => current === "" ? current : Math.min(current, refResp.data?.suggest_max_per_run || 50));
       setAccuracy(accuracyResp.data);
     } catch {
       setError("Failed to load code mappings.");
@@ -942,6 +948,10 @@ export default function CodeMappingPage() {
   const hasRetrieval = strategies.umls || strategies.lexical;
 
   const runSuggest = async () => {
+    if (!validSuggestionLimit) {
+      setError(`Choose a number of suggestions between 1 and ${maxSuggestions}.`);
+      return;
+    }
     // Replace is only valid when a specific vocabulary is selected (the backend
     // rejects replace without source_vocabulary_id to prevent global deletes).
     const effectiveReplace = replaceExisting && !overallTab;
@@ -968,6 +978,7 @@ export default function CodeMappingPage() {
         "/v1/code-mappings/suggest/",
         {
           source_vocabulary_id: selectedVocabulary,
+          limit: suggestionLimit,
           strategies: activeStrategies,
           replace: effectiveReplace,
         },
@@ -1340,13 +1351,24 @@ export default function CodeMappingPage() {
           <button
             type="button"
             onClick={() => void runSuggest()}
-            disabled={suggesting || !hasRetrieval}
+            disabled={suggesting || !hasRetrieval || !validSuggestionLimit}
             title="Propose destinations for queued source codes on this tab."
             className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Sparkles size={13} />
             {suggesting ? "Suggesting…" : "Suggest"}
           </button>
+          <input
+            aria-label="Number of suggestions"
+            type="number"
+            min={1}
+            max={maxSuggestions}
+            value={suggestionLimit}
+            onChange={(event) => setSuggestionLimit(event.target.value === "" ? "" : Number(event.target.value))}
+            title={`Maximum codes to process this run (1–${maxSuggestions}), in Seen priority order.`}
+            className="h-8 w-16 rounded-md border border-slate-300 px-2 text-xs"
+          />
+          <span className="text-xs text-slate-600">Using</span>
           {(["umls", "lexical", "vectors"] as const).map((key) => (
             <span key={key} className="inline-flex items-center gap-1">
               <label className="inline-flex items-center gap-1 text-xs text-slate-600">

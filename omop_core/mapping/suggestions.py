@@ -271,7 +271,7 @@ def umls_candidates(source_code, source_vocabulary_id, domain_id=None):
                 'retrieval': STRATEGY_UMLS,
             })
 
-    cui_str = ','.join(cuis) if len(cuis) <= 5 else f'{cuis[0]}...(+{len(cuis)-1})'
+    cui_str = ','.join(sorted(cuis))
     return candidates, cui_str
 
 
