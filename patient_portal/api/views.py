@@ -80,7 +80,6 @@ from omop_core.mapping.code_resolution import (
 from omop_core.mapping.suggestions import (
     ALL_STRATEGIES,
     CANDIDATE_LIMIT,
-    DEFAULT_MIN_OCCURRENCES,
     LEXICAL_LIMIT_MAX,
     STRATEGY_LEXICAL,
     STRATEGY_UMLS,
@@ -9760,7 +9759,7 @@ def code_mapping_suggest(request):
         source_vocab = None  # multi-table merge not needed
 
     try:
-        min_occurrences = int(request.data.get('min_occurrences', DEFAULT_MIN_OCCURRENCES))
+        min_occurrences = int(request.data.get('min_occurrences', 1))
     except (TypeError, ValueError):
         return Response({'min_occurrences': 'Enter a whole number.'},
                         status=status.HTTP_400_BAD_REQUEST)

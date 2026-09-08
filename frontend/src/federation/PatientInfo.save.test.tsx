@@ -87,7 +87,15 @@ beforeEach(() => {
     }),
     patch: vi.fn((url: string, body: unknown) => {
       patches.push([url, body]);
-      return Promise.resolve({ data: {} });
+      // The /me/ PATCH returns the same wrapped shape as GET: the full record
+      // under patient_info plus the display name at the top level.
+      const merged = { ...PATIENT_INFO, ...(body as Record<string, unknown>) };
+      return Promise.resolve({
+        data: {
+          patient_info: merged,
+          patient_name: 'Alishia Tawny Howell',
+        },
+      });
     }),
   } as unknown as AxiosInstance;
 });
@@ -193,6 +201,21 @@ describe('federated PatientInfo save', () => {
     );
     const [, body] = patches.find(([u]) => u.includes('/patient-info/me/'))!;
     expect(body).toEqual({ email: 'a.howell@example.org' });
+  });
+
+  it('retains the saved value in the input after the PATCH completes (#1083)', async () => {
+    // Before the fix the onSuccess cache update spread the wrapped response
+    // ({ patient_info: {...} }) into patient_info, burying the new values one
+    // level too deep.  The data !== prevData check then reset editedInfo from
+    // the mangled cache, restoring the OLD value in every input.
+    await renderAndLoad();
+    await editAndSave('howell@example.org', 'a.howell@example.org');
+
+    await waitFor(() =>
+      expect(patches.some(([u]) => u.includes('/patient-info/me/'))).toBe(true),
+    );
+    // The input must still show the value the user typed, not the old one.
+    expect(screen.getByDisplayValue('a.howell@example.org')).toBeInTheDocument();
   });
 
   it('attempts nothing when the descriptor cannot be fetched', async () => {
