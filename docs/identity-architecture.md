@@ -597,6 +597,27 @@ Patient requests deletion (via host app UI or admin action)
 
 ## Cross-Service Communication
 
+### Shared Service Token Scopes
+
+`SERVICE_AUTH_TOKEN` authenticates the legacy shared bearer credential.
+`SERVICE_AUTH_SCOPES` is a space-separated SMART scope grant enforced by
+`ScopedTokenPermission` and its subclasses. It defaults to `patient/*.read`:
+GET, HEAD and OPTIONS are allowed, while POST, PUT, PATCH and DELETE require
+`patient/*.write` or `user/*.write`. An explicitly empty grant denies all
+requests guarded by these permissions. Write scopes do not imply read scopes.
+`system/*.read` permits vocabulary reads only, not patient-data reads.
+
+Before deploying this change, configure service integrations that need writes
+(including lab/FHIR sync and bulk clinical updates) with the necessary grant,
+for example `SERVICE_AUTH_SCOPES="patient/*.read patient/*.write"`, and restart
+the application. Otherwise their writes return HTTP 403.
+
+This grant applies to every holder of the shared token. It does not restrict
+row-level access or solve caller-asserted identity attribution (#147). Use
+separate OAuth2 service clients for independently scoped and revocable grants.
+
+### Request Identity
+
 Services communicate via REST APIs. The caller identifies itself and/or the
 target user using the `(issuer, sub)` tuple:
 
