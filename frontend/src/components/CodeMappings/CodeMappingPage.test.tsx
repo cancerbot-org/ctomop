@@ -142,6 +142,7 @@ const loincHit = {
 type TestMappingRow = Omit<typeof proposedRow, "status"> & {
   status: "proposed" | "approved" | "rejected" | "unmapped";
   mapping_origin?: "athena" | "healthkey";
+  destination_count?: number;
   source_retired?: boolean | null;
   source_retirement_evidence?: string[];
 };
@@ -337,6 +338,7 @@ describe("CodeMappingPage", () => {
       expect(within(table).queryByRole("columnheader", { name: "Retired" })).not.toBeInTheDocument();
       const row = document.getElementById("code-mapping-31")!;
       fireEvent.click(within(row).getByRole("button", { name: "Edit Z10" }));
+      await waitFor(() => expect(screen.queryByText("Loading source destinations…")).not.toBeInTheDocument());
       expect(screen.getByTestId("source-retirement")).toHaveValue("Retired");
       expect(within(screen.getByRole("dialog")).getByRole("status")).toHaveTextContent("invalid reason D");
       fireEvent.change(screen.getByLabelText("Source Code Value"), { target: { value: "A3" } });
@@ -502,6 +504,32 @@ describe("CodeMappingPage", () => {
       fireEvent.click(cell.closest("tr")!);
       return await screen.findByText("Edit Mapping");
     };
+
+    it("highlights imported alternatives and saves the curator's selected destination", async () => {
+      renderPage([{ ...proposedRow, destination_count: 3 }]);
+      const originalGet = mockGet.getMockImplementation()!;
+      mockGet.mockImplementation((url: string) => url === "/v1/code-mappings/7/"
+        ? Promise.resolve({ data: { destination_options: [
+          { ...loincHit, selectable: true, selected: false, origins: ["HT-One"] },
+          { ...loincHit, concept_id: 555, concept_code: "555", concept_name: "Other source destination", selectable: true, selected: false, origins: ["HT-One"] },
+          { ...loincHit, concept_id: null, concept_code: "999", concept_name: "Concept not loaded", selectable: false, selected: false, origins: ["HT-One"] },
+        ] } }) : originalGet(url));
+      fireEvent.click((await screen.findByText("M-PROTEIN, SERUM", { selector: "td" })).closest("tr")!);
+      const choices = await screen.findByLabelText("Source data destinations (3)");
+      expect(screen.getByText(/Multiple destinations are available/)).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /Concept not loaded/ })).toBeDisabled();
+      fireEvent.change(choices, { target: { value: String(loincHit.concept_id) } });
+      expect(screen.getByLabelText("Destination Concept ID")).toHaveValue(loincHit.concept_id);
+      expect(screen.getByTestId("destination-concept-code")).toHaveValue(loincHit.concept_code);
+      expect(screen.getByTestId("destination-concept-class")).toHaveValue(loincHit.concept_class_id);
+      fireEvent.click(screen.getByRole("button", { name: "Update Mapping" }));
+      await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/v1/code-mappings/7/", expect.objectContaining({
+        destination_concept_id: loincHit.concept_id,
+        destination_vocabulary_id: "LOINC",
+        domain_id: "Measurement",
+        omop_table: "measurement",
+      })));
+    });
 
     it("opens from a click anywhere on the row", async () => {
       await openDialog();

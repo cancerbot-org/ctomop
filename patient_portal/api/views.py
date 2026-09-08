@@ -9343,6 +9343,11 @@ def _upsert_source_code_mapping(concept, data, user, mapping=None):
     else:
         source_code = mapping.source_code
 
+    if mapping and (source_vocabulary_id, source_code) != (mapping.source_vocabulary_id, mapping.source_code) and mapping.destination_candidates.exists():
+        raise serializers.ValidationError({'source_code': (
+            'Imported destinations belong to this source code. Create a new mapping for a different source.'
+        )})
+
     # The domain is the curator's first choice and settles the destination
     # table, so it is validated before the table is read.
     domain_id = str(
@@ -9631,23 +9636,14 @@ def code_mapping_list(request):
             if q.isdigit():
                 search_filter |= Q(target_concept_id=int(q))
             mappings = mappings.filter(search_filter)
-        mappings = list(mappings.order_by('source_vocabulary_id', 'source_code', 'id'))
+        from omop_core.services.mapping_destinations import with_destination_counts
+        mappings = list(with_destination_counts(mappings).order_by('source_vocabulary_id', 'source_code', 'id'))
         from omop_core.services.source_retirement import mapping_source_retirement
         source_metadata = mapping_source_retirement(mappings)
-        # Destination count: how many distinct non-rejected mappings share
-        # the same (source_vocabulary_id, source_code). Computed in one pass
-        # over the already-fetched list rather than a per-row query.
-        from collections import Counter
-        _dest_counts = Counter(
-            (m.source_vocabulary_id, m.source_code)
-            for m in mappings if m.status != 'rejected'
-        )
         rows = [
             _serialize_code_mapping_row(
                 mapping.target_concept, mapping, source_metadata[mapping.pk],
-                destination_count=_dest_counts.get(
-                    (mapping.source_vocabulary_id, mapping.source_code), 0,
-                ),
+                destination_count=mapping.destination_count,
             )
             for mapping in mappings
         ]
@@ -9659,12 +9655,13 @@ def code_mapping_list(request):
     with transaction.atomic():
         concept = _get_destination_concept(request.data)
         mapping, repoint = _upsert_source_code_mapping(concept, request.data, request.user)
-    payload = _serialize_code_mapping_row(concept, mapping)
+    from omop_core.services.mapping_destinations import destination_options
+    payload = _serialize_code_mapping_row(concept, mapping, destination_count=len(destination_options(mapping)))
     payload['repoint'] = repoint
     return Response(payload, status=status.HTTP_201_CREATED)
 
 
-@api_view(['PATCH', 'DELETE'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def code_mapping_detail(request, mapping_id):
     """Edit or delete one mapping.
@@ -9686,6 +9683,13 @@ def code_mapping_detail(request, mapping_id):
     if mapping is None:
         return Response({'detail': 'Mapping not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+    if request.method == 'GET':
+        from omop_core.services.mapping_destinations import destination_options
+        options = destination_options(mapping)
+        payload = _serialize_code_mapping_row(mapping.target_concept, mapping, destination_count=len(options))
+        payload['destination_options'] = options
+        return Response(payload)
+
     if request.method == 'DELETE':
         if mapping.status == 'approved' and not _can_approve_mappings(request.user):
             return Response(
@@ -9704,7 +9708,8 @@ def code_mapping_detail(request, mapping_id):
     )
     with transaction.atomic():
         mapping, repoint = _upsert_source_code_mapping(concept, data, request.user, mapping=mapping)
-    payload = _serialize_code_mapping_row(concept, mapping)
+    from omop_core.services.mapping_destinations import destination_options
+    payload = _serialize_code_mapping_row(concept, mapping, destination_count=len(destination_options(mapping)))
     payload['repoint'] = repoint
     return Response(payload)
 

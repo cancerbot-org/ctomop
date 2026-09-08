@@ -2039,6 +2039,30 @@ class SourceCodeConceptMapping(models.Model):
         return f"{source}:{self.source_code} -> {self.target_concept_id}"
 
 
+class MappingDestinationCandidate(models.Model):
+    """An imported alternative; it does not change the chosen clinical mapping."""
+
+    mapping = models.ForeignKey(
+        SourceCodeConceptMapping, on_delete=models.CASCADE,
+        related_name='destination_candidates',
+    )
+    target_vocabulary_id = models.CharField(max_length=50)
+    target_concept_code = models.CharField(max_length=50)
+    target_concept = models.ForeignKey(
+        Concept, null=True, blank=True, on_delete=models.SET_NULL,
+    )
+    origins = models.JSONField(default=list)
+
+    class Meta:
+        db_table = 'mapping_destination_candidate'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['mapping', 'target_vocabulary_id', 'target_concept_code'],
+                name='uq_mapping_destination_candidate',
+            ),
+        ]
+
+
 class RegimenMappingGap(models.Model):
     """Mapping-gap report for regimen/drug names that could not be matched to a
     validated HemOnc (or other licensed-vocabulary) concept at ingest time.
