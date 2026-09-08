@@ -45,6 +45,7 @@ const proposedRow = {
   reviewer: "",              // never approved: the queue row this dialog exists for
   reviewed_at: null,
   occurrence_count: 14,
+  destination_count: 1,
   has_mapping: true,
 };
 
@@ -317,21 +318,26 @@ describe("CodeMappingPage", () => {
   describe("source retirement and section sorting", () => {
     const high: TestMappingRow = { ...proposedRow, mapping_id: 31, source_vocabulary_id: "ICD10", source_code: "Z10",
       origin_system: "Zulu", source_code_description: "Zebra", destination_concept_name: "Zinc", destination_concept_id: 20,
+      occurrence_count: 20, destination_count: 2,
       source_retired: true, source_retirement_evidence: ["Athena ICD10CM concept 45582496: invalid reason D; validity ended 2022-09-30"], status: "unmapped" };
     const low: TestMappingRow = { ...high, mapping_id: 32, source_code: "A2", origin_system: "Alpha",
       source_code_description: "Apple", destination_concept_name: "Apple", destination_concept_id: 3, source_retired: false,
-      source_retirement_evidence: [], status: "proposed" };
+      occurrence_count: 3, destination_count: 1, source_retirement_evidence: [], status: "proposed" };
     const ids = (table: HTMLElement) => Array.from(table.querySelectorAll("tbody tr[id]")).map((row) => row.id);
 
-    it("places source retirement immediately after Source code and shows evidence in the dialog", async () => {
+    it("shows Seen and destination counts in the table and retirement evidence in the dialog", async () => {
       renderPage([high, low]);
       const table = await screen.findByRole("table", { name: "Unmapped mappings" });
       const headers = within(table).getAllByRole("columnheader");
       expect(headers[1]).toHaveTextContent("Source code");
-      expect(headers[2]).toHaveTextContent("Retired");
+      expect(headers[2]).toHaveTextContent("Seen");
+      expect(headers[5]).toHaveTextContent("Concept ID");
+      expect(headers[6]).toHaveTextContent("Dest count");
+      expect(within(table).queryByRole("columnheader", { name: "Retired" })).not.toBeInTheDocument();
       const row = document.getElementById("code-mapping-31")!;
-      expect(within(row).getAllByRole("cell")[2]).toHaveTextContent("Retired");
-      expect(within(row).getAllByRole("cell")[2]).toHaveAttribute("title", expect.stringContaining("Athena ICD10CM"));
+      expect(within(row).getAllByRole("cell")[2]).toHaveTextContent("20");
+      expect(within(row).getAllByRole("cell")[6]).toHaveTextContent("2");
+      expect(within(row).getAllByRole("cell")[6]).toHaveClass("text-red-600");
       fireEvent.click(within(row).getByRole("button", { name: "Edit Z10" }));
       expect(screen.getByTestId("source-retirement")).toHaveValue("Retired");
       expect(within(screen.getByRole("dialog")).getByRole("status")).toHaveTextContent("invalid reason D");
@@ -340,7 +346,7 @@ describe("CodeMappingPage", () => {
       expect(within(screen.getByRole("dialog")).queryByRole("status")).not.toBeInTheDocument();
     });
 
-    it.each(["Provenance", "Source code", "Retired", "Source description", "Destination concept", "Concept ID", "Status"])(
+    it.each(["Provenance", "Source code", "Seen", "Source description", "Destination concept", "Concept ID", "Dest count", "Status"])(
       "sorts %s ascending and descending", async (column) => {
         renderPage([high, low]);
         const table = await screen.findByRole("table", { name: "Unmapped mappings" });
@@ -374,14 +380,11 @@ describe("CodeMappingPage", () => {
       expect(within(athena).queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
     });
 
-    it("shows missing retirement metadata as Unknown and sorts it last", async () => {
+    it("shows missing retirement metadata as Unknown in the dialog", async () => {
       renderPage([high, low, { ...low, mapping_id: 33, source_code: "A3", source_retired: null }]);
-      const table = await screen.findByRole("table", { name: "Unmapped mappings" });
-      const button = within(table).getByRole("button", { name: "Retired" });
-      fireEvent.click(button);
-      expect(ids(table)).toEqual(["code-mapping-32", "code-mapping-31", "code-mapping-33"]);
-      fireEvent.click(button);
-      expect(ids(table)).toEqual(["code-mapping-31", "code-mapping-32", "code-mapping-33"]);
+      fireEvent.click(await screen.findByRole("button", { name: "Edit A3" }));
+      expect(screen.getByTestId("source-retirement")).toHaveValue("Unknown");
+      expect(within(screen.getByRole("dialog")).queryByRole("status")).not.toBeInTheDocument();
     });
   });
 
@@ -393,14 +396,14 @@ describe("CodeMappingPage", () => {
     expect(screen.queryByRole("columnheader", { name: "Source code system" })).not.toBeInTheDocument();
   });
 
-  it("shows source descriptions beside source codes and removes OMOP table and Seen", async () => {
+  it("shows source descriptions and Seen beside source codes without an OMOP table column", async () => {
     renderPage();
     const row = (await screen.findByText("M-PROTEIN, SERUM", { selector: "td" })).closest("tr")!;
     const cells = within(row).getAllByRole("cell");
     expect(cells[3]).toHaveTextContent("M-protein, serum");
     expect(screen.getByRole("columnheader", { name: "Source description" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "OMOP table" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("columnheader", { name: "Seen" })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Seen" })).toBeInTheDocument();
   });
 
   it("searches mappings across source-vocabulary tabs", async () => {
@@ -765,7 +768,8 @@ describe("CodeMappingPage", () => {
     it("shows import provenance so an SME knows what they are reviewing", async () => {
       await openDialog();
       expect(screen.getByText(/Proposed by import/)).toHaveTextContent("hk-labs");
-      expect(screen.getByText(/Proposed by import/)).toHaveTextContent("14");
+      expect(within(screen.getByRole("dialog")).getByText(/Seen/)).toHaveTextContent("Seen 14 times");
+      expect(within(screen.getByRole("dialog")).getByText(/Destinations/)).toHaveTextContent("Destinations 1");
     });
 
     it("offers Update & Approve once the destination has moved", async () => {
@@ -870,10 +874,7 @@ describe("CodeMappingPage", () => {
   describe("Unmapped queue ordering", () => {
     const row = (over: Partial<typeof proposedRow>) => ({ ...proposedRow, ...over });
 
-    it("puts import proposals above hand-written ones, then sorts humans by name", async () => {
-      // An import's proposal is nobody's decision yet — it is the work the
-      // queue exists for. Human drafts then group by author so one curator's
-      // in-progress work stays together.
+    it("puts the most frequently seen codes first regardless of provenance", async () => {
       renderPage([
         row({ mapping_id: 1, source_code: "HUMAN-ZOE", origin: "curator", created_by: "zoe@example.com", occurrence_count: 900 }),
         row({ mapping_id: 2, source_code: "HUMAN-ADA", origin: "curator", created_by: "ada@example.com", occurrence_count: 1 }),
@@ -887,9 +888,7 @@ describe("CodeMappingPage", () => {
       const codes = screen
         .getAllByText(/^(MACHINE|HUMAN-ADA|HUMAN-ZOE)$/, { selector: "td" })
         .map((cell) => cell.textContent);
-      // Machine first despite the lowest count; then Ada before Zoe despite
-      // Zoe's row being seen 900 times.
-      expect(codes).toEqual(["MACHINE", "HUMAN-ADA", "HUMAN-ZOE"]);
+      expect(codes).toEqual(["HUMAN-ZOE", "MACHINE", "HUMAN-ADA"]);
     });
 
     it("names the creating curator instead of an import system", async () => {
@@ -939,9 +938,10 @@ describe("CodeMappingPage", () => {
       const when = new Date("2026-08-31T09:14:00Z").toLocaleDateString();
       expect(
         screen.getByText(
-          `Created by zoe@example.com · approved by ada@example.com on ${when} · seen 3 time(s)`,
+          `Created by zoe@example.com · approved by ada@example.com on ${when}`,
         ),
       ).toBeInTheDocument();
+      expect(within(screen.getByRole("dialog")).getByText(/Seen/)).toHaveTextContent("Seen 3 times");
     });
 
     it("shows both halves when an import raised it and a human signed it off", async () => {
@@ -956,7 +956,7 @@ describe("CodeMappingPage", () => {
       const when = new Date("2026-08-31T09:14:00Z").toLocaleDateString();
       expect(
         screen.getByText(
-          `Proposed by import (fhir-sync) · approved by ada@example.com on ${when} · seen 3 time(s)`,
+          `Proposed by import (fhir-sync) · approved by ada@example.com on ${when}`,
         ),
       ).toBeInTheDocument();
     });
