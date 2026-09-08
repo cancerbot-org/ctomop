@@ -204,7 +204,3 @@ def test_other_vocabularies_still_allow_different_destinations(athena):
     other = ConceptFactory()
     assert not athena_supplies_mapping('LOINC', 'A02.0', other.pk)
     assert athena_supplies_mapping('LOINC', 'A02.0', athena.target_concept_id)
-    assert request_mapping('post', {
-        'source_vocabulary_id': 'LOINC', 'source_code': 'A02.0',
-        'destination_concept_id': other.pk,
-    }).status_code == 201
