@@ -1488,7 +1488,7 @@ export default function CodeMappingPage() {
         <div className="mb-4 flex justify-end">
           <section aria-label="Suggestion accuracy" className="flex flex-wrap divide-x rounded-md border border-slate-200 bg-slate-50 text-right text-xs">
             {([
-              ['Approved', selectedAccuracy?.approved],
+              ['Approved', selectedAccuracy?.accepted],
               ['Rejected', selectedAccuracy?.rejected],
               ['Other destination', selectedAccuracy?.overridden],
             ] as const).map(([label, value]) => (
