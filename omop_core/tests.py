@@ -6727,12 +6727,23 @@ class MappingSuggestionsTest(_OmopBase):
     def test_suggest_marks_its_answer_as_a_machine_guess(self):
         from omop_core.models import SourceCodeConceptMapping
         from omop_core.services.mapping_suggestions import suggest_mappings
+        # A concept the source value actually retrieves. Two things stopped the
+        # existing fixtures being retrievable, and both made this test assert
+        # the provenance of a suggestion that was never made: 'Creatinine'
+        # scores below the trigram threshold against 'Creatinine [Mass/volume]
+        # in Blood' (the name is three times longer), and `_concept` leaves
+        # standard_concept unset while retrieval takes standard concepts only.
+        exact = _concept(4100010, 'Creatinine', self.dom_meas, self.vocab, self.cc,
+                         code='CREAT-EXACT')
+        exact.standard_concept = 'S'
+        exact.save(update_fields=['standard_concept'])
         self._queue('Creatinine')
         with override_settings(ANTHROPIC_API_KEY=''):
             results = suggest_mappings('measurement', min_occurrences=10)
 
         self.assertEqual(len(results), 1)
         mapping = SourceCodeConceptMapping.objects.get(source_code='Creatinine')
+        self.assertEqual(mapping.target_concept_id, exact.concept_id)
         self.assertEqual(mapping.status, 'proposed', 'a guess is not a decision')
         self.assertEqual(mapping.origin, 'import')
         self.assertTrue(mapping.origin_system.startswith('suggest'),

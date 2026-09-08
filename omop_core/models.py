@@ -1904,6 +1904,17 @@ class SourceCodeConceptMapping(models.Model):
         max_length=20, blank=True, default='', db_index=True,
         help_text='Immutable version of the suggestion model that produced this proposal (for example v0.2).',
     )
+    # Deliberately separate from suggestion_model_version, which means "this
+    # version proposed the destination on this row" and is what the accuracy
+    # dashboard selects on. A run that finds nothing has still tried, and has to
+    # say so or it re-tries the same codes on every click -- but recording that
+    # as a suggestion would enrol a code the pipeline never proposed anything
+    # for in the model's accuracy figures, as an override, the moment a curator
+    # picks a concept by hand.
+    last_suggest_attempt = models.CharField(
+        max_length=20, blank=True, default='', db_index=True,
+        help_text='Suggestion model version that last examined this code, whether or not it proposed anything.',
+    )
     destination_vocabulary_id = models.CharField(
         max_length=20, blank=True, default='', db_index=True,
         help_text=(

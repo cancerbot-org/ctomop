@@ -123,9 +123,13 @@ def test_batch_suggest_skips_athena_supplied_candidate(athena, monkeypatch, dry_
     # destination, and filtering on that alone would pin it to the front of the
     # queue for ever.
     assert result[0]['updated'] is (not dry_run)
-    assert queued.suggestion_model_version == (
+    assert queued.last_suggest_attempt == (
         '' if dry_run else suggestions.SUGGESTION_MODEL_VERSION
     )
+    # Never suggestion_model_version: nothing was proposed, so the accuracy
+    # figures must not count this code as a suggestion the curator overrode.
+    assert queued.suggestion_model_version == ''
+    assert queued.origin_system == '', 'the row keeps the provenance that raised it'
 
 
 def test_single_suggest_explains_athena_duplicate(athena, monkeypatch):

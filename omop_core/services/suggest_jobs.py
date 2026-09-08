@@ -41,8 +41,13 @@ QUEUED_MAX_CODES = 50
 # not pasted the Redis URL in yet falls back to inline — and inline runs under
 # `start.sh`'s bare gunicorn, whose default timeout is 30s. Fifty codes inline is
 # 125s of serial retrieval and a 502: the exact failure this work removes.
-# Measured: 5 codes 24.1s, 8 codes 28.7s.
-INLINE_MAX_CODES = 5
+# Measured: 3 codes 9.5s, 5 codes 24.1s, 8 codes 28.7s -- and those figures are
+# with the embedding model already loaded. `_get_embedding_model()` is lazy and
+# `vector_rerank` is the first thing to call it, so the first request a fresh
+# worker serves also pays a ~5s SentenceTransformer load. Five would put that
+# first click at ~29s against a 30s timeout, which is the 502 this work exists
+# to remove; three leaves room for it.
+INLINE_MAX_CODES = 3
 
 
 class SuggestDispatcher(Protocol):
@@ -148,10 +153,20 @@ def execute_run(run_id: str, params: dict) -> None:
     # its ceiling.
     total = run.total
 
-    def progress(stage, done, _total):
+    # `run.total` was counted in the request, before dispatch. Ingest creates
+    # queue rows continuously, so by the time a worker picks the job up the real
+    # count can differ -- and clamping progress to a stale total left the bar at
+    # 100% with "Searching for candidates..." beside it. Phase 1 knows the true
+    # number, so take it from there.
+    counted = {'total': run.total}
+
+    def progress(stage, done, table_total):
+        if table_total != counted['total']:
+            counted['total'] = table_total
+            SuggestRun.objects.filter(pk=run.pk).update(total=table_total)
         field = 'retrieved' if stage == 'retrieving' else 'done'
         SuggestRun.objects.filter(pk=run.pk).update(
-            **{field: min(done, total) if total else done}
+            **{field: min(done, counted['total']) if counted['total'] else done}
         )
 
     try:
@@ -202,7 +217,7 @@ def execute_run(run_id: str, params: dict) -> None:
             source_vocabulary_id=params['source_vocabulary_id'],
             min_occurrences=params['min_occurrences'],
             resuggest=params['resuggest'],
-        ).exclude(suggestion_model_version=SUGGESTION_MODEL_VERSION).count()
+        ).exclude(last_suggest_attempt=SUGGESTION_MODEL_VERSION).count()
     except Exception:                             # noqa: BLE001 - a count must not fail a run
         remaining = 0
 
