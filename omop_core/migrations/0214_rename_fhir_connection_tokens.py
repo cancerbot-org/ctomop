@@ -3,7 +3,7 @@ from django.db import migrations
 
 class Migration(migrations.Migration):
     dependencies = [
-        ('omop_core', '0212_suggest_run'),
+        ('omop_core', '0213_suggest_embedding_snapshot'),
     ]
 
     operations = [
