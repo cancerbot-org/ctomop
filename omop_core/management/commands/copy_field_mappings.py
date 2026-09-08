@@ -143,23 +143,31 @@ class Command(BaseCommand):
 
         register_source_connection(url)
         try:
-            payload = read_payload(SOURCE_ALIAS, tables=tables)
+            payload = read_payload(SOURCE_ALIAS, tables=tables, stream=True)
         except Exception as exc:
+            connections[SOURCE_ALIAS].close()
             raise CommandError(f'Could not read from the source database: {exc}')
+
+        for table in tables:
+            rows = payload.get(table)
+            count = 'streamed' if table == 'code_mappings' else f'{len(rows or []):4d}'
+            self.stdout.write(f'  read {count}  {_TABLE_LABELS[table]}')
+
+        try:
+            # The source connection stays open: code_mappings is a generator
+            # that is pulled from as the target transaction writes it.
+            stats = apply_payload(
+                payload, tables=tables, prune=options['prune'], dry_run=dry_run,
+            )
         finally:
             connections[SOURCE_ALIAS].close()
 
-        for table in tables:
-            self.stdout.write(
-                f'  read {len(payload.get(table, [])):4d}  {_TABLE_LABELS[table]}'
-            )
-
-        stats = apply_payload(
-            payload, tables=tables, prune=options['prune'], dry_run=dry_run,
-        )
-
         for warning in stats.warnings:
             self.stdout.write(self.style.WARNING(f'  ! {warning}'))
+        if stats.suppressed_warnings:
+            self.stdout.write(self.style.WARNING(
+                f'  ! ...and {stats.suppressed_warnings} more warnings.'
+            ))
 
         self.stdout.write('')
         for table in tables:

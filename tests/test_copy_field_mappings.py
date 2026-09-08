@@ -22,8 +22,13 @@ from omop_core.models import (
     FieldSynonym,
     SourceCodeConceptMapping,
 )
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+
+from omop_core.services import field_curation_transfer
 from omop_core.services.field_curation_transfer import (
     DEFAULT_TABLES,
+    TransferStats,
     apply_payload,
     read_payload,
 )
@@ -573,3 +578,55 @@ def test_code_mapping_dry_run_writes_nothing():
 
     assert stats.created['code_mappings'] == 1
     assert SourceCodeConceptMapping.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_code_mappings_stream_in_chunks_without_loading_the_table(monkeypatch):
+    """The read side never holds the whole table, and the write side never
+    loads every local row to match against.
+
+    This is what OOM-killed a 512Mi Cloud Run job: 117k rows as one list, plus
+    a dict of every local row. Chunking is the fix, so it is asserted rather
+    than left to be rediscovered.
+    """
+    monkeypatch.setattr(field_curation_transfer, 'CODE_MAPPING_CHUNK', 2)
+    for i in range(5):
+        _seed_code_mapping(source_code=f'STREAM-{i}')
+
+    payload = read_payload('default', tables=('code_mappings',), stream=True)
+    assert not isinstance(payload['code_mappings'], list)
+
+    rows = list(read_payload('default', tables=('code_mappings',))['code_mappings'])
+    assert len(rows) == 5
+
+
+@pytest.mark.django_db
+def test_code_mapping_queries_do_not_grow_with_row_count():
+    """Concepts are resolved per chunk, not per reference.
+
+    The naive version ran one query per concept FK per row — 350k for a real
+    copy, which is why the first staging attempt was also slow. Chunk size is
+    constant here, so the per-chunk lookups must not multiply with rows.
+    """
+    _seed_code_mapping(source_code='TEMPLATE')
+    template = list(
+        read_payload('default', tables=('code_mappings',))['code_mappings']
+    )[0]
+
+    def queries_for(count):
+        SourceCodeConceptMapping.objects.all().delete()
+        rows = []
+        for i in range(count):
+            row = dict(template)
+            row['source_code'] = f'Q-{i}'
+            rows.append(row)
+        stats = TransferStats()
+        with CaptureQueriesContext(connection) as ctx:
+            field_curation_transfer._apply_code_mappings(rows, stats)
+        return len(ctx.captured_queries)
+
+    assert field_curation_transfer.CODE_MAPPING_CHUNK >= 20
+    small, large = queries_for(5), queries_for(20)
+    # One chunk either way, so the two lookup queries are paid once each; only
+    # the per-row INSERTs scale.
+    assert large - small <= (20 - 5) + 2

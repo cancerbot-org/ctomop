@@ -84,6 +84,14 @@ _CODE_MAPPING_CONCEPT_FKS = (
     'source_concept', 'target_concept', 'suggested_target_concept',
 )
 
+# Rows are read and written a chunk at a time. The source table is ~117k rows
+# on a real instance, which does not fit in a 512Mi Cloud Run job if held as
+# one list — and neither does a dict of every local row to match against.
+CODE_MAPPING_CHUNK = 2000
+
+# One unresolvable concept per FK per row would be ~350k warning strings.
+_WARNING_CAP = 100
+
 
 @dataclass
 class TransferStats:
@@ -93,6 +101,16 @@ class TransferStats:
     deleted: dict[str, int] = dataclass_field(default_factory=dict)
     skipped: dict[str, int] = dataclass_field(default_factory=dict)
     warnings: list[str] = dataclass_field(default_factory=list)
+    suppressed_warnings: int = 0
+    # Natural keys seen while streaming, so --prune works without the rows.
+    code_mapping_keys: set = dataclass_field(default_factory=set)
+
+    def warn(self, message: str) -> None:
+        """Keep the first ``_WARNING_CAP`` warnings and count the rest."""
+        if len(self.warnings) < _WARNING_CAP:
+            self.warnings.append(message)
+        else:
+            self.suppressed_warnings += 1
 
     def _bump(self, bucket: dict[str, int], table: str, n: int = 1) -> None:
         bucket[table] = bucket.get(table, 0) + n
@@ -105,10 +123,15 @@ class _Rollback(Exception):
     """Raised to unwind the transaction after a --dry-run."""
 
 
-def read_payload(using: str, tables: tuple[str, ...] = TABLES) -> dict:
+def read_payload(
+    using: str, tables: tuple[str, ...] = TABLES, stream: bool = False,
+) -> dict:
     """Read the curation tables from ``using`` into JSON-safe dicts.
 
     Read-only: nothing is written to the source instance.
+
+    With ``stream``, ``code_mappings`` is a generator rather than a list, and the
+    source connection must stay open until it has been consumed.
     """
     payload: dict[str, list[dict]] = {}
 
@@ -185,27 +208,54 @@ def read_payload(using: str, tables: tuple[str, ...] = TABLES) -> dict:
         ]
 
     if 'code_mappings' in tables:
-        payload['code_mappings'] = [
-            {
-                'source_vocabulary_id': m.source_vocabulary_id,
-                'source_code': m.source_code,
-                **{
-                    fk: {
-                        'vocabulary_id': c.vocabulary_id if c else '',
-                        'concept_code': c.concept_code if c else '',
-                        'concept_id': getattr(m, f'{fk}_id'),
-                    }
-                    for fk in _CODE_MAPPING_CONCEPT_FKS
-                    for c in (getattr(m, fk),)
-                },
-                **{name: getattr(m, name) for name in _CODE_MAPPING_FIELDS},
-            }
-            for m in SourceCodeConceptMapping.objects.using(using)
-            .select_related(*_CODE_MAPPING_CONCEPT_FKS)
-            .order_by('source_vocabulary_id', 'source_code')
-        ]
+        rows = iter_code_mappings(using)
+        # A generator unless the caller wants the whole table in hand: this is
+        # the one table large enough that materializing it is the difference
+        # between running and being OOM-killed.
+        payload['code_mappings'] = rows if stream else list(rows)
 
     return payload
+
+
+def _code_mapping_row(m) -> dict:
+    """One source-code mapping as a JSON-safe dict."""
+    return {
+        'source_vocabulary_id': m.source_vocabulary_id,
+        'source_code': m.source_code,
+        **{
+            fk: {
+                'vocabulary_id': c.vocabulary_id if c else '',
+                'concept_code': c.concept_code if c else '',
+                'concept_id': getattr(m, f'{fk}_id'),
+            }
+            for fk in _CODE_MAPPING_CONCEPT_FKS
+            for c in (getattr(m, fk),)
+        },
+        **{name: getattr(m, name) for name in _CODE_MAPPING_FIELDS},
+    }
+
+
+def iter_code_mappings(using: str):
+    """Yield source-code mapping rows from ``using`` without materializing them."""
+    queryset = (
+        SourceCodeConceptMapping.objects.using(using)
+        .select_related(*_CODE_MAPPING_CONCEPT_FKS)
+        .order_by('source_vocabulary_id', 'source_code')
+    )
+    for m in queryset.iterator(chunk_size=CODE_MAPPING_CHUNK):
+        yield _code_mapping_row(m)
+
+
+def _chunked(rows, size: int):
+    """Group ``rows`` into lists of at most ``size``, consuming lazily."""
+    chunk = []
+    for row in rows:
+        chunk.append(row)
+        if len(chunk) >= size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
 
 
 def apply_payload(
@@ -249,6 +299,7 @@ def apply_payload(
 def _resolve_concept_ref(
     vocab: str, code: str, concept_id: int | None, label: str,
     stats: TransferStats,
+    by_code: dict | None = None, by_id: dict | None = None,
 ) -> Concept | None:
     """Find the local Concept named by ``(vocab, code)``, else ``concept_id``.
 
@@ -258,9 +309,14 @@ def _resolve_concept_ref(
     would then act on.
     """
     if vocab and code:
-        concept = Concept.objects.filter(
-            vocabulary_id=vocab, concept_code=code
-        ).first()
+        # Caches come from _concept_caches when a whole chunk is resolved at
+        # once; without them this is one query per reference.
+        if by_code is not None:
+            concept = by_code.get((vocab, code))
+        else:
+            concept = Concept.objects.filter(
+                vocabulary_id=vocab, concept_code=code
+            ).first()
         if concept is not None:
             return concept
     elif concept_id is not None:
@@ -268,12 +324,15 @@ def _resolve_concept_ref(
         # is safe only when there is no semantic identifier to resolve: if a
         # supplied code is absent locally, the same numeric ID may name a
         # completely different locally-created concept on this instance.
-        concept = Concept.objects.filter(concept_id=concept_id).first()
+        if by_id is not None:
+            concept = by_id.get(concept_id)
+        else:
+            concept = Concept.objects.filter(concept_id=concept_id).first()
         if concept is not None:
             return concept
 
     if concept_id is not None or (vocab and code):
-        stats.warnings.append(
+        stats.warn(
             f"{label}: concept {vocab}:{code or concept_id} is not "
             f"loaded on this instance — mapping copied with no concept."
         )
@@ -320,7 +379,7 @@ def _apply_custom_fields(rows: list[dict], stats: TransferStats) -> None:
         if mapping is None:
             # Only reachable when --tables excluded mappings; a custom field
             # cannot be created without one.
-            stats.warnings.append(
+            stats.warn(
                 f"custom field {row['field_name']}: mapping "
                 f"{row['mapping_field_name']} is not present — skipped."
             )
@@ -417,10 +476,53 @@ def _apply_code_mappings(rows: list[dict], stats: TransferStats) -> None:
     *this* instance's ingest traffic, so the source's numbers would misattribute
     it. An existing row keeps the counts it earned.
     """
+    for chunk in _chunked(rows, CODE_MAPPING_CHUNK):
+        _apply_code_mapping_chunk(chunk, stats)
+
+
+def _concept_caches(rows: list[dict]) -> tuple[dict, dict]:
+    """Resolve every concept a chunk refers to in two queries, not two per row.
+
+    The code lookup is one superset SELECT over the chunk's vocabularies and
+    codes; pairs it returns that nothing asked for are simply never read.
+    """
+    pairs, ids = set(), set()
+    for row in rows:
+        for fk in _CODE_MAPPING_CONCEPT_FKS:
+            ref = row.get(fk) or {}
+            vocab, code = ref.get('vocabulary_id') or '', ref.get('concept_code') or ''
+            if vocab and code:
+                pairs.add((vocab, code))
+            elif ref.get('concept_id') is not None:
+                ids.add(ref['concept_id'])
+
+    by_code = {}
+    if pairs:
+        by_code = {
+            (c.vocabulary_id, c.concept_code): c
+            for c in Concept.objects.filter(
+                vocabulary_id__in={v for v, _ in pairs},
+                concept_code__in={c for _, c in pairs},
+            )
+        }
+    by_id = {}
+    if ids:
+        by_id = {c.concept_id: c for c in Concept.objects.filter(concept_id__in=ids)}
+    return by_code, by_id
+
+
+def _apply_code_mapping_chunk(rows: list[dict], stats: TransferStats) -> None:
+    """Write one chunk, matching only the local rows the chunk could touch."""
+    keys = [(row['source_vocabulary_id'], row['source_code']) for row in rows]
+    stats.code_mapping_keys.update(keys)
     existing = {
         (m.source_vocabulary_id, m.source_code): m
-        for m in SourceCodeConceptMapping.objects.all()
+        for m in SourceCodeConceptMapping.objects.filter(
+            source_vocabulary_id__in={v for v, _ in keys},
+            source_code__in={c for _, c in keys},
+        )
     }
+    by_code, by_id = _concept_caches(rows)
     for row in rows:
         key = (row['source_vocabulary_id'], row['source_code'])
         label = f"{row['source_vocabulary_id'] or '(uncoded)'}:{row['source_code']}"
@@ -433,6 +535,7 @@ def _apply_code_mappings(rows: list[dict], stats: TransferStats) -> None:
                 ref.get('concept_id'),
                 f'{label} ({fk})',
                 stats,
+                by_code, by_id,
             )
         # Attribution does not cross instances — see module docstring.
         values['reviewer'] = None
@@ -494,10 +597,14 @@ def _prune(payload: dict, tables: tuple[str, ...], stats: TransferStats) -> None
             stats._bump(stats.deleted, 'synonyms', len(stale))
 
     if 'code_mappings' in tables:
-        keep = {(row['source_vocabulary_id'], row['source_code'])
-                for row in payload.get('code_mappings', [])}
-        stale = [m.pk for m in SourceCodeConceptMapping.objects.all()
-                 if (m.source_vocabulary_id, m.source_code) not in keep]
+        # Gathered during apply — the payload rows may be a spent generator.
+        keep = stats.code_mapping_keys
+        stale = [
+            pk for pk, vocab, code in SourceCodeConceptMapping.objects
+            .values_list('pk', 'source_vocabulary_id', 'source_code')
+            .iterator(chunk_size=CODE_MAPPING_CHUNK)
+            if (vocab, code) not in keep
+        ]
         if stale:
             # Approved rows steer ingest, so this is a live behaviour change.
             SourceCodeConceptMapping.objects.filter(pk__in=stale).delete()
