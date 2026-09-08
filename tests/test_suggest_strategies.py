@@ -519,11 +519,27 @@ class TestSuggestableMappings:
             'GAP UNTRIED', 'ANSWERED UNTRIED', 'GAP TRIED', 'ANSWERED TRIED',
         ]
 
-    def test_occurrence_orders_within_one_group(self):
-        queue_row('BUSY', occurrence_count=900)
-        queue_row('QUIET', occurrence_count=10)
-        rows = suggestable_mappings('measurement')
-        assert [m.source_code for m in rows] == ['BUSY', 'QUIET']
+    @pytest.mark.parametrize('attempted', [False, True])
+    def test_seen_orders_both_destination_groups_before_the_limit(
+        self, measurement_concept, attempted,
+    ):
+        attempt = SUGGESTION_MODEL_VERSION if attempted else ''
+        for code, count, target in [
+            ('ANSWER QUIET', 1, measurement_concept),
+            ('GAP QUIET', 1, None),
+            ('ANSWER BUSY', 900, measurement_concept),
+            ('GAP BUSY', 30, None),
+            ('GAP UNCOUNTED', 0, None),
+        ]:
+            queue_row(code, occurrence_count=count, target_concept=target,
+                      origin_system=SUGGESTION_PROVENANCE,
+                      last_suggest_attempt=attempt)
+        rows = suggestable_mappings(
+            'measurement', resuggest=True, min_occurrences=1, limit=4,
+        )
+        assert [m.source_code for m in rows] == [
+            'GAP BUSY', 'GAP QUIET', 'GAP UNCOUNTED', 'ANSWER BUSY',
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -641,6 +657,16 @@ class TestSuggestRunLifecycle:
         assert resp.status_code == 202
         assert resp.data['run_id']
         assert resp.data['state'] == 'queued'
+
+    def test_default_includes_single_occurrences_and_uncounted_rows(self):
+        queue_row('BUSY', occurrence_count=900)
+        queue_row('ONCE', occurrence_count=1)
+        queue_row('UNCOUNTED', occurrence_count=0)
+        with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
+            resp = self._post()
+        assert resp.status_code == 202
+        assert resp.data['total'] == 3
+        assert fake.calls[0][1]['min_occurrences'] == 1
 
     def test_the_total_is_known_before_any_work_runs(self):
         """The strip needs a denominator on its first poll, not a bar filling

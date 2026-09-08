@@ -446,16 +446,13 @@ export default function CodeMappingPage() {
   const [navigationTarget, setNavigationTarget] = useState<{ id: string } | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
-  // "" while the field is mid-edit; coerced when sent. Coercing on every
-  // keystroke snapped the box to 1 the moment a curator cleared it.
-  const [minOccurrences, setMinOccurrences] = useState<number | "">(10);
   const [strategies, setStrategies] = useState({
     umls: true, vectors: true, lexical: true,
   });
   // How many trigram survivors reach the reranker and the ranker's prompt. The
   // one knob that trades recall against the cost of every stage after it, so it
   // sits next to the checkbox for the stage that produces them.
-  // "" while mid-edit, for the same reason minOccurrences is.
+  // Keep the input empty while editing; coerce only when sending.
   const [lexicalLimit, setLexicalLimit] = useState<number | "">(10);
   const [dialogMode, setDialogMode] = useState<"new" | "edit" | null>(null);
   const [selectedRow, setSelectedRow] = useState<CodeMappingRow | null>(null);
@@ -953,7 +950,6 @@ export default function CodeMappingPage() {
         "/v1/code-mappings/suggest/",
         {
           source_vocabulary_id: selectedVocabulary,
-          min_occurrences: Number(minOccurrences) || 1,
           strategies: activeStrategies,
           lexical_limit: Number(lexicalLimit) || 10,
           replace: effectiveReplace,
@@ -1049,11 +1045,7 @@ export default function CodeMappingPage() {
           + (byStrategy ? ` (${byStrategy})` : "")
           + (where ? ` — ${where}.` : ".")
           + (run.remaining ? ` ${run.remaining} still awaiting a suggestion — run Suggest again.` : "")
-        // Suggest reads this tab, so an empty result means the tab has no row
-        // left whose provenance is empty or "suggest" — importer rows are
-        // deliberately left alone.
-        : `No queued codes on this tab awaiting a suggestion `
-          + `(seen ${Number(minOccurrences) || 1}+ times, provenance empty or "suggest").`,
+        : "No queued codes on this tab awaiting a suggestion.",
     );
     setSuggestFlash(true);
     if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
@@ -1360,19 +1352,6 @@ export default function CodeMappingPage() {
             anything to scroll past. Shown on every tab and disabled on the
             standard ones — a button that silently vanishes reads as a bug. */}
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <label className="text-xs text-slate-600" htmlFor="min_occurrences">
-            Suggest mappings for codes seen at least
-          </label>
-          <input
-            id="min_occurrences"
-            type="number"
-            min={1}
-            value={minOccurrences}
-            onChange={(e) => setMinOccurrences(e.target.value === "" ? "" : Number(e.target.value))}
-            title="How often a code must appear before it is worth a curator's time. 43% of unmapped codes are seen exactly once."
-            className="h-8 w-16 rounded-md border border-slate-300 px-2 text-xs"
-          />
-          <span className="text-xs text-slate-600">times</span>
           {(["umls", "lexical", "vectors"] as const).map((key) => (
             <span key={key} className="inline-flex items-center gap-1">
               <label className="inline-flex items-center gap-1 text-xs text-slate-600">

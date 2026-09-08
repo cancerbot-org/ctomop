@@ -1025,21 +1025,19 @@ describe("CodeMappingPage", () => {
         expect(screen.getByRole("button", { name: /Suggest/ })).toBeEnabled());
     });
 
-    it("defaults the threshold to 10 and sends it", async () => {
-      // 43% of staging's unmapped codes appear exactly once; proposing for them
-      // buries the 512 that carry the traffic.
+    it("includes all Seen counts without a threshold control", async () => {
       mockPost.mockResolvedValue({ data: suggestRun({ updated: 3, total: 5, ranked: 2 }) });
       renderPage();
       await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
-      expect(screen.getByLabelText(/seen at least/i)).toHaveValue(10);
+      expect(screen.queryByLabelText(/seen at least/i)).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
       await waitFor(() => expect(mockPost).toHaveBeenCalled());
       expect(mockPost.mock.calls[0][0]).toBe("/v1/code-mappings/suggest/");
       expect(mockPost.mock.calls[0][1]).toMatchObject({
         source_vocabulary_id: "",
-        min_occurrences: 10,
       });
+      expect(mockPost.mock.calls[0][1]).not.toHaveProperty("min_occurrences");
     });
 
     it("reports what it proposed", async () => {
