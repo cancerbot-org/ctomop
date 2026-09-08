@@ -373,11 +373,11 @@ describe('LabsTab - new_field', () => {
 
 ```bash
 # Backend tests, Django runner — omop_core + patient_portal
-DATABASE_URL="postgresql://postgres@localhost:5432/promop_test" \
+DATABASE_URL="postgresql://postgres@localhost:5433/promop_test" \
   .venv/bin/python manage.py test omop_core patient_portal --verbosity=2 --noinput
 
 # Backend tests, pytest — the tests/ package (18 files, 166 tests)
-DATABASE_URL="postgresql://postgres@localhost:5432/promop_test" DEBUG=True \
+DATABASE_URL="postgresql://postgres@localhost:5433/promop_test" DEBUG=True \
   .venv/bin/python -m pytest -q
 
 # Frontend tests (install deps first if needed: cd frontend && npm ci)
@@ -412,7 +412,7 @@ without anyone noticing.
 After merging any PR into `dev`, immediately run the full backend test suite against the **local test database** (`promop_test`) to catch any integration regressions:
 
 ```bash
-DATABASE_URL="postgresql://postgres@localhost:5432/promop_test" \
+DATABASE_URL="postgresql://postgres@localhost:5433/promop_test" \
   .venv/bin/python manage.py test omop_core patient_portal --verbosity=2 --noinput
 ```
 
@@ -420,38 +420,72 @@ DATABASE_URL="postgresql://postgres@localhost:5432/promop_test" \
 
 ```bash
 # One-liner to run everything from the repo root:
-DATABASE_URL="postgresql://postgres@localhost:5432/promop_test" \
+DATABASE_URL="postgresql://postgres@localhost:5433/promop_test" \
   .venv/bin/python manage.py test omop_core patient_portal --verbosity=2 --noinput \
   && (cd frontend && npm test -- --run)
 ```
 
-**Local PostgreSQL setup** (one-time, postgresql@14 via Homebrew):
+**Local PostgreSQL setup** (one-time, postgresql@18 via Homebrew, port 5433):
+
+The local server must be **PostgreSQL 18 with pgvector**, not the postgresql@14
+this project used before. Two requirements force it:
+
+* **pgvector.** `omop_core.models.ConceptEmbedding` declares a `vector(384)`
+  column, and the pytest suite runs `--no-migrations` — the test database is
+  built by reflecting model state, so `CREATE TABLE concept_embedding` runs
+  before any fixture and fails with `type "vector" does not exist` on a server
+  without the extension. That is a collection-time error on *every* pytest test,
+  not a few. Homebrew's `pgvector` bottle builds only for postgresql@17 and @18,
+  so @14 cannot have it.
+* **CI parity.** CI's Postgres service is `pgvector/pgvector:pg16`, so pgvector
+  is present there; a local server without it fails tests that CI passes.
+
+Port **5433**, because Postgres.app's PostgreSQL 14 commonly holds 5432 on this
+machine. Nothing needs 5432 — set `DATABASE_URL` to 5433 everywhere locally.
+
 ```bash
-# Start the server
-brew services start postgresql@14
+brew install postgresql@18 pgvector
+echo "port = 5433" >> /opt/homebrew/var/postgresql@18/postgresql.conf
+brew services start postgresql@18
+
+export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
 
 # Create postgres role and databases (run once)
-PATH="/opt/homebrew/opt/postgresql@14/bin:$PATH" psql -U $(whoami) -d postgres \
+psql -p 5433 -d postgres \
   -c "CREATE ROLE postgres WITH SUPERUSER CREATEDB CREATEROLE LOGIN;"
-PATH="/opt/homebrew/opt/postgresql@14/bin:$PATH" psql -U postgres -d postgres \
+psql -p 5433 -U postgres -d postgres \
   -c "CREATE DATABASE promop_test OWNER postgres;" \
   -c "CREATE DATABASE promop_dev OWNER postgres;"
 
+# Enable pg_trgm AND vector on template1 — REQUIRED by the pytest suite.
+# pytest runs with --no-migrations, so each test database is cloned from
+# template1 and built by reflecting model state: concept's GIN trigram index and
+# concept_embedding's vector(384) column are both created during CREATE TABLE,
+# before any fixture could enable an extension. On template1 every clone already
+# has them. Without pg_trgm: `operator class "gin_trgm_ops" does not exist`.
+# Without vector: `type "vector" does not exist`.
+psql -p 5433 -U postgres -d template1 \
+  -c "CREATE EXTENSION IF NOT EXISTS pg_trgm" \
+  -c "CREATE EXTENSION IF NOT EXISTS vector"
+
 # Apply migrations
-DATABASE_URL="postgresql://postgres@localhost:5432/promop_test" \
+DATABASE_URL="postgresql://postgres@localhost:5433/promop_test" \
   .venv/bin/python manage.py migrate --noinput
 
-# Enable pg_trgm on template1 — REQUIRED by the pytest suite.
-# pytest runs with --no-migrations, so the test DB is built by reflecting model
-# state, which recreates concept's GIN trigram index during CREATE TABLE before
-# any fixture can enable the extension. Putting it on template1 means every
-# database cloned from it already has pg_trgm. Without this, all 166 pytest
-# tests error with: operator class "gin_trgm_ops" does not exist
-PATH="/opt/homebrew/opt/postgresql@14/bin:$PATH" psql -U postgres -d template1 \
-  -c "CREATE EXTENSION IF NOT EXISTS pg_trgm"
+# Connect (use @18 bin directly — the system psql binary has an OpenSSL crash
+# on this machine)
+psql -p 5433 -U postgres -d promop_test
+```
 
-# Connect (use @14 bin directly — system psql binary has OpenSSL crash on this machine)
-PATH="/opt/homebrew/opt/postgresql@14/bin:$PATH" psql -d promop_test
+**Python 3.12 is also required.** `prolog` (the `prolog_surveys` app) declares
+`requires-python >=3.12`, as do the pinned numpy/scipy builds, so a 3.11 venv
+silently installs neither and Django fails at startup with
+`ModuleNotFoundError: No module named 'prolog_surveys'`. CI uses 3.12.
+
+```bash
+brew install python@3.12
+/opt/homebrew/opt/python@3.12/bin/python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ---
@@ -749,6 +783,175 @@ without a second test database (`tests/test_copy_field_mappings.py`).
 
 ---
 
+## Code Mapping Suggest
+
+Suggest proposes a destination concept for queue rows that have none. Two rules
+decide what it touches and how long it takes.
+
+### It reads the tab, not the clinical tables
+
+The candidate set is `suggestable_mappings()`: every `proposed` row on the tab
+with **no destination yet**, whatever its provenance. A row with nothing in the
+destination column has nothing that could be overwritten — an
+`open-wearables-seed` or `hk-labs` row waiting for a concept is exactly what
+Suggest is for, and staging has 69 of them (67 + 2).
+
+Provenance decides only what **Replace** may re-answer. A row that already has a
+destination is revisited only with `resuggest`, and then only if its
+`origin_system` is empty or begins with `suggest` — meaning nothing but a
+previous Suggest run ever set it. An `HT-One`, `HT-FHIR` or `athena` destination
+was asserted by an importer that knew more than the source text does (75,257 of
+staging's 85,318 rows), so re-deriving it would spend a model call to make the
+answer worse. In practice the ICD-10 and RxNorm tabs return nothing, because
+every row on them already has an importer's destination.
+
+Rows are ordered **untried, then gaps before replacements, then by
+occurrence**:
+
+1. **Untried before tried**, by the current `suggestion_model_version`. This is
+   the primary key *always*, because anything above it starves the queue. A
+   declined code keeps no destination, so it stays eligible and, being
+   high-occurrence, retakes the front of the very next run — on the staging
+   sample *every* code in the top slots was declined, so they would never free
+   up. Putting "no destination" above it has the same failure in the replacing
+   case: a run would spend its whole budget re-trying declined gaps and never
+   reach a replacement. Untried-first means every run advances; declined codes
+   come round again once the tab is drained.
+2. **No destination before has one**, within untried and within tried alike. An
+   empty destination is a gap, a replaceable one is an improvement, and the gap
+   is worth the model call first. Without Replace nothing has a destination, so
+   this key is constant.
+3. **Occurrence**, because that is the order a curator should meet codes in.
+
+### The limit counts codes, not codes per table
+
+A tab maps to one or more clinical tables — the Uncoded tab maps to all five —
+but that is only where the rows live. Each queue row carries its own
+`omop_table`, so rows are selected, ordered and limited **once, together**.
+
+Selecting per table applied the limit to each, so the Uncoded tab could evaluate
+5× the ceiling it was given, and the ordering above would only hold within a
+table rather than across the run.
+
+It used to derive the queue instead, by grouping a whole clinical table on
+`concept_id = 0` and subtracting every existing mapping. That cost 4-7s per
+table per request and, once ingest began queueing every code it met, returned
+**zero** rows on both tabs with a real backlog. `manage.py
+enqueue_unmapped_source_codes` still does that scan, as the batch job it is: it
+creates empty queue rows with blank provenance, which is exactly the state
+Suggest looks for. So the split is **enqueue, then suggest**.
+
+### One retrieval and one ranking, not a waterfall of three
+
+```
+UMLS CUI bridge ──► exactly one standard concept? ──► done, no model call
+       │ no
+       ▼
+Lexical trigram ──► best N survivors (N from the UI, default 10)
+       │
+       ▼
+Vector rerank ────► reorder those N by embedding cosine
+       │
+       ▼
+One ranking call ─► the model picks one, or declines
+```
+
+The old shape gave each tier its own ranker call and took the first that
+answered, so a code that fell through UMLS and vectors paid for three calls at
+4-6s each and usually got the lexical answer anyway. Vectors were also a
+*retrieval* tier, cosine-scanning 1.5M stored vectors per code (2.6-2.9s). They
+are a good ordering and a bad filter, so they now rerank the shortlist instead:
+one query embedding (~25ms) plus a primary-key lookup of at most N stored
+vectors.
+
+Measured on staging, per code: **17.8s → 3.5s**.
+
+Where the remaining time goes, per code:
+
+| Stage | Cost |
+|---|---|
+| lexical trigram retrieval | ~2.5s (**67%**, and serial) |
+| ranking model call | 3.5s each, but concurrent (`RANK_CONCURRENCY`) and only for codes UMLS did not settle |
+| vector rerank | ~0.3s stored-vector lookup + ~0.025s query embedding |
+| embedding model load | ~5s, **once per gunicorn worker**, on its first Suggest |
+
+### The run is queued, and how big it may be depends on that
+
+At ~3.5s per code a tab's backlog does not fit in a request, so `POST
+/v1/code-mappings/suggest/` returns **202** with a run id and the page polls
+`GET /v1/code-mappings/suggest-runs/<id>/`. Progress lives on a `SuggestRun`
+row rather than in Celery's task metadata: the counts must survive a worker
+restart, the poll can land on any gunicorn worker, and the inline dispatcher has
+no result backend to write into.
+
+`omop_core/services/suggest_jobs.py` picks how it runs, on the same rule as
+`derivation_jobs.py` — Celery when `CELERY_BROKER_URL` is set, inline otherwise
+— and **the ceiling depends on which**:
+
+| Dispatcher | Ceiling | Bounded by |
+|---|---|---|
+| `CeleryDispatcher` | `QUEUED_MAX_CODES = 50` | `CELERY_TASK_TIME_LIMIT` (900s) |
+| `InlineDispatcher` | `INLINE_MAX_CODES = 5` | the request, under `start.sh`'s bare gunicorn (30s default) |
+
+That split is not a nicety. `render.yaml` leaves `CELERY_BROKER_URL`
+dashboard-managed on the web service (`sync: false`), so a deployment that has
+not pasted the Redis URL in yet **falls back to inline** — and 50 codes inline is
+~125s of serial retrieval and a 502, the exact failure this design removes.
+Batches measured at 3/9.5s, 5/24.1s, 8/28.7s, 10/38.3s.
+
+The ceiling is a budget for the whole run, not per clinical table: a source
+vocabulary can map to five tables, and a per-table limit would let one run
+attempt five times its own ceiling.
+
+Raising it needs retrieval to get cheaper, not the timeout to get longer — each
+extra code adds another trigram query, while ranking adds ~3.5s to a run of any
+size.
+
+### What the curator is shown
+
+The headline number is **new destinations written** (`SuggestRun.destinations`)
+— what the run achieved. Not "rows written": a code the ranker declined is
+written too, so the run records that it tried, and counting those would claim
+destinations nobody proposed. `done`/`total` is the separate "how far through"
+number.
+
+### Replace re-answers rows, it does not delete them
+
+It used to delete: while the candidate set came from a clinical scan, a deleted
+row would be found again and recreated. Now that Suggest reads the tab, a
+deleted row is a code that has left the queue for good, taking its
+`occurrence_count` and `first_seen` with it.
+
+### Vectors cannot run alone
+
+It reranks what retrieval found and retrieves nothing itself, so a run with
+neither UMLS nor Lexical would report "no candidate concept" for every code. The
+API rejects that combination and the checkbox disables itself.
+
+### The embeddings the reranker reads
+
+`vector_rerank` **never embeds a candidate on the fly**. It reads
+`concept_embedding` by primary key and demotes any candidate that has no stored
+vector below the ones it could score. So an unpopulated table does not make
+Suggest slower — it makes it stop reranking, silently.
+
+`manage.py build_concept_embeddings` embeds every standard concept (1,523,060
+rows, ~2.8 hours). `manage.py precompute_suggest_embeddings` embeds only the
+concepts the queue can actually retrieve — it walks the eligible rows, takes
+each one's top-N lexical candidates, and embeds the union. On staging that is
+**287 concepts** rather than 1.5M. `--measure` reports the cost and writes
+nothing:
+
+```bash
+manage.py precompute_suggest_embeddings --measure
+manage.py precompute_suggest_embeddings --measure --source-vocabulary ICD10
+```
+
+Retrieval is the expensive half of that command too (one trigram query per queue
+row), which is why it is a command and not part of a click.
+
+---
+
 ## Deployment
 
 - **`start.sh`** runs `python manage.py migrate` on every deploy — so migrations pushed to `main` are auto-applied on next Render deploy.
@@ -762,8 +965,8 @@ without a second test database (`tests/test_copy_field_mappings.py`).
 
 | Purpose | DATABASE_URL |
 |---|---|
-| Running tests | `postgresql://postgres@localhost:5432/promop_test` |
-| Local development (manual testing, sync uploads, shell exploration) | `postgresql://postgres@localhost:5432/promop_dev` |
+| Running tests | `postgresql://postgres@localhost:5433/promop_test` |
+| Local development (manual testing, sync uploads, shell exploration) | `postgresql://postgres@localhost:5433/promop_dev` |
 | Staging migrations and sync checks | `${STAGING_DATABASE_URL:-$DATABASE_URL}` |
 
 **Both `.env` database URLs point at staging.** `STAGING_DATABASE_URL` is the explicit name;

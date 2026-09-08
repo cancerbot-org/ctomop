@@ -6560,6 +6560,21 @@ class MappingSuggestionsTest(_OmopBase):
         for i in range(times):
             self._measurement(start + i, source_value, day=(i % 28) + 1)
 
+    def _queue(self, source_code, occurrences=12, **kwargs):
+        """A Code Mapping queue row, the way ingest leaves one.
+
+        Suggest reads the tab, not the clinical tables, so this -- not a
+        Measurement -- is what puts a code in front of it.
+        """
+        from omop_core.models import SourceCodeConceptMapping
+        defaults = {
+            'source_vocabulary_id': '', 'omop_table': 'measurement',
+            'domain_id': 'Measurement', 'status': 'proposed', 'origin': 'import',
+            'origin_system': '', 'occurrence_count': occurrences,
+        }
+        defaults.update(kwargs)
+        return SourceCodeConceptMapping.objects.create(source_code=source_code, **defaults)
+
     # -- the threshold ----------------------------------------------------
 
     def test_a_code_below_the_threshold_is_not_proposed(self):
@@ -6709,20 +6724,31 @@ class MappingSuggestionsTest(_OmopBase):
 
     # -- creating the proposals -------------------------------------------
 
-    def test_suggest_creates_proposed_mappings_marked_as_a_machine_guess(self):
+    def test_suggest_marks_its_answer_as_a_machine_guess(self):
         from omop_core.models import SourceCodeConceptMapping
         from omop_core.services.mapping_suggestions import suggest_mappings
-        self._seed('Creatinine', 12, start=95000)
+        # A concept the source value actually retrieves. Two things stopped the
+        # existing fixtures being retrievable, and both made this test assert
+        # the provenance of a suggestion that was never made: 'Creatinine'
+        # scores below the trigram threshold against 'Creatinine [Mass/volume]
+        # in Blood' (the name is three times longer), and `_concept` leaves
+        # standard_concept unset while retrieval takes standard concepts only.
+        exact = _concept(4100010, 'Creatinine', self.dom_meas, self.vocab, self.cc,
+                         code='CREAT-EXACT')
+        exact.standard_concept = 'S'
+        exact.save(update_fields=['standard_concept'])
+        self._queue('Creatinine')
         with override_settings(ANTHROPIC_API_KEY=''):
             results = suggest_mappings('measurement', min_occurrences=10)
 
         self.assertEqual(len(results), 1)
         mapping = SourceCodeConceptMapping.objects.get(source_code='Creatinine')
-        self.assertEqual(mapping.status, 'proposed')
+        self.assertEqual(mapping.target_concept_id, exact.concept_id)
+        self.assertEqual(mapping.status, 'proposed', 'a guess is not a decision')
         self.assertEqual(mapping.origin, 'import')
         self.assertTrue(mapping.origin_system.startswith('suggest'),
                         f'expected origin_system to start with "suggest", got {mapping.origin_system!r}')
-        self.assertEqual(mapping.occurrence_count, 12)
+        self.assertEqual(mapping.occurrence_count, 12, 'the count must survive a run')
         self.assertEqual(mapping.omop_table, 'measurement')
         self.assertTrue(mapping.notes, 'the curator needs to know why')
 
@@ -6742,11 +6768,10 @@ class MappingSuggestionsTest(_OmopBase):
         loinc_source = _concept(
             4100004, 'LOINC source', self.dom_meas, loinc, self.cc, code='SAME-CODE',
         )
-        for i in range(10):
-            self._measurement(95400 + i, 'SAME-CODE', day=(i % 28) + 1,
-                              source_concept_id=rxnorm_source.concept_id)
-            self._measurement(95500 + i, 'SAME-CODE', day=(i % 28) + 1,
-                              source_concept_id=loinc_source.concept_id)
+        self._queue('SAME-CODE', occurrences=10, source_vocabulary_id='RxNorm',
+                    source_concept=rxnorm_source)
+        self._queue('SAME-CODE', occurrences=10, source_vocabulary_id='LOINC',
+                    source_concept=loinc_source)
 
         with override_settings(ANTHROPIC_API_KEY=''):
             results = suggest_mappings('measurement', min_occurrences=10)
@@ -6763,7 +6788,7 @@ class MappingSuggestionsTest(_OmopBase):
         """A raw code is evidence, not a meaningful HK-* concept name."""
         from omop_core.models import SourceCodeConceptMapping
         from omop_core.services.mapping_suggestions import suggest_mappings
-        self._seed('ZZQQ NOTHING LIKE THIS', 11, start=95000)
+        self._queue('ZZQQ NOTHING LIKE THIS', occurrences=11)
         with override_settings(ANTHROPIC_API_KEY=''):
             suggest_mappings('measurement', min_occurrences=10)
         mapping = SourceCodeConceptMapping.objects.get(
@@ -6777,13 +6802,14 @@ class MappingSuggestionsTest(_OmopBase):
         ).exists())
 
     def test_dry_run_writes_nothing(self):
-        from omop_core.models import SourceCodeConceptMapping
         from omop_core.services.mapping_suggestions import suggest_mappings
-        self._seed('Creatinine', 12, start=95000)
+        row = self._queue('Creatinine')
         with override_settings(ANTHROPIC_API_KEY=''):
             results = suggest_mappings('measurement', min_occurrences=10, dry_run=True)
         self.assertEqual(len(results), 1)
-        self.assertEqual(SourceCodeConceptMapping.objects.count(), 0)
+        row.refresh_from_db()
+        self.assertIsNone(row.target_concept_id)
+        self.assertEqual(row.origin_system, '', 'dry run must not stamp provenance')
 
     def test_a_rejected_code_is_not_proposed_again(self):
         """Rejected is decided. Re-proposing put it back at the front of the

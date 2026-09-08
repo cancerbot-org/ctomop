@@ -105,13 +105,31 @@ def test_alias_guard_is_symmetric_and_not_a_global_code_match(athena):
 
 @pytest.mark.parametrize('dry_run', [False, True])
 def test_batch_suggest_skips_athena_supplied_candidate(athena, monkeypatch, dry_run):
-    monkeypatch.setattr(suggestions, 'unmapped_source_values', lambda *args, **kwargs: [('A02.0', 'ICD10', 12)])
+    # The queue row Suggest reads: same code as the Athena mapping, under the
+    # merged alias vocabulary, still waiting for a destination.
+    queued = SourceCodeConceptMapping.objects.create(
+        source_vocabulary_id='ICD10', source_code='A02.0', omop_table='condition',
+        domain_id='Condition', status='proposed', origin_system='', occurrence_count=12,
+    )
     monkeypatch.setattr(suggestions, 'umls_candidates', lambda *args: ([{'concept_id': athena.target_concept_id}], 'C1'))
     result = suggestions.suggest_mappings('condition', strategies=['umls'], dry_run=dry_run)
-    assert result[0]['created'] is False
     assert result[0]['suggested'] is None
     assert result[0]['note'] == ATHENA_DUPLICATE_MESSAGE
-    assert SourceCodeConceptMapping.objects.count() == 1
+    queued.refresh_from_db()
+    assert queued.target_concept_id is None, 'the duplicate must not be written'
+    assert SourceCodeConceptMapping.objects.count() == 2
+    # A dry run writes nothing at all. A real one records that it tried, so the
+    # code is not re-retrieved and re-ranked on every later run -- it has no
+    # destination, and filtering on that alone would pin it to the front of the
+    # queue for ever.
+    assert result[0]['updated'] is (not dry_run)
+    assert queued.last_suggest_attempt == (
+        '' if dry_run else suggestions.SUGGESTION_MODEL_VERSION
+    )
+    # Never suggestion_model_version: nothing was proposed, so the accuracy
+    # figures must not count this code as a suggestion the curator overrode.
+    assert queued.suggestion_model_version == ''
+    assert queued.origin_system == '', 'the row keeps the provenance that raised it'
 
 
 def test_single_suggest_explains_athena_duplicate(athena, monkeypatch):
