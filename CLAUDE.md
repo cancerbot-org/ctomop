@@ -805,18 +805,22 @@ staging's 85,318 rows), so re-deriving it would spend a model call to make the
 answer worse. In practice the ICD-10 and RxNorm tabs return nothing, because
 every row on them already has an importer's destination.
 
-Rows are ordered **gaps first, then untried, then by occurrence**:
+Rows are ordered **untried, then gaps before replacements, then by
+occurrence**:
 
-1. **No destination before has one.** A run that is also replacing works
-   through the codes with no answer at all before it revisits ones that already
-   have one — an empty destination is a gap, a replaceable one is an
-   improvement. Without Replace this key is constant.
-2. **Untried before tried**, by the current `suggestion_model_version`.
-   Occurrence alone starves the queue: a declined code keeps no destination, so
-   it stays eligible and, being high-occurrence, retakes the front of the very
-   next run. On the staging sample *every* code in the top slots was declined,
-   so they would never free up. Untried-first means each run advances; declined
-   codes come round again once the tab is drained.
+1. **Untried before tried**, by the current `suggestion_model_version`. This is
+   the primary key *always*, because anything above it starves the queue. A
+   declined code keeps no destination, so it stays eligible and, being
+   high-occurrence, retakes the front of the very next run — on the staging
+   sample *every* code in the top slots was declined, so they would never free
+   up. Putting "no destination" above it has the same failure in the replacing
+   case: a run would spend its whole budget re-trying declined gaps and never
+   reach a replacement. Untried-first means every run advances; declined codes
+   come round again once the tab is drained.
+2. **No destination before has one**, within untried and within tried alike. An
+   empty destination is a gap, a replaceable one is an improvement, and the gap
+   is worth the model call first. Without Replace nothing has a destination, so
+   this key is constant.
 3. **Occurrence**, because that is the order a curator should meet codes in.
 
 ### The limit counts codes, not codes per table

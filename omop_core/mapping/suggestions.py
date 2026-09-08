@@ -405,23 +405,22 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
     is equally a decision; re-proposing a rejected code put it back at the front
     of the queue on every run, where it spent a model call and created nothing.
 
-    Ordered **codes with no destination first, then untried, then by
-    occurrence**.
+    Ordered **untried, then gaps before replacements, then by occurrence**.
 
-    A run that is also replacing works through the codes that have no answer at
-    all before it revisits ones that already have one: an empty destination is a
-    gap, a replaceable one is an improvement, and the gap is worth the model call
-    first.  Without *resuggest* the first key is constant and the order is simply
-    untried-then-occurrence.
+    *Untried is the primary key, always*, because anything above it starves the
+    queue.  A code the ranker declines keeps no destination, so it stays eligible
+    and, being high-occurrence, retakes the front of the very next run; on the
+    staging sample every code in the top slots was declined, so those slots would
+    never free up.  Putting "no destination" above it has the same failure in the
+    replacing case: a run would spend its whole budget re-trying declined gaps
+    and never reach a replacement.  Sorting on what the current
+    ``suggestion_model_version`` has not attempted means every run advances, and
+    declined codes come round again once the tab is drained.
 
-    Untried before tried, because occurrence alone starves the queue.  A code the
-    ranker declines keeps no destination, so it stays eligible and, being
-    high-occurrence, retakes the front of the very next run; on the staging
-    sample every code in the top slots was declined, so those slots would never
-    free up and the backlog behind them would never be reached.  Sorting rows the
-    current ``suggestion_model_version`` has not attempted ahead of ones it has
-    means each run advances, and declined codes come round again once the tab is
-    drained.
+    Then, within untried and within tried alike, a code with no destination comes
+    before one being replaced: an empty destination is a gap, a replaceable one
+    is an improvement, and the gap is worth the model call first.  Without
+    *resuggest* nothing has a destination, so this key is constant.
 
     Occurrence last, because it is the order a curator should meet codes in: the
     code seen 400 times is worth more attention than the one seen once.
@@ -466,7 +465,7 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
             default=Value(0),
             output_field=IntegerField(),
         ),
-    ).order_by('has_destination', 'already_tried', '-occurrence_count',
+    ).order_by('already_tried', 'has_destination', '-occurrence_count',
                'source_code', 'id')
     return list(rows[:limit] if limit else rows)
 

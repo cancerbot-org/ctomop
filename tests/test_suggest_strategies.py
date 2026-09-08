@@ -488,7 +488,9 @@ class TestSuggestableMappings:
         rows = suggestable_mappings('measurement', resuggest=True)
         assert [m.source_code for m in rows] == ['NO DESTINATION', 'ALREADY ANSWERED']
 
-    def test_untried_still_comes_first_within_each_group(self, measurement_concept):
+    def test_untried_outranks_everything_including_a_gap(self, measurement_concept):
+        """Untried is the primary key or the queue starves: a run would spend
+        its whole budget re-trying declined gaps and never reach a replacement."""
         queue_row('GAP TRIED', occurrence_count=900,
                   origin_system=SUGGESTION_PROVENANCE,
                   suggestion_model_version=SUGGESTION_MODEL_VERSION)
@@ -502,8 +504,14 @@ class TestSuggestableMappings:
                   target_concept=measurement_concept)
         rows = suggestable_mappings('measurement', resuggest=True)
         assert [m.source_code for m in rows] == [
-            'GAP UNTRIED', 'GAP TRIED', 'ANSWERED UNTRIED', 'ANSWERED TRIED',
+            'GAP UNTRIED', 'ANSWERED UNTRIED', 'GAP TRIED', 'ANSWERED TRIED',
         ]
+
+    def test_occurrence_orders_within_one_group(self):
+        queue_row('BUSY', occurrence_count=900)
+        queue_row('QUIET', occurrence_count=10)
+        rows = suggestable_mappings('measurement')
+        assert [m.source_code for m in rows] == ['BUSY', 'QUIET']
 
 
 # ---------------------------------------------------------------------------
