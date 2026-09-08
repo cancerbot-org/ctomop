@@ -4216,6 +4216,16 @@ class SuggestRun(models.Model):
         return f'SuggestRun {self.id} ({self.state} {self.done}/{self.total})'
 
 
+class SuggestEmbeddingSnapshot(models.Model):
+    """Candidate IDs for a precompute configuration and its vocabulary inputs."""
+    key = models.CharField(max_length=64, primary_key=True)
+    fingerprint = models.JSONField(default=list)
+    candidate_ids = models.JSONField(default=list)
+
+    class Meta:
+        db_table = 'suggest_embedding_snapshot'
+
+
 class ConceptEmbedding(models.Model):
     """Precomputed sentence-transformer embedding for concept name search.
 

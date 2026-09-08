@@ -26,17 +26,19 @@ something a Suggest click pays for.
 """
 import time
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from omop_core.mapping.code_resolution import _QUARANTINE_TARGETS
 from omop_core.mapping.suggestions import (
     CANDIDATE_LIMIT,
     DEFAULT_MIN_OCCURRENCES,
     LEXICAL_LIMIT_MAX,
+    SUGGESTION_MODEL_VERSION,
     lexical_candidates,
     suggestable_mappings,
 )
-from omop_core.models import ConceptEmbedding
+from omop_core.models import ConceptEmbedding, SuggestEmbeddingSnapshot
+from omop_core.services.embedding_snapshot import read_snapshot, snapshot_key
 
 MODEL_NAME = 'BAAI/bge-small-en-v1.5'
 ENCODE_BATCH = 256
@@ -82,7 +84,98 @@ class Command(BaseCommand):
     def handle(self, **options):
         lexical_limit = max(1, min(options['lexical_limit'], LEXICAL_LIMIT_MAX))
         measure = options['measure']
+        key = snapshot_key({
+            'model': MODEL_NAME,
+            'suggestion_version': SUGGESTION_MODEL_VERSION,
+            'retrieval_version': 1,
+            'source_vocabulary_id': options['source_vocabulary_id'],
+            'min_occurrences': options['min_occurrences'],
+            'limit': options['limit'],
+            'lexical_limit': lexical_limit,
+        })
+        fingerprint, cached_ids, missing_cached = read_snapshot(key)
+        if cached_ids is not None and not missing_cached and not options['force']:
+            self.stdout.write(self.style.SUCCESS('Every candidate is already embedded (unchanged inputs).'))
+            return
 
+        started = time.time()
+        candidate_ids = (set(cached_ids) if cached_ids is not None
+                         else self._retrieve_candidates(options, lexical_limit))
+        retrieval_seconds = time.time() - started
+
+        if options['force']:
+            missing = candidate_ids
+        else:
+            embedded = set(
+                ConceptEmbedding.objects.filter(concept_id__in=candidate_ids)
+                .values_list('concept_id', flat=True)
+            )
+            missing = candidate_ids - embedded
+            self.stdout.write(f'Already embedded: {len(embedded)}. Missing: {len(missing)}.')
+
+        if measure:
+            self.stdout.write(self.style.SUCCESS(
+                f'--measure: would embed {len(missing)} concept(s). Nothing written.'
+            ))
+            return
+        if not missing:
+            self._remember(key, fingerprint, candidate_ids)
+            self.stdout.write(self.style.SUCCESS('Every candidate is already embedded.'))
+            return
+
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise CommandError(
+                'sentence-transformers is not installed. '
+                'Run: pip install sentence-transformers'
+            ) from exc
+
+        from omop_core.models import Concept
+
+        started = time.time()
+        model = SentenceTransformer(MODEL_NAME)
+        load_seconds = time.time() - started
+        self.stdout.write(f'Model loaded in {_fmt(load_seconds)}.')
+
+        pending = list(
+            Concept.objects.filter(concept_id__in=missing)
+            .values_list('concept_id', 'concept_name')
+        )
+        started = time.time()
+        written = 0
+        for offset in range(0, len(pending), ENCODE_BATCH):
+            chunk = pending[offset:offset + ENCODE_BATCH]
+            vectors = model.encode([name for _cid, name in chunk], show_progress_bar=False)
+            rows_to_write = [
+                ConceptEmbedding(concept_id=cid, embedding=vector.tolist())
+                for (cid, _name), vector in zip(chunk, vectors)
+            ]
+            for start in range(0, len(rows_to_write), DB_WRITE_BATCH):
+                ConceptEmbedding.objects.bulk_create(
+                    rows_to_write[start:start + DB_WRITE_BATCH],
+                    update_conflicts=True,
+                    update_fields=['embedding'],
+                    unique_fields=['concept_id'],
+                )
+            written += len(chunk)
+            self.stdout.write(f'  embedded {written}/{len(pending)}', ending='\r')
+        embed_seconds = time.time() - started
+        self._remember(key, fingerprint, candidate_ids)
+
+        self.stdout.write(self.style.SUCCESS(
+            f'\nEmbedded {written} concept(s) in {_fmt(embed_seconds)}. '
+            f'Total: {_fmt(retrieval_seconds + load_seconds + embed_seconds)}.'
+        ))
+
+    @staticmethod
+    def _remember(key, fingerprint, candidate_ids):
+        SuggestEmbeddingSnapshot.objects.update_or_create(
+            key=key,
+            defaults={'fingerprint': fingerprint, 'candidate_ids': sorted(candidate_ids)},
+        )
+
+    def _retrieve_candidates(self, options, lexical_limit):
         started = time.time()
         rows = suggestable_mappings(
             None,
@@ -101,7 +194,7 @@ class Command(BaseCommand):
         )
         if not rows:
             self.stdout.write('Nothing queued. Done.')
-            return
+            return set()
 
         # --- retrieval: one trigram query per queue row ---------------------
         started = time.time()
@@ -137,70 +230,4 @@ class Command(BaseCommand):
             f'{no_candidates} row(s) retrieved nothing.'
         )
 
-        if options['force']:
-            missing = candidate_ids
-        else:
-            embedded = set(
-                ConceptEmbedding.objects
-                .filter(concept_id__in=candidate_ids)
-                .values_list('concept_id', flat=True)
-            )
-            missing = candidate_ids - embedded
-            self.stdout.write(
-                f'Already embedded: {len(embedded)}. Missing: {len(missing)}.'
-            )
-
-        if measure:
-            self.stdout.write(self.style.SUCCESS(
-                f'--measure: would embed {len(missing)} concept(s). Nothing written.'
-            ))
-            return
-        if not missing:
-            self.stdout.write(self.style.SUCCESS('Every candidate is already embedded.'))
-            return
-
-        # --- embedding ------------------------------------------------------
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError:
-            self.stderr.write(
-                'sentence-transformers is not installed. '
-                'Run: pip install sentence-transformers'
-            )
-            return
-
-        from omop_core.models import Concept
-
-        started = time.time()
-        model = SentenceTransformer(MODEL_NAME)
-        load_seconds = time.time() - started
-        self.stdout.write(f'Model loaded in {_fmt(load_seconds)}.')
-
-        pending = list(
-            Concept.objects.filter(concept_id__in=missing)
-            .values_list('concept_id', 'concept_name')
-        )
-        started = time.time()
-        written = 0
-        for offset in range(0, len(pending), ENCODE_BATCH):
-            chunk = pending[offset:offset + ENCODE_BATCH]
-            vectors = model.encode([name for _cid, name in chunk], show_progress_bar=False)
-            rows_to_write = [
-                ConceptEmbedding(concept_id=cid, embedding=vector.tolist())
-                for (cid, _name), vector in zip(chunk, vectors)
-            ]
-            for start in range(0, len(rows_to_write), DB_WRITE_BATCH):
-                ConceptEmbedding.objects.bulk_create(
-                    rows_to_write[start:start + DB_WRITE_BATCH],
-                    update_conflicts=True,
-                    update_fields=['embedding'],
-                    unique_fields=['concept_id'],
-                )
-            written += len(chunk)
-            self.stdout.write(f'  embedded {written}/{len(pending)}', ending='\r')
-        embed_seconds = time.time() - started
-
-        self.stdout.write(self.style.SUCCESS(
-            f'\nEmbedded {written} concept(s) in {_fmt(embed_seconds)}. '
-            f'Total: {_fmt(queue_seconds + retrieval_seconds + load_seconds + embed_seconds)}.'
-        ))
+        return candidate_ids

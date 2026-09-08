@@ -9,9 +9,9 @@ from omop_core.models import Person
 
 @shared_task(name='omop_core.precompute_suggest_embeddings')
 def precompute_suggest_embeddings_task():
-    from django.core.management import call_command
+    from omop_core.services.embedding_jobs import run_suggest_embeddings
 
-    call_command('precompute_suggest_embeddings')
+    run_suggest_embeddings()
 
 
 @shared_task(name='omop_core.refresh_patient_record')
