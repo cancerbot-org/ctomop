@@ -60,7 +60,7 @@ def read_counts(path):
                 if not code or not raw.isdecimal() or not 0 <= int(raw) <= 2147483647:
                     raise CommandError(f'Invalid source code or occurrence count on CSV line {line}.')
                 raw_key = (row.get('vocabulary') or '', row.get('code') or '')
-                key = (vocabulary, code)
+                key = (ALIASES.get(vocabulary, vocabulary), code)
                 if raw_key in raw_keys:
                     raise CommandError(f'Duplicate vocabulary/code identity on CSV line {line}.')
                 raw_keys.add(raw_key)
@@ -82,9 +82,9 @@ def count_index(counts):
 
 
 def match_count_key(vocabulary, code, counts, grouped):
-    key = (vocabulary, code.strip())
+    key = (ALIASES.get(vocabulary, vocabulary), code.strip())
     if key in counts:
-        return key, 'exact'
+        return key, 'exact' if key[0] == vocabulary else 'alias'
     alternatives = grouped.get((canonical(vocabulary), code.strip()), [])
     if len(alternatives) == 1:
         return alternatives[0], 'alias'

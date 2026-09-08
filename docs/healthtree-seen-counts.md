@@ -19,9 +19,12 @@ rejected. Surrounding whitespace is stripped, and distinct whitespace variants
 are summed within the snapshot. Each run sets the resulting frequency rather
 than adding it to the previous value, so reruns are idempotent.
 
-Exact vocabulary/code matches take priority. Otherwise the importer accepts one
-unambiguous match through explicit standard FHIR URI/OID aliases, the ICD10CM ↔
-ICD10 tab grouping, or the export's `(no system)` marker for uncoded sources.
+Equivalent standard FHIR URI/OID identifiers are normalized and their occurrence
+frequencies summed within the snapshot. For example, ICD10CM and its OID contribute
+to the same ICD-10-CM code count. Exact standard vocabulary/code matches then take
+priority; the ICD10CM ↔ ICD10 tab grouping supplies an unambiguous fallback. The
+export's `(no system)` marker identifies uncoded sources. ICD10 and ICD10CM remain
+distinct frequency groups when both have their own counts.
 It does not perform fuzzy code matching or collapse arbitrary custom code systems.
 Multiple possible alias records without an exact match are reported and left
 unchanged.

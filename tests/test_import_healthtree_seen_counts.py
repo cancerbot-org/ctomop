@@ -62,7 +62,7 @@ def test_snomed_oid_and_uncoded_aliases(tmp_path):
     uncoded = mapping('', 'source-text')
     path = snapshot(tmp_path, [('123', 'urn:oid:2.16.840.1.113883.6.96', '', 8, 1),
                                ('source-text', '(no system)', '', 0, 1)])
-    assert run(path)['alias_matches'] == 2
+    assert run(path)['matched_mappings'] == 2
     snomed.refresh_from_db()
     uncoded.refresh_from_db()
     assert snomed.occurrence_count == 8
@@ -124,20 +124,30 @@ def test_required_header_validation(tmp_path):
 def test_exact_standard_fhir_aliases(tmp_path, vocabulary, alias):
     row = mapping(vocabulary, '123')
     path = snapshot(tmp_path, [('123', alias, '', 42, 1)])
-    assert run(path)['alias_matches'] == 1
+    assert run(path)['matched_mappings'] == 1
     row.refresh_from_db()
     assert row.occurrence_count == 42
 
 
-def test_ambiguous_alias_counts_are_reported_without_guessing(tmp_path):
+def test_equivalent_fhir_alias_frequencies_are_combined(tmp_path):
     row = mapping('http://snomed.info/sct', '123')
     path = snapshot(tmp_path, [('123', 'SNOMED', '', 42, 1),
                                ('123', 'urn:oid:2.16.840.1.113883.6.96', '', 84, 1)])
     report = run(path)
-    assert report['ambiguous_mappings'] == 1
-    assert report['unmatched_input_codes'] == 2
+    assert report['ambiguous_mappings'] == 0
+    assert report['matched_mappings'] == 1
     row.refresh_from_db()
-    assert row.occurrence_count == 3
+    assert row.occurrence_count == 126
+    assert run(path)['changed_mappings'] == 0
+
+
+def test_icd10_fallback_combines_equivalent_icd10cm_identifiers(tmp_path):
+    row = mapping('ICD10', 'C90.00')
+    path = snapshot(tmp_path, [('C90.00', 'ICD10CM', '', 42, 1),
+                               ('C90.00', 'urn:oid:2.16.840.1.113883.6.90', '', 84, 1)])
+    assert run(path)['matched_mappings'] == 1
+    row.refresh_from_db()
+    assert row.occurrence_count == 126
 
 
 def test_whitespace_variants_are_combined_within_snapshot_not_across_reloads(tmp_path):
