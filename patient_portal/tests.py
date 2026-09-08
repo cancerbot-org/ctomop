@@ -21,7 +21,7 @@ from decimal import Decimal
 
 from patient_portal.models import Identity
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.test import RequestFactory, TestCase, TransactionTestCase
+from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -6074,6 +6074,7 @@ class LotInferenceTest(_SmartBase):
 # ScopedTokenPermission role-based enforcement
 # ---------------------------------------------------------------------------
 
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read')
 class ScopedTokenPermissionTest(TestCase):
     """Verify role-based enforcement for non-OAuth2 auth paths."""
 
@@ -6098,13 +6099,13 @@ class ScopedTokenPermissionTest(TestCase):
         req.user = user
         return req
 
-    def test_service_token_allows_delete(self):
+    def test_service_token_denies_delete_by_default(self):
         req = self._req("DELETE", "service-token", self._user())
-        self.assertTrue(self.permission.has_permission(req, None))
+        self.assertFalse(self.permission.has_permission(req, None))
 
-    def test_service_token_allows_post(self):
+    def test_service_token_denies_post_by_default(self):
         req = self._req("POST", "service-token", self._user())
-        self.assertTrue(self.permission.has_permission(req, None))
+        self.assertFalse(self.permission.has_permission(req, None))
 
     def test_service_token_allows_get(self):
         req = self._req("GET", "service-token", self._user())
@@ -10813,6 +10814,7 @@ class WearablePatientRecordTest(TestCase):
 # Service-token ACL bypass integration tests
 # ---------------------------------------------------------------------------
 
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read patient/*.write')
 class ServiceTokenOmopAccessTest(TestCase):
     """
     Verify that service-token callers bypass row-level ACL checks in:
@@ -10897,6 +10899,39 @@ class ServiceTokenOmopAccessTest(TestCase):
         self.client.force_authenticate(
             user=self.service_identity, token="service-token"
         )
+
+    @override_settings(SERVICE_AUTH_TOKEN='test-service-secret',
+                       SERVICE_AUTH_SCOPES='patient/*.read')
+    def test_read_only_bearer_cannot_mutate(self):
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION='Bearer test-service-secret')
+        for method, url in (
+            ('post', '/api/measurements/'),
+            ('put', f'/api/measurements/{self.m_a.pk}/'),
+            ('patch', f'/api/measurements/{self.m_a.pk}/'),
+            ('delete', f'/api/measurements/{self.m_a.pk}/'),
+            ('delete', '/api/patient-info/me/'),
+            ('post', '/api/fhir/sync/'),
+            ('post', '/api/lab-results/sync/'),
+        ):
+            with self.subTest(method=method, url=url):
+                response = getattr(client, method)(url, {}, format='json')
+                self.assertEqual(response.status_code, 403)
+        self.assertTrue(Measurement.objects.filter(pk=self.m_a.pk).exists())
+
+    @override_settings(SERVICE_AUTH_TOKEN='test-service-secret')
+    def test_bearer_write_grant_can_be_removed(self):
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION='Bearer test-service-secret')
+        url = f'/api/measurements/{self.m_a.pk}/'
+        response = client.patch(url, {'value_as_number': 7.5}, format='json')
+        self.assertEqual(response.status_code, 200)
+        with self.settings(SERVICE_AUTH_SCOPES=''):
+            self.assertEqual(client.get(url).status_code, 403)
+            response = client.patch(url, {'value_as_number': 9}, format='json')
+            self.assertEqual(response.status_code, 403)
+        self.m_a.refresh_from_db()
+        self.assertEqual(float(self.m_a.value_as_number), 7.5)
 
     # --- MeasurementViewSet (via _OmopFilterMixin + _ProvenanceMixin) ---
 
@@ -11867,7 +11902,6 @@ class PatientRoleUserEndpointTest(TestCase):
 # ---------------------------------------------------------------------------
 
 from django.core import mail as _django_mail  # noqa: E402
-from django.test import override_settings  # noqa: E402
 
 
 @override_settings(
@@ -18103,6 +18137,7 @@ class WearableUploadEndpointTest(TestCase):
 # (contract summarised in CLAUDE.md, "Bulk OMOP Row Writes")
 # ---------------------------------------------------------------------------
 
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read patient/*.write')
 class BulkOmopWriteTest(TestCase):
     """POST a JSON list to the five OMOP clinical CRUD endpoints.
 
@@ -18668,6 +18703,7 @@ class BulkOmopWriteTest(TestCase):
         self.assertEqual(resp.data['created'], 3)
 
 
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read patient/*.write')
 class BulkOmopUpsertTest(TestCase):
     """The bulk OMOP write endpoints are idempotent (issue #454).
 
@@ -19231,6 +19267,7 @@ from rest_framework.response import Response  # noqa: E402
 from patient_portal.models import PatientUser  # noqa: E402
 
 
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read patient/*.write')
 class PartialPatchValueColumnTest(TestCase):
     """A partial write must not null the value columns it never mentioned."""
 
@@ -19387,6 +19424,7 @@ class PartialPatchValueColumnTest(TestCase):
         self.assertEqual(m.measurement_source_value, 'PLAIN')
 
 
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read patient/*.write')
 class BulkOmopUpdateTest(TestCase):
     """PATCH /api/v1/<resource>/bulk_update/ with a list of partial rows."""
 
@@ -19968,6 +20006,7 @@ class BulkOmopUpdateTest(TestCase):
             Measurement.objects.get(measurement_id=ids[0]).value_as_number, 21)
 
 
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read patient/*.write')
 class BulkOmopDeleteTest(TestCase):
     """POST /api/v1/<resource>/bulk_delete/ with a list of ids."""
 
@@ -20372,6 +20411,7 @@ class BulkOmopDeleteTest(TestCase):
         self.assertEqual(Measurement.objects.filter(measurement_id__in=ids).count(), 1)
 
 
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read patient/*.write')
 class OmopDeferRefreshTest(TestCase):
     """Deferring the derivation on row level writes, and triggering one."""
 
@@ -20591,6 +20631,7 @@ class OmopDeferRefreshTest(TestCase):
         self.assertFalse(Measurement.objects.filter(pk=920001).exists())
 
 
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read patient/*.write')
 class BulkUpsertObservationIdentityTest(TestCase):
     """Observation event identity, and how a constraint failure is reported."""
 
@@ -22516,6 +22557,7 @@ class TherapyLineAuthoringTest(TestCase):
 # Async derivation — the 202 contract and the status endpoint
 # ---------------------------------------------------------------------------
 
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read patient/*.write')
 class AsyncDerivationTest(TestCase):
     """refresh/ queues, derivation-status/ reports. No broker involved."""
 

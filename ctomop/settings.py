@@ -371,6 +371,9 @@ AUTH_TOKEN_CACHE_TTL = int(os.environ.get("AUTH_TOKEN_CACHE_TTL", "60"))
 
 # REST Framework
 SERVICE_AUTH_TOKEN = os.environ.get("SERVICE_AUTH_TOKEN", "")
+# Legacy shared-token callers must opt in to writes; an empty grant denies all
+# requests guarded by ScopedTokenPermission and its subclasses.
+SERVICE_AUTH_SCOPES = os.environ.get("SERVICE_AUTH_SCOPES", "patient/*.read")
 
 # Ranking key for Code Mapping suggestions (#856). Deliberately optional: with
 # no key the suggester falls back to lexical order and says so on the proposal,
