@@ -9101,7 +9101,7 @@ def _user_display(user):
     )
 
 
-def _serialize_code_mapping_row(concept, mapping=None, source_metadata=None):
+def _serialize_code_mapping_row(concept, mapping=None, source_metadata=None, destination_count=None):
     """One row of the Code Mapping list: a source code and where it lands.
 
     Keys read in the direction of the mapping. The source side never falls back
@@ -9151,6 +9151,7 @@ def _serialize_code_mapping_row(concept, mapping=None, source_metadata=None):
             'reviewer': _user_display(getattr(mapping, 'reviewer', None) if mapping else None),
             'reviewed_at': mapping.reviewed_at if mapping else None,
             'occurrence_count': mapping.occurrence_count if mapping else 0,
+            'destination_count': destination_count if destination_count is not None else 0,
             'first_seen': mapping.first_seen if mapping else None,
             'last_seen': mapping.last_seen if mapping else None,
             'has_mapping': bool(mapping),
@@ -9210,6 +9211,7 @@ def _serialize_code_mapping_row(concept, mapping=None, source_metadata=None):
         'reviewer': _user_display(getattr(mapping, 'reviewer', None) if mapping else None),
         'reviewed_at': mapping.reviewed_at if mapping else None,
         'occurrence_count': mapping.occurrence_count if mapping else 0,
+        'destination_count': destination_count if destination_count is not None else 0,
         'first_seen': mapping.first_seen if mapping else None,
         'last_seen': mapping.last_seen if mapping else None,
         'has_mapping': bool(mapping),
@@ -9632,8 +9634,21 @@ def code_mapping_list(request):
         mappings = list(mappings.order_by('source_vocabulary_id', 'source_code', 'id'))
         from omop_core.services.source_retirement import mapping_source_retirement
         source_metadata = mapping_source_retirement(mappings)
+        # Destination count: how many distinct non-rejected mappings share
+        # the same (source_vocabulary_id, source_code). Computed in one pass
+        # over the already-fetched list rather than a per-row query.
+        from collections import Counter
+        _dest_counts = Counter(
+            (m.source_vocabulary_id, m.source_code)
+            for m in mappings if m.status != 'rejected'
+        )
         rows = [
-            _serialize_code_mapping_row(mapping.target_concept, mapping, source_metadata[mapping.pk])
+            _serialize_code_mapping_row(
+                mapping.target_concept, mapping, source_metadata[mapping.pk],
+                destination_count=_dest_counts.get(
+                    (mapping.source_vocabulary_id, mapping.source_code), 0,
+                ),
+            )
             for mapping in mappings
         ]
         status_filter = request.query_params.get('status')
