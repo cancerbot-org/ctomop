@@ -189,6 +189,48 @@ const strategyLabel: Record<string, string> = {
   lexical: "Lexical",
 };
 
+/** How far along a run is, counting the phase it is actually in.
+
+ Retrieval is two thirds of the wall clock and finishes for every code before
+ the first destination is written, so counting only writes would leave the bar
+ at zero for most of the wait. */
+const suggestProgressCount = (run: SuggestRunProgress) =>
+  run.state === "success" ? run.total : Math.max(run.done, run.retrieved);
+
+const describeSuggestRun = (run: SuggestRunProgress) => {
+  if (run.state === "failure") return run.error || "The suggest run failed.";
+  if (run.state === "success") {
+    return run.updated
+      ? `Done — proposed a destination for ${run.updated} of ${run.total} code(s).`
+      : "Done — nothing on this tab was awaiting a suggestion.";
+  }
+  if (run.total === 0) return "Nothing queued on this tab.";
+  if (run.done > 0) return `Writing suggestions… ${run.done} of ${run.total}`;
+  if (run.retrieved > 0) return `Searching for candidates… ${run.retrieved} of ${run.total}`;
+  return "Starting…";
+};
+
+/** Progress of one queued Suggest run, as /suggest-runs/<id>/ reports it. */
+type SuggestRunProgress = {
+  run_id: string;
+  state: "queued" | "running" | "success" | "failure";
+  total: number;
+  retrieved: number;
+  done: number;
+  updated: number;
+  ranked: number;
+  strategy_counts: Record<string, number>;
+  landed_in: Record<string, number>;
+  error: string;
+};
+
+/** Pipeline order, which is also the order the checkboxes read in. */
+const STRATEGY_LABELS = {
+  umls: "UMLS",
+  lexical: "Lexical",
+  vectors: "Vectors",
+} as const;
+
 /**
  * Which tab a row belongs to — keyed by source vocabulary.
  * Blank source_vocabulary_id ("") means uncoded/free text.
@@ -408,6 +450,11 @@ export default function CodeMappingPage() {
   const [strategies, setStrategies] = useState({
     umls: true, vectors: true, lexical: true,
   });
+  // How many trigram survivors reach the reranker and the ranker's prompt. The
+  // one knob that trades recall against the cost of every stage after it, so it
+  // sits next to the checkbox for the stage that produces them.
+  // "" while mid-edit, for the same reason minOccurrences is.
+  const [lexicalLimit, setLexicalLimit] = useState<number | "">(10);
   const [dialogMode, setDialogMode] = useState<"new" | "edit" | null>(null);
   const [selectedRow, setSelectedRow] = useState<CodeMappingRow | null>(null);
   const [form, setForm] = useState<MappingForm>(emptyForm);
@@ -421,6 +468,11 @@ export default function CodeMappingPage() {
   const [repointResult, setRepointResult] = useState<RepointResult | null>(null);
   const [replaceExisting, setReplaceExisting] = useState(false);
   const [confirmReplace, setConfirmReplace] = useState(false);
+  // Progress of the queued Suggest run, polled while it works. Null when no run
+  // is in flight; `flash` marks the moment it finished so the strip can announce
+  // itself before settling into the banner.
+  const [suggestRun, setSuggestRun] = useState<SuggestRunProgress | null>(null);
+  const [suggestFlash, setSuggestFlash] = useState(false);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -758,6 +810,7 @@ export default function CodeMappingPage() {
         source_code: form.source_code, source_vocabulary_id: form.source_vocabulary_id,
         source_code_description: form.source_code_description, omop_table: form.omop_table,
         strategies: enabled,
+        lexical_limit: Number(lexicalLimit) || 10,
       });
       if (data.suggested) {
         applyConcept(data.suggested);
@@ -872,45 +925,34 @@ export default function CodeMappingPage() {
     setSuggesting(true);
     setError("");
     setBanner(null);
+    setSuggestFlash(false);
+    setSuggestRun(null);
     try {
       const activeStrategies = Object.entries(strategies)
         .filter(([, v]) => v)
         .map(([k]) => k);
-      const resp = await api.post("/v1/code-mappings/suggest/", {
-        source_vocabulary_id: selectedVocabulary,
-        min_occurrences: Number(minOccurrences) || 1,
-        strategies: activeStrategies,
-        replace: effectiveReplace,
-      });
-      const { created = 0, considered = 0, ranked = 0, truncated,
-              landed_in: landed = {},
-              strategy_counts: stratCounts = {},
-              replaced: replacedCount = 0 } = resp.data || {};
-      await fetchAll();
-      // Say which tabs the new rows are in. A ranked suggestion's destination
-      // is a standard concept, so its mapping belongs to the LOINC or SNOMED
-      // tab rather than the HK-* one the button is on — correct, and baffling
-      // if the curator is left to discover it.
-      const where = Object.entries(landed as Record<string, number>)
-        .sort((a, b) => b[1] - a[1])
-        .map(([vocab, n]) => `${n} in ${vocab}`)
-        .join(", ");
-      const byStrategy = Object.entries(stratCounts as Record<string, number>)
-        .filter(([, n]) => n > 0)
-        .map(([s, n]) => `${n} via ${s}`)
-        .join(", ");
-      const replacedNote = replacedCount ? `Replaced ${replacedCount} previous suggestion(s). ` : "";
-      setBanner(
-        created
-          ? replacedNote
-            + `Proposed ${created} mapping(s) from ${considered} unmapped code(s), `
-            + `${ranked} with a suggested destination`
-            + (byStrategy ? ` (${byStrategy})` : "")
-            + (where ? ` — ${where}.` : ".")
-            + (truncated ? " More remain — run Suggest again." : "")
-          : replacedNote
-            + `No unmapped codes seen ${Number(minOccurrences) || 1}+ times in this vocabulary.`,
+      // 202 with a run id: the work is queued, because a code costs ~3.5s and a
+      // tab holds dozens, which does not fit inside a request.
+      const { data: started } = await api.post<SuggestRunProgress>(
+        "/v1/code-mappings/suggest/",
+        {
+          source_vocabulary_id: selectedVocabulary,
+          min_occurrences: Number(minOccurrences) || 1,
+          strategies: activeStrategies,
+          lexical_limit: Number(lexicalLimit) || 10,
+          replace: effectiveReplace,
+        },
       );
+      setSuggestRun(started);
+      const finished = await pollSuggestRun(started);
+      setSuggestRun(finished);
+
+      if (finished.state === "failure") {
+        setError(finished.error || "The suggest run failed.");
+        return;
+      }
+      await fetchAll();
+      announceSuggestRun(finished);
     } catch (err) {
       const detail =
         err && typeof err === "object" && "response" in err
@@ -920,9 +962,56 @@ export default function CodeMappingPage() {
         ? Object.values(detail).map(String).join(" ")
         : "";
       setError(message || "Failed to suggest mappings.");
+      setSuggestRun(null);
     } finally {
       setSuggesting(false);
     }
+  };
+
+  /** Poll until the run reaches a terminal state, updating the strip as it goes. */
+  const pollSuggestRun = async (started: SuggestRunProgress) => {
+    let current = started;
+    // The inline dispatcher (a machine with no broker) finishes before the 202
+    // is even written, so a run can arrive already terminal — poll only while
+    // there is something left to watch.
+    while (current.state === "queued" || current.state === "running") {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const { data } = await api.get<SuggestRunProgress>(
+        `/v1/code-mappings/suggest-runs/${started.run_id}/`,
+      );
+      current = data;
+      setSuggestRun(data);
+    }
+    return current;
+  };
+
+  const announceSuggestRun = (run: SuggestRunProgress) => {
+    // Say which tabs the new rows are in. A ranked suggestion's destination
+    // is a standard concept, so its mapping belongs to the LOINC or SNOMED
+    // tab rather than the HK-* one the button is on — correct, and baffling
+    // if the curator is left to discover it.
+    const where = Object.entries(run.landed_in || {})
+      .sort((a, b) => b[1] - a[1])
+      .map(([vocab, n]) => `${n} in ${vocab}`)
+      .join(", ");
+    const byStrategy = Object.entries(run.strategy_counts || {})
+      .filter(([, n]) => n > 0)
+      .map(([strategy, n]) => `${n} via ${strategy}`)
+      .join(", ");
+    setBanner(
+      run.updated
+        ? `Proposed a destination for ${run.updated} of ${run.total} queued code(s), `
+          + `${run.ranked} with a suggested destination`
+          + (byStrategy ? ` (${byStrategy})` : "")
+          + (where ? ` — ${where}.` : ".")
+        // Suggest reads this tab, so an empty result means the tab has no row
+        // left whose provenance is empty or "suggest" — importer rows are
+        // deliberately left alone.
+        : `No queued codes on this tab awaiting a suggestion `
+          + `(seen ${Number(minOccurrences) || 1}+ times, provenance empty or "suggest").`,
+    );
+    setSuggestFlash(true);
+    window.setTimeout(() => setSuggestFlash(false), 2500);
   };
 
   const toggleApproval = async (row: CodeMappingRow) => {
@@ -1238,18 +1327,38 @@ export default function CodeMappingPage() {
             className="h-8 w-16 rounded-md border border-slate-300 px-2 text-xs"
           />
           <span className="text-xs text-slate-600">times</span>
-          {(["umls", "vectors", "lexical"] as const).map((key) => (
-            <label key={key} className="inline-flex items-center gap-1 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                checked={strategies[key]}
-                onChange={(e) =>
-                  setStrategies((prev) => ({ ...prev, [key]: e.target.checked }))
-                }
-                className="h-3.5 w-3.5 rounded border-slate-300"
-              />
-              {key === "umls" ? "UMLS" : key === "vectors" ? "Vectors" : "Lexical"}
-            </label>
+          {(["umls", "lexical", "vectors"] as const).map((key) => (
+            <span key={key} className="inline-flex items-center gap-1">
+              <label className="inline-flex items-center gap-1 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={strategies[key]}
+                  onChange={(e) =>
+                    setStrategies((prev) => ({ ...prev, [key]: e.target.checked }))
+                  }
+                  className="h-3.5 w-3.5 rounded border-slate-300"
+                />
+                {STRATEGY_LABELS[key]}
+              </label>
+              {/* Beside Lexical, because it is Lexical's shortlist that every
+                  later stage is sized by: the reranker orders it and the
+                  ranking model reads all of it in one prompt. */}
+              {key === "lexical" && (
+                <input
+                  aria-label="Lexical candidates per code"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={lexicalLimit}
+                  onChange={(e) =>
+                    setLexicalLimit(e.target.value === "" ? "" : Number(e.target.value))
+                  }
+                  disabled={!strategies.lexical}
+                  title="How many trigram matches become candidate destinations for each code. More costs more to rerank and rank."
+                  className="h-8 w-14 rounded-md border border-slate-300 px-2 text-xs disabled:bg-slate-100 disabled:text-slate-400"
+                />
+              )}
+            </span>
           ))}
           <button
             type="button"
@@ -1274,6 +1383,50 @@ export default function CodeMappingPage() {
             Replace Current Suggestions
           </label>
         </div>
+
+        {/* Directly under the Suggest button, because that is where the eye
+            already is when the wait starts. The run is queued and a code costs
+            ~3.5s, so a spinner alone would leave a curator unable to tell a
+            working run from a stuck one. */}
+        {suggestRun && (
+          <div
+            role="status"
+            aria-live="polite"
+            data-testid="suggest-progress"
+            className={
+              "mb-4 rounded-md border px-3 py-2 text-xs transition-colors duration-500 "
+              + (suggestRun.state === "failure"
+                ? "border-rose-300 bg-rose-50 text-rose-900"
+                : suggestFlash
+                  ? "border-emerald-400 bg-emerald-50 text-emerald-900"
+                  : "border-slate-300 bg-slate-50 text-slate-700")
+            }
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span>{describeSuggestRun(suggestRun)}</span>
+              <span className="font-medium tabular-nums">
+                {suggestProgressCount(suggestRun)}/{suggestRun.total}
+              </span>
+            </div>
+            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+              <div
+                className={
+                  "h-full rounded-full transition-all duration-300 "
+                  + (suggestRun.state === "failure"
+                    ? "bg-rose-500"
+                    : suggestRun.state === "success"
+                      ? "bg-emerald-500"
+                      : "bg-sky-500")
+                }
+                style={{
+                  width: `${suggestRun.total
+                    ? Math.round((suggestProgressCount(suggestRun) / suggestRun.total) * 100)
+                    : 0}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {confirmReplace && (
           <div className="mb-4 flex items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -1546,13 +1699,13 @@ export default function CodeMappingPage() {
                         </label>
                         <HelpTip tip={TIP.search_vocabulary} />
                       </div>
-                      {(["umls", "vectors", "lexical"] as const).map((key) => (
+                      {(["umls", "lexical", "vectors"] as const).map((key) => (
                         <div key={key} className="inline-flex items-center gap-1 text-xs text-slate-600">
                           <label className="inline-flex items-center gap-1">
                             <input type="checkbox" checked={strategies[key]} onChange={(e) => setStrategies((prev) => ({ ...prev, [key]: e.target.checked }))} />
-                            {key === "umls" ? "UMLS" : key === "vectors" ? "Vectors" : "Lexical"}
+                            {STRATEGY_LABELS[key]}
                           </label>
-                          <HelpTip tip={key === "umls" ? "Find equivalent concepts using UMLS source codes." : key === "vectors" ? "Find concepts by semantic similarity." : "Find concepts by matching names and synonyms."} />
+                          <HelpTip tip={key === "umls" ? "Bridge the code to an equivalent concept through UMLS. A single match is used as-is." : key === "lexical" ? "Retrieve candidate destinations by matching names and synonyms." : "Reorder the retrieved candidates by semantic similarity."} />
                         </div>
                       ))}
                       <button
