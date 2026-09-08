@@ -33,6 +33,7 @@ from omop_core.mapping.suggestions import (
     CANDIDATE_LIMIT,
     DEFAULT_MIN_OCCURRENCES,
     LEXICAL_LIMIT_MAX,
+    _source_description,
     lexical_candidates,
     suggestable_mappings,
 )
@@ -112,13 +113,14 @@ class Command(BaseCommand):
             domain_id = mapping.domain_id or (target[1] if target else '')
             if not domain_id:
                 continue
-            text = (
-                mapping.source_code_description
-                or mapping.umls_source_name
-                or (mapping.source_concept.concept_name if mapping.source_concept else '')
-                or mapping.source_code
-            )
-            hits = lexical_candidates(text, domain_id, limit=lexical_limit)
+            # The run's own preference order, not a re-spelling of it: a row
+            # with both a UMLS name and a loaded source concept would otherwise
+            # be embedded against text the run never asks for, leaving the
+            # candidates it does ask for unembedded -- which vector_rerank
+            # silently demotes rather than reporting.
+            text, _umls_name = _source_description(mapping, mapping.source_concept)
+            hits = lexical_candidates(text or mapping.source_code, domain_id,
+                                      limit=lexical_limit)
             if not hits:
                 no_candidates += 1
             candidate_ids.update(hit['concept_id'] for hit in hits)

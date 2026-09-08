@@ -845,11 +845,62 @@ Where the remaining time goes, per code:
 | vector rerank | ~0.3s stored-vector lookup + ~0.025s query embedding |
 | embedding model load | ~5s, **once per gunicorn worker**, on its first Suggest |
 
-`SUGGEST_MAX_PER_CALL = 5` follows from that: Suggest is synchronous and
-production's `start.sh` runs bare gunicorn, whose default timeout is 30s.
-Batches measured at 3/9.5s, 5/24.1s, 8/28.7s, 10/38.3s. Raising it needs
-retrieval to get cheaper, not the timeout to get longer — each extra code adds
-another trigram query, while ranking adds ~3.5s to a batch of any size.
+### The run is queued, and how big it may be depends on that
+
+At ~3.5s per code a tab's backlog does not fit in a request, so `POST
+/v1/code-mappings/suggest/` returns **202** with a run id and the page polls
+`GET /v1/code-mappings/suggest-runs/<id>/`. Progress lives on a `SuggestRun`
+row rather than in Celery's task metadata: the counts must survive a worker
+restart, the poll can land on any gunicorn worker, and the inline dispatcher has
+no result backend to write into.
+
+`omop_core/services/suggest_jobs.py` picks how it runs, on the same rule as
+`derivation_jobs.py` — Celery when `CELERY_BROKER_URL` is set, inline otherwise
+— and **the ceiling depends on which**:
+
+| Dispatcher | Ceiling | Bounded by |
+|---|---|---|
+| `CeleryDispatcher` | `QUEUED_MAX_CODES = 50` | `CELERY_TASK_TIME_LIMIT` (900s) |
+| `InlineDispatcher` | `INLINE_MAX_CODES = 5` | the request, under `start.sh`'s bare gunicorn (30s default) |
+
+That split is not a nicety. `render.yaml` leaves `CELERY_BROKER_URL`
+dashboard-managed on the web service (`sync: false`), so a deployment that has
+not pasted the Redis URL in yet **falls back to inline** — and 50 codes inline is
+~125s of serial retrieval and a 502, the exact failure this design removes.
+Batches measured at 3/9.5s, 5/24.1s, 8/28.7s, 10/38.3s.
+
+The ceiling is a budget for the whole run, not per clinical table: a source
+vocabulary can map to five tables, and a per-table limit would let one run
+attempt five times its own ceiling.
+
+Raising it needs retrieval to get cheaper, not the timeout to get longer — each
+extra code adds another trigram query, while ranking adds ~3.5s to a run of any
+size.
+
+### A run records that it tried, not just what it found
+
+A code the ranker declined, and one the Athena guard skipped, both end with no
+destination — and both are as finished as a code that got one. Eligibility
+therefore excludes rows already stamped with the **current**
+`suggestion_model_version`, not just rows with a target. Filtering on the target
+alone put every unresolvable code back at the front of the next run: rows are
+ordered by occurrence and capped by the ceiling, so the same top N would be
+re-retrieved and re-ranked on every click and the backlog behind them would
+never be reached.
+
+A model-version bump reaches previously-answered rows on its own, because the
+version stamped on them is no longer the current one. "Replace Current
+Suggestions" (`resuggest`) re-answers them in place — it does **not** delete
+them, which it used to: while the candidate set came from a clinical scan a
+deleted row would be found again and recreated, but now a deleted row is a code
+that has left the queue for good, taking its `occurrence_count` and `first_seen`
+with it.
+
+### Vectors cannot run alone
+
+It reranks what retrieval found and retrieves nothing itself, so a run with
+neither UMLS nor Lexical would report "no candidate concept" for every code. The
+API rejects that combination and the checkbox disables itself.
 
 ### The embeddings the reranker reads
 

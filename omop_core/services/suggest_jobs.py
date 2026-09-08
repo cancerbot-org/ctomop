@@ -31,19 +31,32 @@ from django.utils import timezone
 
 from omop_core.models import SuggestRun
 
-# How often the runner writes its progress back. Every code would be one UPDATE
-# per ~3.5s of work, which is cheap, but the writing phase can move much faster
-# than that and the page only polls every second or so.
-PROGRESS_EVERY = 1
+# What a run may attempt when it is genuinely queued: bounded by
+# CELERY_TASK_TIME_LIMIT (900s default) against ~3.5s per code, with wide margin.
+QUEUED_MAX_CODES = 50
+
+# What it may attempt when there is no broker and the "queue" is the request
+# thread. Deliberately far smaller: `render.yaml` leaves CELERY_BROKER_URL
+# dashboard-managed on the web service (`sync: false`), so a deployment that has
+# not pasted the Redis URL in yet falls back to inline — and inline runs under
+# `start.sh`'s bare gunicorn, whose default timeout is 30s. Fifty codes inline is
+# 125s of serial retrieval and a 502: the exact failure this work removes.
+# Measured: 5 codes 24.1s, 8 codes 28.7s.
+INLINE_MAX_CODES = 5
 
 
 class SuggestDispatcher(Protocol):
+    #: Ceiling on the codes one run may attempt under this dispatcher.
+    max_codes: int
+
     def dispatch(self, run: SuggestRun, params: dict) -> None:
         """Arrange for *run* to be executed."""
 
 
 class CeleryDispatcher:
     """Queues the run on a worker."""
+
+    max_codes = QUEUED_MAX_CODES
 
     def dispatch(self, run: SuggestRun, params: dict) -> None:
         from omop_core.tasks import suggest_mappings_task
@@ -64,7 +77,12 @@ class InlineDispatcher:
     polls — so the page needs one code path either way. What it does not get is
     progress: the row goes from queued to success in one step, because nothing
     is reading it while the request is blocked.
+
+    It also gets a much smaller ceiling, because "inline" means "inside the
+    request" and the request has a timeout. See INLINE_MAX_CODES.
     """
+
+    max_codes = INLINE_MAX_CODES
 
     def dispatch(self, run: SuggestRun, params: dict) -> None:
         execute_run(str(run.id), params)
@@ -72,6 +90,8 @@ class InlineDispatcher:
 
 class FakeDispatcher:
     """Records what it was asked to run, runs nothing. For tests."""
+
+    max_codes = QUEUED_MAX_CODES
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
@@ -121,25 +141,29 @@ def execute_run(run_id: str, params: dict) -> None:
     )
 
     tables = params.get('tables') or []
-    # Progress is reported across the whole run, not per table: the page shows
-    # one bar and a tab can map to several clinical tables.
-    offsets = {'retrieved': 0, 'done': 0, 'total': 0}
 
-    def make_progress(table_total_seen):
-        def progress(stage, done, total):
-            if total and offsets['total'] < table_total_seen[0] + total:
-                offsets['total'] = table_total_seen[0] + total
-            field = 'retrieved' if stage == 'retrieving' else 'done'
-            value = table_total_seen[0] + done
-            if stage == 'writing':
-                # Retrieval is finished for this table by the time writing
-                # starts, so pin it rather than letting the bar go backwards.
+    # The denominator the page was given in the 202, and the budget for the run.
+    # Both have to span the tables, not repeat per table: a source vocabulary can
+    # map to five clinical tables, and a per-table limit would let one run
+    # attempt five times its own ceiling.
+    budget = params['limit']
+    total = run.total
+
+    # Progress is reported across the whole run: the page shows one bar, and
+    # `done` must never overtake a denominator the view already published.
+    completed = {'retrieved': 0, 'written': 0}
+
+    def make_progress(base):
+        def progress(stage, done, _table_total):
+            if stage == 'retrieving':
+                completed['retrieved'] = base[0] + done
                 SuggestRun.objects.filter(pk=run.pk).update(
-                    retrieved=offsets['total'], done=value, total=offsets['total'],
+                    retrieved=min(completed['retrieved'], total) if total else completed['retrieved'],
                 )
             else:
+                completed['written'] = base[0] + done
                 SuggestRun.objects.filter(pk=run.pk).update(
-                    retrieved=value, total=offsets['total'],
+                    done=min(completed['written'], total) if total else completed['written'],
                 )
         return progress
 
@@ -147,10 +171,12 @@ def execute_run(run_id: str, params: dict) -> None:
     seen = [0]
     try:
         for table in tables:
+            if budget <= 0:
+                break
             table_results = suggest_mappings(
                 table,
                 min_occurrences=params['min_occurrences'],
-                limit=params['limit'],
+                limit=budget,
                 dry_run=params['dry_run'],
                 source_vocabulary_id=params['source_vocabulary_id'],
                 strategies=params['strategies'],
@@ -160,6 +186,7 @@ def execute_run(run_id: str, params: dict) -> None:
             )
             results.extend(table_results)
             seen[0] += len(table_results)
+            budget -= len(table_results)
     except Exception as exc:                      # noqa: BLE001 - record, never crash the worker
         SuggestRun.objects.filter(pk=run.pk).update(
             state=SuggestRun.FAILURE, error=str(exc)[:2000],
@@ -170,12 +197,12 @@ def execute_run(run_id: str, params: dict) -> None:
     landed: dict[str, int] = {}
     strategy_counts: dict[str, int] = {}
     for entry in results:
-        if entry.get('updated'):
-            suggested = entry.get('suggested')
-            vocab = (
-                suggested['vocabulary_id'] if suggested
-                else (params['source_vocabulary_id'] or '')
-            )
+        # Only rows that actually got a destination. `updated` means the row was
+        # written -- which includes recording that the ranker declined -- so
+        # counting that here would claim destinations nobody proposed.
+        suggested = entry.get('suggested')
+        if entry.get('updated') and suggested:
+            vocab = suggested['vocabulary_id'] or (params['source_vocabulary_id'] or '')
             landed[vocab] = landed.get(vocab, 0) + 1
         strategy = entry.get('strategy_used')
         if strategy:

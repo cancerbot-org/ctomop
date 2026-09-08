@@ -1034,7 +1034,7 @@ describe("CodeMappingPage", () => {
 
     it("reports what it proposed", async () => {
       mockPost.mockResolvedValue({
-        data: suggestRun({ updated: 3, total: 5, ranked: 2, landed_in: { LOINC: 3 } }),
+        data: suggestRun({ updated: 5, total: 5, ranked: 3, landed_in: { LOINC: 3 } }),
       });
       renderPage();
       await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
@@ -1042,7 +1042,7 @@ describe("CodeMappingPage", () => {
 
       await waitFor(() =>
         expect(screen.getByTestId("suggest-progress")).toHaveTextContent(
-          "Done — proposed a destination for 3 of 5 code(s).",
+          "Done — 3 of 5 code(s) got a destination.",
         ));
       expect(screen.getByTestId("suggest-progress")).toHaveTextContent("5/5");
     });
@@ -1080,7 +1080,7 @@ describe("CodeMappingPage", () => {
       mockGet.mockImplementation((url: string) => {
         if (url.startsWith("/v1/code-mappings/suggest-runs/")) {
           return Promise.resolve({
-            data: suggestRun({ state: "success", total: 4, done: 4, updated: 4 }),
+            data: suggestRun({ state: "success", total: 4, done: 4, updated: 4, ranked: 4 }),
           });
         }
         if (url === "/v1/code-mappings/") return Promise.resolve({ data: [proposedRow] });
@@ -1102,7 +1102,7 @@ describe("CodeMappingPage", () => {
       // Then it polls to completion.
       await waitFor(() =>
         expect(screen.getByTestId("suggest-progress"))
-          .toHaveTextContent("Done — proposed a destination for 4 of 4 code(s)."),
+          .toHaveTextContent("Done — 4 of 4 code(s) got a destination."),
         { timeout: 4000 });
     });
 

@@ -398,10 +398,18 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
     is equally a decision; re-proposing a rejected code put it back at the front
     of the queue on every run, where it spent a model call and created nothing.
 
-    **No destination yet**, unless *resuggest*.  A row that already has a
-    suggestion does not need another one.  *resuggest* is what the page's
-    "Replace Current Suggestions" asks for, and it is the only way a model
-    version bump reaches rows the previous version already answered.
+    **Not already answered by this model version**, unless *resuggest*.  Note
+    "answered", not "given a destination": a code the ranker declined, or that
+    the Athena guard skipped, is as finished as one with a target, and both leave
+    ``target_concept`` null.  Filtering on the target alone put every
+    unresolvable code straight back at the front of the next run -- rows are
+    ordered by occurrence and capped by *limit*, so the same top N would be
+    re-retrieved and re-ranked on every click and the backlog behind them would
+    never be reached.  ``suggestion_model_version`` is what records the attempt.
+
+    *resuggest* is what the page's "Replace Current Suggestions" asks for, and a
+    model-version bump reaches previously-answered rows on its own, because the
+    version stamped on them is no longer the current one.
 
     Ordered by occurrence, because that is the order a curator should meet them
     in: the code seen 400 times is worth more of their attention than the one
@@ -421,7 +429,10 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
     if source_vocabulary_id is not None:
         rows = rows.filter(source_vocabulary_id__in=vocabulary_aliases(source_vocabulary_id))
     if not resuggest:
-        rows = rows.filter(target_concept__isnull=True)
+        rows = rows.filter(
+            Q(target_concept__isnull=True)
+            & ~Q(suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        )
     if min_occurrences > 1:
         rows = rows.filter(occurrence_count__gte=min_occurrences)
     rows = rows.order_by('-occurrence_count', 'source_code', 'id')
@@ -972,6 +983,10 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             'vector_reranked': job['vector_reranked'],
             'umls_cui': job['umls_cui'],
             'mapping_id': mapping.id,
+            # "the row was written", not "a destination was found". A declined
+            # code and an Athena duplicate are both written -- that is how the
+            # attempt is recorded so the row is not retried on the next run --
+            # and both have `suggested` None. `ranked` counts destinations.
             'updated': False,
         }
         if chosen and athena_supplies_mapping(
@@ -979,9 +994,7 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             chosen['concept_id'],
         ):
             entry.update(suggested=None, note=ATHENA_DUPLICATE_MESSAGE)
-            results.append(entry)
-            report('writing', len(results))
-            continue
+            chosen, note = None, ATHENA_DUPLICATE_MESSAGE
         if dry_run:
             results.append(entry)
             report('writing', len(results))

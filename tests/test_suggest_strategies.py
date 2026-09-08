@@ -21,6 +21,8 @@ from omop_core.models import (
 from omop_core.services.mapping_suggestions import (
     ALL_STRATEGIES,
     CANDIDATE_LIMIT,
+    SUGGESTION_MODEL_VERSION,
+    SUGGESTION_PROVENANCE,
     STRATEGY_LEXICAL,
     STRATEGY_UMLS,
     STRATEGY_VECTORS,
@@ -413,6 +415,24 @@ class TestSuggestableMappings:
                  suggestable_mappings('condition', source_vocabulary_id='ICD10')}
         assert codes == {'A00.0', 'A00.1'}
 
+    def test_a_code_this_model_version_already_tried_is_not_retried(self):
+        """A declined code has no target, so filtering on the target alone put
+        it straight back at the front of the next run -- for ever, since rows
+        are ordered by occurrence and capped by the run's ceiling."""
+        queue_row('DECLINED', origin_system=SUGGESTION_PROVENANCE,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        assert suggestable_mappings('measurement') == []
+
+    def test_an_older_model_version_is_tried_again(self):
+        queue_row('OLD GUESS', origin_system='suggest v0.1',
+                  suggestion_model_version='v0.1')
+        assert len(suggestable_mappings('measurement')) == 1
+
+    def test_resuggest_reaches_a_row_this_version_already_tried(self):
+        queue_row('DECLINED', origin_system=SUGGESTION_PROVENANCE,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        assert len(suggestable_mappings('measurement', resuggest=True)) == 1
+
     def test_another_table_is_not_touched(self):
         queue_row('DRUGGY', omop_table='drug_exposure', domain_id='Drug')
         assert suggestable_mappings('measurement') == []
@@ -476,6 +496,19 @@ class TestSuggestAPIStrategies:
         with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
             self._post(min_occurrences=99999)
         assert fake.calls[0][1]['lexical_limit'] == CANDIDATE_LIMIT
+
+    def test_vectors_alone_is_rejected(self):
+        """It reranks what retrieval found and retrieves nothing itself, so on
+        its own it reports "no candidate concept" for every code -- which reads
+        as a broken tab rather than a bad selection."""
+        resp = self._post(strategies=['vectors'])
+        assert resp.status_code == 400
+        assert 'cannot run alone' in str(resp.data)
+
+    def test_vectors_with_a_retriever_is_accepted(self):
+        assert self._post(
+            strategies=['lexical', 'vectors'], min_occurrences=99999,
+        ).status_code == 202
 
     def test_replace_requires_a_vocabulary(self):
         resp = self.client.post(
@@ -559,6 +592,36 @@ class TestSuggestRunLifecycle:
         assert resp.status_code == 202
         assert resp.data['state'] == 'success'
         assert resp.data['total'] == 1
+
+    def test_the_inline_path_has_a_much_smaller_ceiling(self):
+        """render.yaml leaves CELERY_BROKER_URL dashboard-managed on the web
+        service, so a deployment that has not filled it in runs inline -- inside
+        a request whose gunicorn default timeout is 30s. Fifty codes there is
+        ~125s and a 502."""
+        from omop_core.services.suggest_jobs import (
+            INLINE_MAX_CODES, QUEUED_MAX_CODES, CeleryDispatcher, InlineDispatcher,
+        )
+        assert InlineDispatcher.max_codes == INLINE_MAX_CODES
+        assert CeleryDispatcher.max_codes == QUEUED_MAX_CODES
+        assert INLINE_MAX_CODES < QUEUED_MAX_CODES
+
+    def test_the_run_limit_is_capped_by_the_dispatcher(self):
+        from omop_core.services.suggest_jobs import INLINE_MAX_CODES
+        with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
+            fake.max_codes = INLINE_MAX_CODES
+            self._post(min_occurrences=1, limit=50)
+        assert fake.calls[0][1]['limit'] == INLINE_MAX_CODES
+
+    def test_the_limit_is_a_budget_for_the_run_not_per_table(self):
+        """A source vocabulary can map to several clinical tables; a per-table
+        limit lets one run attempt a multiple of its own ceiling."""
+        for i in range(4):
+            queue_row(f'MEAS-{i}', omop_table='measurement', domain_id='Measurement')
+            queue_row(f'OBS-{i}', omop_table='observation', domain_id='Observation')
+        with use_suggest_dispatcher(InlineSuggestDispatcher()):
+            resp = self._post(min_occurrences=1, limit=3)
+        assert resp.data['total'] <= 3
+        assert resp.data['done'] <= 3
 
     def test_a_failure_lands_on_the_row_not_in_a_worker_log(self, monkeypatch):
         """The page polls the row; an exception that only reached the log would
