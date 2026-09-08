@@ -13,7 +13,8 @@ from pathlib import Path
 
 csv.field_size_limit(sys.maxsize)
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import CommandError
+from omop_core.management.embedding_command import EmbeddingLoadCommand
 from django.apps import apps
 from django.db import connection
 from django.db.models import Count
@@ -389,7 +390,7 @@ def _copy_rows(table, columns, rows, log, direct=False):
             cur.execute(f'DROP TABLE {tmp}')
 
 
-class Command(BaseCommand):
+class Command(EmbeddingLoadCommand):
     help = 'Load OHDSI Athena vocabulary TSV files into OMOP vocabulary tables'
 
     def add_arguments(self, parser):

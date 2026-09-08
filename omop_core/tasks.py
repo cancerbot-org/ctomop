@@ -7,6 +7,13 @@ from celery import shared_task
 from omop_core.models import Person
 
 
+@shared_task(name='omop_core.precompute_suggest_embeddings')
+def precompute_suggest_embeddings_task():
+    from omop_core.services.embedding_jobs import run_suggest_embeddings
+
+    run_suggest_embeddings()
+
+
 @shared_task(name='omop_core.refresh_patient_record')
 def refresh_patient_record_task(person_id: int) -> dict[str, Any]:
     """Re-derive one person's PatientRecord.
