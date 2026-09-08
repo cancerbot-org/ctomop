@@ -59,6 +59,7 @@ interface CodeMappingRow {
   reviewer?: string;
   reviewed_at?: string | null;
   occurrence_count: number;
+  destination_count: number;
   has_mapping: boolean;
   mapping_origin?: "athena" | "healthkey";
 }
@@ -274,8 +275,8 @@ function mappingRowId(row: CodeMappingRow): string {
 }
 
 type MappingSection = "Unmapped" | "Mapped" | "Athena Mapped";
-type SortColumn = "origin_system" | "source_code" | "source_retired" | "source_code_description"
-  | "destination_concept_name" | "destination_concept_id" | "status";
+type SortColumn = "origin_system" | "source_code" | "occurrence_count" | "source_code_description"
+  | "destination_concept_name" | "destination_concept_id" | "destination_count" | "status";
 type SectionSort = { column: SortColumn; descending: boolean };
 
 function retirementLabel(row: CodeMappingRow | null): string {
@@ -364,26 +365,6 @@ const byOccurrence = (a: CodeMappingRow, b: CodeMappingRow) =>
   (b.occurrence_count || 0) - (a.occurrence_count || 0)
   || (a.source_code || "").localeCompare(b.source_code || "");
 
-/** Primary sort by origin_system (provenance), then by occurrence count. */
-const byProvenanceThenOccurrence = (a: CodeMappingRow, b: CodeMappingRow) =>
-  (a.origin_system || "").localeCompare(b.origin_system || "")
-  || byOccurrence(a, b);
-
-/**
- * Provenance first, then machines before humans, then author alphabetically.
- *
- * An import's proposal is nobody's decision yet — it is the work the queue
- * exists for, so it sorts above every hand-written mapping. Human drafts then
- * group by author, which keeps one curator's in-progress work together
- * instead of interleaving it with everyone else's by occurrence count.
- */
-const byProvenanceThenAuthor = (a: CodeMappingRow, b: CodeMappingRow) => {
-  const machine = (r: CodeMappingRow) => (r.origin === "import" ? 0 : 1);
-  return (a.origin_system || "").localeCompare(b.origin_system || "")
-    || machine(a) - machine(b)
-    || (a.created_by || "").localeCompare(b.created_by || "")
-    || byOccurrence(a, b);
-};
 
 /**
  * The sign-off half of the provenance line: " · approved by ada@x on 2026-08-31".
@@ -651,11 +632,11 @@ export default function CodeMappingPage() {
 
   // Three-section layout: UNMAPPED / MAPPED / ATHENA MAPPED.
   const athenaRows = useMemo(
-    () => visibleRows.filter((r) => r.mapping_origin === "athena").sort(byProvenanceThenOccurrence),
+    () => visibleRows.filter((r) => r.mapping_origin === "athena").sort(byOccurrence),
     [visibleRows],
   );
   const unmappedRows = useMemo(
-    () => visibleRows.filter((r) => r.mapping_origin !== "athena" && r.status !== "approved").sort(byProvenanceThenAuthor),
+    () => visibleRows.filter((r) => r.mapping_origin !== "athena" && r.status !== "approved").sort(byOccurrence),
     [visibleRows],
   );
   const rejectedCount = useMemo(
@@ -665,7 +646,7 @@ export default function CodeMappingPage() {
     [rows, selectedVocabulary],
   );
   const mappedRows = useMemo(
-    () => visibleRows.filter((r) => r.mapping_origin !== "athena" && r.status === "approved").sort(byProvenanceThenOccurrence),
+    () => visibleRows.filter((r) => r.mapping_origin !== "athena" && r.status === "approved").sort(byOccurrence),
     [visibleRows],
   );
 
@@ -1112,7 +1093,7 @@ export default function CodeMappingPage() {
   };
 
   const renderTable = (sectionRows: CodeMappingRow[], emptyText: string, section: MappingSection, { hideStatus = false }: { hideStatus?: boolean } = {}) => {
-    const colCount = 6 + (hideStatus ? 0 : 2);
+    const colCount = 7 + (hideStatus ? 0 : 2);
     const sort = sectionSorts[section];
     const header = (label: string, column: SortColumn) => (
       <th className="px-4 py-3 font-semibold" aria-sort={sort?.column === column ? (sort.descending ? "descending" : "ascending") : "none"}>
@@ -1131,10 +1112,11 @@ export default function CodeMappingPage() {
           <tr>
             {header("Provenance", "origin_system")}
             {header("Source code", "source_code")}
-            {header("Retired", "source_retired")}
+            {header("Seen", "occurrence_count")}
             {header("Source description", "source_code_description")}
             {header("Destination concept", "destination_concept_name")}
             {header("Concept ID", "destination_concept_id")}
+            {header("Dest count", "destination_count")}
             {!hideStatus && header("Status", "status")}
             {!hideStatus && <th className="w-16 px-4 py-3 font-semibold" aria-label="Actions" />}
           </tr>
@@ -1159,9 +1141,7 @@ export default function CodeMappingPage() {
             >
               <td className="px-4 py-3 text-xs text-slate-700">{row.origin_system || "—"}</td>
               <td className="px-4 py-3 font-mono text-xs text-slate-900">{row.source_code}</td>
-              <td className={`px-4 py-3 text-xs ${row.source_retired ? "font-semibold text-red-700" : "text-slate-600"}`} title={retirementDetail(row)}>
-                {retirementLabel(row)}
-              </td>
+              <td className="px-4 py-3 text-right font-mono text-xs text-slate-700">{row.occurrence_count || 0}</td>
               <td className="px-4 py-3 text-xs text-slate-700">{row.source_code_description || "—"}</td>
               <td className="px-4 py-3">
                 <div className="font-medium text-slate-950">{row.destination_concept_name}</div>
@@ -1170,6 +1150,7 @@ export default function CodeMappingPage() {
                 </div>
               </td>
               <td className="px-4 py-3 font-mono text-xs text-slate-900">{row.destination_concept_id}</td>
+              <td className={`px-4 py-3 text-center font-mono text-xs font-medium ${row.destination_count !== 1 ? "text-red-600" : "text-slate-700"}`}>{row.destination_count ?? 0}</td>
               {!hideStatus && (
               <td className="px-4 py-3">
                 <div className="inline-flex items-center gap-2">
@@ -1918,25 +1899,32 @@ export default function CodeMappingPage() {
                 )}
               </fieldset>
 
+              {selectedRow && (
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">
+                    Seen <span className="font-mono font-semibold">{selectedRow.occurrence_count || 0}</span> time{selectedRow.occurrence_count !== 1 ? "s" : ""}
+                  </span>
+                  <span className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium ${
+                    selectedRow.destination_count !== 1 ? "bg-red-50 text-red-700" : "bg-slate-100 text-slate-700"
+                  }`}>
+                    Destinations <span className="font-mono font-semibold">{selectedRow.destination_count ?? 0}</span>
+                  </span>
+                </div>
+              )}
+
               {selectedRow
                 && (selectedRow.origin === "import"
                   || selectedRow.created_by
                   || approvalNote(selectedRow)) && (
-                <p className="mt-4 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                <p className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
                   {selectedRow.origin === "import" ? (
                     <>
                       Proposed by import
                       {selectedRow.origin_system ? ` (${selectedRow.origin_system})` : ""}
                     </>
                   ) : (
-                    // created_by is SET_NULL, so a deleted author serializes
-                    // blank -- rendering "Created by " with nothing after it.
                     selectedRow.created_by ? <>Created by {selectedRow.created_by}</> : null
                   )}
-                  {/* Both halves of the provenance: who raised it, and who
-                      signed it off. Approval is the only transition that
-                      rewrites patient data, so a reviewer looking at an
-                      approved mapping needs to see whose decision it was. */}
                   {approvalNote(selectedRow)}
                   {selectedRow.suggest_strategy ? (
                     <>
@@ -1945,7 +1933,6 @@ export default function CodeMappingPage() {
                       {selectedRow.umls_cui ? ` (CUI ${selectedRow.umls_cui})` : ""}
                     </>
                   ) : null}
-                  {selectedRow.occurrence_count ? ` · seen ${selectedRow.occurrence_count} time(s)` : ""}
                 </p>
               )}
 
