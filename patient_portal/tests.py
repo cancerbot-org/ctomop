@@ -24885,9 +24885,11 @@ class CodeMappingSourceVocabTabsTest(TestCase):
             'source_vocabulary_id': 'ICD10CM',
             'min_occurrences': 1,
         }, format='json')
-        # Should not return 400 — the endpoint accepts source_vocabulary_id.
-        self.assertIn(resp.status_code, [status.HTTP_200_OK, status.HTTP_201_CREATED])
+        # 202: the run is queued, so the endpoint answers with a run to poll
+        # rather than the result. Not 400 — it accepts source_vocabulary_id.
+        self.assertEqual(resp.status_code, status.HTTP_202_ACCEPTED)
         self.assertIn('source_vocabulary_id', resp.data)
+        self.assertIn('run_id', resp.data)
 
     def test_cr_mirror_is_idempotent(self):
         """Re-approving does not duplicate CR rows (get_or_create is a no-op)."""
