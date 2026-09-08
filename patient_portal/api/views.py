@@ -9620,6 +9620,8 @@ def code_mapping_list(request):
     if request.method == 'GET':
         mappings = SourceCodeConceptMapping.objects.select_related(
             'target_concept', 'created_by', 'reviewer')
+        from omop_core.services.athena_mapping_guard import without_icd10_athena_duplicates
+        mappings = without_icd10_athena_duplicates(mappings)
         source_filter = request.query_params.get('source')
         if source_filter:
             mappings = mappings.filter(source_vocabulary_id=source_filter)

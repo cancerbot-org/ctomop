@@ -79,7 +79,7 @@ def test_athena_metadata_edit_does_not_conflict_with_itself(athena):
     assert response.status_code == 200
 
 
-@pytest.mark.parametrize('different', ['destination', 'source_code', 'vocabulary'])
+@pytest.mark.parametrize('different', ['source_code', 'vocabulary'])
 def test_nonidentical_pairs_are_allowed(athena, different):
     payload = {
         'source_vocabulary_id': 'ICD10', 'source_code': 'A02.0',
@@ -100,7 +100,7 @@ def test_alias_guard_is_symmetric_and_not_a_global_code_match(athena):
     athena.save()
     assert athena_supplies_mapping('ICD10CM', 'a02.0', athena.target_concept_id)
     assert not athena_supplies_mapping('LOINC', 'A02.0', athena.target_concept_id)
-    assert not athena_supplies_mapping('ICD10', 'A02.0', None)
+    assert athena_supplies_mapping('ICD10', 'A02.0', None)
 
 
 @pytest.mark.parametrize('dry_run', [False, True])
@@ -137,3 +137,74 @@ def test_single_suggest_explains_athena_duplicate(athena, monkeypatch):
     result = suggestions.suggest_one_mapping('A02.0', 'ICD10', 'condition', strategies=['umls'])
     assert result['suggested'] is None
     assert result['note'] == ATHENA_DUPLICATE_MESSAGE
+
+
+@pytest.mark.parametrize('destination', ['different', 'missing'])
+def test_icd10_source_precedence_regardless_of_destination(athena, destination):
+    target_id = ConceptFactory().pk if destination == 'different' else None
+    response = request_mapping('post', {
+        'source_vocabulary_id': 'ICD10', 'source_code': ' a02.0 ',
+        'destination_concept_id': target_id,
+    })
+    assert response.status_code == 400
+    if destination == 'different':
+        assert str(response.data['detail']) == ATHENA_DUPLICATE_MESSAGE
+    assert athena_supplies_mapping('ICD10', ' a02.0 ', target_id)
+    assert SourceCodeConceptMapping.objects.count() == 1
+
+
+def test_cleanup_removes_only_non_athena_icd10_duplicates(athena):
+    from importlib import import_module
+    from django.apps import apps
+    from django.db import connection
+    cleanup = import_module('omop_core.migrations.0216_remove_icd10_athena_duplicates')
+    def row(vocab, code, **kwargs):
+        return SourceCodeConceptMapping.objects.create(
+            source_vocabulary_id=vocab, source_code=code, **kwargs,
+        )
+    duplicates = [
+        row('ICD10', 'A02.0', target_concept=ConceptFactory(), status='approved'),
+        row('ICD10', ' a02.0 ', status='proposed'),
+        row('ICD10CM', 'a02.0', status='rejected'),
+    ]
+    survivors = [athena,
+        row('ICD10', 'a02.0', origin_system='athena', target_concept=ConceptFactory()),
+        row('LOINC', 'A02.0'), row('ICD10', 'A020'), row('ICD10', 'B01'),
+        row('ICD10CM', 'B01', origin_system='athena'),
+        row('ICD10CM', ' ', origin_system='athena', target_concept=ConceptFactory()),
+        row('ICD10', ' '),
+    ]
+    with connection.schema_editor() as editor:
+        cleanup.remove_duplicates(apps, editor)
+        cleanup.remove_duplicates(apps, editor)
+    assert not SourceCodeConceptMapping.objects.filter(pk__in=[r.pk for r in duplicates]).exists()
+    assert set(SourceCodeConceptMapping.objects.values_list('pk', flat=True)) == {r.pk for r in survivors}
+
+
+@pytest.mark.parametrize('query', [{}, {'source': 'ICD10'}, {'status': 'proposed'}, {'search': 'Only duplicate'}])
+def test_list_excludes_athena_owned_codes_before_filters(athena, query):
+    duplicate = SourceCodeConceptMapping.objects.create(
+        source_vocabulary_id='ICD10', source_code=' a02.0 ',
+        target_concept=ConceptFactory(concept_name='Only duplicate'),
+    )
+    request = APIRequestFactory().get('/', query)
+    force_authenticate(request, user=Identity.objects.create_user(
+        email='list-admin@example.test', is_staff=True,
+    ))
+    response = code_mapping_list(request)
+    assert response.status_code == 200
+    assert duplicate.pk not in {r['mapping_id'] for r in response.data}
+    if not query:
+        assert {r['mapping_id'] for r in response.data} == {athena.pk}
+
+
+def test_other_vocabularies_still_allow_different_destinations(athena):
+    athena.source_vocabulary_id = 'LOINC'
+    athena.save()
+    other = ConceptFactory()
+    assert not athena_supplies_mapping('LOINC', 'A02.0', other.pk)
+    assert athena_supplies_mapping('LOINC', 'A02.0', athena.target_concept_id)
+    assert request_mapping('post', {
+        'source_vocabulary_id': 'LOINC', 'source_code': 'A02.0',
+        'destination_concept_id': other.pk,
+    }).status_code == 201
