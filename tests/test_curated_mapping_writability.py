@@ -85,11 +85,32 @@ class TestAnIncompleteMappingIsStillAdvisory:
         _mapping(status='rejected')
         assert build_writable_field_descriptor()[FIELD]['writable'] is False
 
-    def test_a_mapping_without_a_source_value_does_not_count(self):
-        # Derivation matches on source_value. Without one the written row is
-        # unfindable, so the field would appear to save and never change.
+    def test_a_mapping_without_source_value_falls_back_to_concept_code(self):
+        # An empty source_value should not block writability — the concept's own
+        # code is the natural identifier for the OMOP fact and is what derivation
+        # matches on for LOINC/SNOMED mappings.
         _mapping(source_value='')
+
+        entry = build_writable_field_descriptor()[FIELD]
+
+        assert entry['writable'] is True
+        assert entry['source_value'] == '313059006'  # the concept_code from _concept()
+
+    def test_a_mapping_without_source_value_and_without_concept_does_not_count(self):
+        # With no source_value AND no concept, there's nothing to identify the
+        # fact, so the field stays non-writable.
+        _mapping(source_value='', concept=None)
         assert build_writable_field_descriptor()[FIELD]['writable'] is False
+
+    def test_explicit_source_value_takes_precedence_over_concept_code(self):
+        # When a curator explicitly sets source_value, it should be used as-is
+        # (e.g. custom FHIR extension URLs for SCT fields).
+        _mapping(source_value='custom-sct-extension')
+
+        entry = build_writable_field_descriptor()[FIELD]
+
+        assert entry['writable'] is True
+        assert entry['source_value'] == 'custom-sct-extension'
 
     def test_a_mapping_without_a_concept_does_not_count(self):
         _mapping(concept=None)
