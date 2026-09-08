@@ -140,53 +140,30 @@ def execute_run(run_id: str, params: dict) -> None:
         state=SuggestRun.RUNNING, model_version=SUGGESTION_MODEL_VERSION,
     )
 
-    tables = params.get('tables') or []
-
-    # The denominator the page was given in the 202, and the budget for the run.
-    # Both have to span the tables, not repeat per table: a source vocabulary can
-    # map to five clinical tables, and a per-table limit would let one run
-    # attempt five times its own ceiling.
-    budget = params['limit']
+    # One call for the whole run. The rows carry their own clinical table, so
+    # there is nothing to iterate per table -- and iterating applied `limit` to
+    # each of them, letting a tab that maps to five tables evaluate five times
+    # its ceiling.
     total = run.total
 
-    # Progress is reported across the whole run: the page shows one bar, and
-    # `done` must never overtake a denominator the view already published.
-    completed = {'retrieved': 0, 'written': 0}
+    def progress(stage, done, _total):
+        field = 'retrieved' if stage == 'retrieving' else 'done'
+        SuggestRun.objects.filter(pk=run.pk).update(
+            **{field: min(done, total) if total else done}
+        )
 
-    def make_progress(base):
-        def progress(stage, done, _table_total):
-            if stage == 'retrieving':
-                completed['retrieved'] = base[0] + done
-                SuggestRun.objects.filter(pk=run.pk).update(
-                    retrieved=min(completed['retrieved'], total) if total else completed['retrieved'],
-                )
-            else:
-                completed['written'] = base[0] + done
-                SuggestRun.objects.filter(pk=run.pk).update(
-                    done=min(completed['written'], total) if total else completed['written'],
-                )
-        return progress
-
-    results = []
-    seen = [0]
     try:
-        for table in tables:
-            if budget <= 0:
-                break
-            table_results = suggest_mappings(
-                table,
-                min_occurrences=params['min_occurrences'],
-                limit=budget,
-                dry_run=params['dry_run'],
-                source_vocabulary_id=params['source_vocabulary_id'],
-                strategies=params['strategies'],
-                lexical_limit=params['lexical_limit'],
-                resuggest=params['resuggest'],
-                progress=make_progress(seen),
-            )
-            results.extend(table_results)
-            seen[0] += len(table_results)
-            budget -= len(table_results)
+        results = suggest_mappings(
+            params.get('tables') or None,
+            min_occurrences=params['min_occurrences'],
+            limit=params['limit'],
+            dry_run=params['dry_run'],
+            source_vocabulary_id=params['source_vocabulary_id'],
+            strategies=params['strategies'],
+            lexical_limit=params['lexical_limit'],
+            resuggest=params['resuggest'],
+            progress=progress,
+        )
     except Exception as exc:                      # noqa: BLE001 - record, never crash the worker
         SuggestRun.objects.filter(pk=run.pk).update(
             state=SuggestRun.FAILURE, error=str(exc)[:2000],

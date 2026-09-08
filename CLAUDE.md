@@ -805,14 +805,29 @@ staging's 85,318 rows), so re-deriving it would spend a model call to make the
 answer worse. In practice the ICD-10 and RxNorm tabs return nothing, because
 every row on them already has an importer's destination.
 
-Rows are ordered **untried-first, then by occurrence**. Occurrence alone is the
-order a curator should meet codes in, but on its own it starves the queue: a
-code the ranker declines keeps no destination, so it stays eligible and, being
-high-occurrence, retakes the front of the very next run. On the staging sample
-*every* code in the top slots was declined, so those slots would never free up
-and the backlog behind them would never be reached. Sorting rows the current
-`suggestion_model_version` has not attempted ahead of ones it has means each run
-advances; declined codes come round again once the tab is drained.
+Rows are ordered **gaps first, then untried, then by occurrence**:
+
+1. **No destination before has one.** A run that is also replacing works
+   through the codes with no answer at all before it revisits ones that already
+   have one — an empty destination is a gap, a replaceable one is an
+   improvement. Without Replace this key is constant.
+2. **Untried before tried**, by the current `suggestion_model_version`.
+   Occurrence alone starves the queue: a declined code keeps no destination, so
+   it stays eligible and, being high-occurrence, retakes the front of the very
+   next run. On the staging sample *every* code in the top slots was declined,
+   so they would never free up. Untried-first means each run advances; declined
+   codes come round again once the tab is drained.
+3. **Occurrence**, because that is the order a curator should meet codes in.
+
+### The limit counts codes, not codes per table
+
+A tab maps to one or more clinical tables — the Uncoded tab maps to all five —
+but that is only where the rows live. Each queue row carries its own
+`omop_table`, so rows are selected, ordered and limited **once, together**.
+
+Selecting per table applied the limit to each, so the Uncoded tab could evaluate
+5× the ceiling it was given, and the ordering above would only hold within a
+table rather than across the run.
 
 It used to derive the queue instead, by grouping a whole clinical table on
 `concept_id = 0` and subtracting every existing mapping. That cost 4-7s per

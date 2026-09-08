@@ -405,16 +405,31 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
     is equally a decision; re-proposing a rejected code put it back at the front
     of the queue on every run, where it spent a model call and created nothing.
 
-    Ordered **untried-first, then by occurrence**.  Occurrence alone is the order
-    a curator should meet codes in -- the code seen 400 times is worth more
-    attention than the one seen once -- but on its own it starves the queue.  A
-    code the ranker declines keeps no destination, so it stays eligible and, being
-    high-occurrence, reappears at the front of the very next run; on the staging
+    Ordered **codes with no destination first, then untried, then by
+    occurrence**.
+
+    A run that is also replacing works through the codes that have no answer at
+    all before it revisits ones that already have one: an empty destination is a
+    gap, a replaceable one is an improvement, and the gap is worth the model call
+    first.  Without *resuggest* the first key is constant and the order is simply
+    untried-then-occurrence.
+
+    Untried before tried, because occurrence alone starves the queue.  A code the
+    ranker declines keeps no destination, so it stays eligible and, being
+    high-occurrence, retakes the front of the very next run; on the staging
     sample every code in the top slots was declined, so those slots would never
     free up and the backlog behind them would never be reached.  Sorting rows the
-    current ``suggestion_model_version`` has not yet attempted ahead of ones it
-    has means each run advances, and declined codes come round again only once
-    the tab is exhausted.
+    current ``suggestion_model_version`` has not attempted ahead of ones it has
+    means each run advances, and declined codes come round again once the tab is
+    drained.
+
+    Occurrence last, because it is the order a curator should meet codes in: the
+    code seen 400 times is worth more attention than the one seen once.
+
+    *omop_table* may be one table, several, or None for every one of them.  The
+    caller passes the tables its tab maps to and gets a single ordered list back
+    -- the ordering above only means anything across the whole run, and *limit*
+    counts codes, which is what the run's cost is measured in.
 
     ``min_occurrences <= 1`` drops the threshold rather than comparing against 1,
     so rows seeded with no count at all still appear.
@@ -426,9 +441,10 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
         .select_related('source_concept')
     )
     # None means every clinical table, which is what the embedding precompute
-    # walks; a Suggest run always names one.
+    # walks; a run names the ones its tab maps to.
     if omop_table is not None:
-        rows = rows.filter(omop_table=omop_table)
+        tables = [omop_table] if isinstance(omop_table, str) else list(omop_table)
+        rows = rows.filter(omop_table__in=tables)
     if source_vocabulary_id is not None:
         rows = rows.filter(source_vocabulary_id__in=vocabulary_aliases(source_vocabulary_id))
     if resuggest:
@@ -440,12 +456,18 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
     if min_occurrences > 1:
         rows = rows.filter(occurrence_count__gte=min_occurrences)
     rows = rows.annotate(
+        has_destination=Case(
+            When(target_concept__isnull=True, then=Value(0)),
+            default=Value(1),
+            output_field=IntegerField(),
+        ),
         already_tried=Case(
             When(suggestion_model_version=SUGGESTION_MODEL_VERSION, then=Value(1)),
             default=Value(0),
             output_field=IntegerField(),
         ),
-    ).order_by('already_tried', '-occurrence_count', 'source_code', 'id')
+    ).order_by('has_destination', 'already_tried', '-occurrence_count',
+               'source_code', 'id')
     return list(rows[:limit] if limit else rows)
 
 
@@ -912,6 +934,15 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
     destination, because minting an HK-* concept named after the source code
     would create a fake destination with no clinical meaning.
 
+    *omop_table* may be one clinical table, several, or None for all of them.
+    Each queue row carries the table it belongs to, so there is nothing to do
+    per table: the rows are selected, ordered and limited once, together.  That
+    matters for both correctness and cost -- the ordering is only meaningful
+    across the whole run, and *limit* counts codes, which is what a run's cost
+    is measured in.  Selecting per table instead applied *limit* to each, so a
+    tab mapping to five tables (the Uncoded tab does) could evaluate five times
+    the ceiling it was given.
+
     *strategies* controls the pipeline, which is not a waterfall of independent
     tiers but one retrieval and one ranking:
 
@@ -931,10 +962,11 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
         strategies = list(ALL_STRATEGIES)
     lexical_limit = max(1, min(int(lexical_limit or CANDIDATE_LIMIT), LEXICAL_LIMIT_MAX))
 
-    target = _QUARANTINE_TARGETS.get(omop_table)
-    if target is None:
-        raise ValueError(f'No quarantine vocabulary for table {omop_table!r}.')
-    _hk_vocabulary, domain_id, _concept_class_id, _slug_prefix = target
+    if omop_table is not None:
+        named = [omop_table] if isinstance(omop_table, str) else list(omop_table)
+        unknown = [t for t in named if t not in _QUARANTINE_TARGETS]
+        if unknown:
+            raise ValueError(f'No quarantine vocabulary for table(s) {unknown!r}.')
 
     mappings = suggestable_mappings(
         omop_table, source_vocabulary_id=source_vocabulary_id,
@@ -954,11 +986,14 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             mapping.source_vocabulary_id, mapping.source_code,
         )
         description, umls_source_name = _source_description(mapping, source_concept)
+        # The row knows its own table, so the domain comes from the row rather
+        # than from a table the caller happened to name.
+        fallback = _QUARANTINE_TARGETS.get(mapping.omop_table)
         job = _prepare(
             source_code=mapping.source_code,
             source_vocabulary_id=mapping.source_vocabulary_id,
             source_text=description,
-            domain_id=mapping.domain_id or domain_id,
+            domain_id=mapping.domain_id or (fallback[1] if fallback else ''),
             strategies=strategies,
             lexical_limit=lexical_limit,
         )

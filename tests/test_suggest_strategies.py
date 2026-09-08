@@ -462,6 +462,49 @@ class TestSuggestableMappings:
         queue_row('DRUGGY', omop_table='drug_exposure', domain_id='Drug')
         assert suggestable_mappings('measurement') == []
 
+    def test_several_tables_are_selected_and_ordered_together(self):
+        """A tab maps to up to five clinical tables. Selecting per table would
+        order within each and apply the limit to each."""
+        queue_row('QUIET MEASUREMENT', occurrence_count=10, omop_table='measurement')
+        queue_row('BUSY DRUG', occurrence_count=900, omop_table='drug_exposure',
+                  domain_id='Drug')
+        rows = suggestable_mappings(['measurement', 'drug_exposure'])
+        assert [m.source_code for m in rows] == ['BUSY DRUG', 'QUIET MEASUREMENT']
+
+    def test_the_limit_counts_codes_not_codes_per_table(self):
+        for i in range(4):
+            queue_row(f'MEAS-{i}', omop_table='measurement')
+            queue_row(f'DRUG-{i}', omop_table='drug_exposure', domain_id='Drug')
+        rows = suggestable_mappings(['measurement', 'drug_exposure'], limit=3)
+        assert len(rows) == 3
+
+    def test_replace_takes_the_gaps_before_the_replacements(self, measurement_concept):
+        """An empty destination is a gap; a replaceable one is an improvement.
+        The gap is worth the model call first."""
+        queue_row('ALREADY ANSWERED', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  target_concept=measurement_concept)
+        queue_row('NO DESTINATION', occurrence_count=10)
+        rows = suggestable_mappings('measurement', resuggest=True)
+        assert [m.source_code for m in rows] == ['NO DESTINATION', 'ALREADY ANSWERED']
+
+    def test_untried_still_comes_first_within_each_group(self, measurement_concept):
+        queue_row('GAP TRIED', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        queue_row('GAP UNTRIED', occurrence_count=10)
+        queue_row('ANSWERED TRIED', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  target_concept=measurement_concept,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        queue_row('ANSWERED UNTRIED', occurrence_count=10,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  target_concept=measurement_concept)
+        rows = suggestable_mappings('measurement', resuggest=True)
+        assert [m.source_code for m in rows] == [
+            'GAP UNTRIED', 'GAP TRIED', 'ANSWERED UNTRIED', 'ANSWERED TRIED',
+        ]
+
 
 # ---------------------------------------------------------------------------
 # API endpoint tests
@@ -637,16 +680,17 @@ class TestSuggestRunLifecycle:
             self._post(min_occurrences=1, limit=50)
         assert fake.calls[0][1]['limit'] == INLINE_MAX_CODES
 
-    def test_the_limit_is_a_budget_for_the_run_not_per_table(self):
-        """A source vocabulary can map to several clinical tables; a per-table
-        limit lets one run attempt a multiple of its own ceiling."""
+    def test_the_limit_counts_codes_however_many_tables_the_tab_maps_to(self):
+        """The Uncoded tab maps to all five clinical tables. The limit is a
+        performance bound on codes evaluated; tables are an implementation
+        detail of where the rows live."""
         for i in range(4):
             queue_row(f'MEAS-{i}', omop_table='measurement', domain_id='Measurement')
             queue_row(f'OBS-{i}', omop_table='observation', domain_id='Observation')
         with use_suggest_dispatcher(InlineSuggestDispatcher()):
             resp = self._post(min_occurrences=1, limit=3)
-        assert resp.data['total'] <= 3
-        assert resp.data['done'] <= 3
+        assert resp.data['total'] == 3
+        assert resp.data['done'] == 3
 
     def test_a_failure_lands_on_the_row_not_in_a_worker_log(self, monkeypatch):
         """The page polls the row; an exception that only reached the log would

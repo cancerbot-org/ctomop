@@ -9824,14 +9824,10 @@ def code_mapping_suggest(request):
 
     # Counted before the run starts so the page has a denominator to show from
     # the first poll, rather than a bar that fills against a moving total.
-    expected = 0
-    for tbl in tables:
-        if expected >= limit:
-            break
-        expected += len(suggestable_mappings(
-            tbl, source_vocabulary_id=source_vocab,
-            min_occurrences=min_occurrences, limit=limit - expected, resuggest=replace,
-        ))
+    expected = len(suggestable_mappings(
+        list(tables), source_vocabulary_id=source_vocab,
+        min_occurrences=min_occurrences, limit=limit, resuggest=replace,
+    ))
 
     run = SuggestRun.objects.create(
         source_vocabulary_id=source_vocab,
