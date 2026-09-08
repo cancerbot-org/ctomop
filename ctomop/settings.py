@@ -398,8 +398,32 @@ OAUTH2_PROVIDER = {
     'REFRESH_TOKEN_EXPIRE_SECONDS': 86400 * 30,
     # Require PKCE for all public (SPA) clients
     'PKCE_REQUIRED': True,
-    # Allow http for local dev; https enforced in production via ALLOWED_REDIRECT_URI_SCHEMES
-    'ALLOWED_REDIRECT_URI_SCHEMES': ['https', 'http'],
+    # `http` is allowed only under DEBUG, for the SPA's local dev server.
+    # Outside DEBUG a plaintext redirect would carry the authorization code --
+    # and, on the implicit-style paths, the token -- over an unencrypted hop.
+    #
+    # django-oauth-toolkit enforces this in two places, and it is worth naming
+    # both because they behave differently:
+    #   - registration: `Application.clean` (so the admin, and the
+    #     `/o/applications/register|<pk>/update/` views, which run `full_clean`)
+    #     refuses to store a redirect URI whose scheme is not listed here;
+    #   - redirect construction: `AuthorizationView.redirect` passes
+    #     `application.get_allowed_schemes()` into `OAuth2ResponseRedirect`,
+    #     whose `validate_redirect` raises `DisallowedRedirect` -- an HTTP 400 --
+    #     for a scheme not listed. RP-initiated logout does the same.
+    # The second one applies to rows ALREADY stored. Tightening this setting
+    # therefore breaks any existing Application still holding an http redirect
+    # URI: it will fail authorization with 400, after the grant has been minted.
+    # Sweep those rows before deploying this. See #146.
+    #
+    # The gate is DEBUG, which is not the same thing as "production": a
+    # deployed environment running with DEBUG=True still accepts http here.
+    # Nothing currently stops that -- tracked as #1084 -- so do not read this
+    # as "https is enforced in production". It is enforced outside DEBUG.
+    #
+    # This used to read ['https', 'http'] unconditionally, under a comment
+    # saying https was enforced in production. Nothing enforced it.
+    'ALLOWED_REDIRECT_URI_SCHEMES': ['https', 'http'] if DEBUG else ['https'],
     # client_credentials enables service-to-service auth for any API client
     # (hospital systems, foundations, platform services) without a user session
     'ALLOWED_GRANT_TYPES': [
