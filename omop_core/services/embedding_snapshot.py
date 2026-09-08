@@ -3,6 +3,7 @@ import hashlib
 import json
 
 from django.db import connection
+from psycopg import sql
 
 
 def snapshot_key(options):
@@ -24,8 +25,8 @@ def read_snapshot(key):
     # This is one query, but scans the inputs; it avoids per-code trigram work.
     with connection.cursor() as cursor:
         # The interpolated fragment is compiled by Django, never caller SQL.
-        cursor.execute(f"""
-            WITH eligible AS ({queue_sql}), inputs AS (
+        cursor.execute(sql.SQL("""
+            WITH eligible AS ({queue}), inputs AS (
                 SELECT 'concept' AS kind, count(*) AS n,
                        coalesce(sum(hashtextextended(
                            ROW(concept_id, concept_name, concept_code, vocabulary_id, domain_id,
@@ -64,7 +65,7 @@ def read_snapshot(key):
                    ) AS missing
             FROM fingerprint
             LEFT JOIN suggest_embedding_snapshot AS snapshot ON snapshot.key = %s
-        """, [*queue_params, key])
+        """).format(queue=sql.SQL(queue_sql)), [*queue_params, key])
         current, cached, candidate_ids, missing = cursor.fetchone()
 
     # Django's PostgreSQL connection returns raw JSON strings for JSONField

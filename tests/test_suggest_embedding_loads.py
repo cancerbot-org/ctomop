@@ -14,6 +14,7 @@ from omop_core.management.commands.precompute_suggest_embeddings import Command
 from omop_core.models import (
     ConceptEmbedding, ConceptSynonym, SourceCodeConceptMapping,
     SuggestEmbeddingSnapshot,
+    UmlsConcept, UmlsRelease, UmlsSourceCode,
 )
 from omop_core.services.embedding_jobs import dispatch_suggest_embeddings
 from tests.factories import ConceptFactory
@@ -104,6 +105,50 @@ def test_new_candidate_after_vocabulary_load_is_embedded(queue, encoder):
     precompute()
     assert ConceptEmbedding.objects.filter(concept=new).exists()
     assert encoder[1].encode.call_args.args[0] == [new.concept_name]
+
+
+def test_imported_gap_invalidates_empty_snapshot(queue, encoder):
+    concept, mapping = queue
+    mapping.status = 'approved'
+    mapping.save(update_fields=['status'])
+    precompute()
+    mapping.status = 'proposed'
+    mapping.origin_system = 'hk-labs'
+    mapping.save(update_fields=['status', 'origin_system'])
+    precompute()
+    assert ConceptEmbedding.objects.filter(concept=concept).exists()
+
+
+def test_precompute_resolves_unlinked_source_concept(queue, encoder):
+    concept, mapping = queue
+    mapping.source_code_description = ''
+    mapping.source_vocabulary_id = concept.vocabulary_id
+    mapping.source_code = concept.concept_code
+    mapping.save()
+    precompute()
+    assert ConceptEmbedding.objects.filter(concept=concept).exists()
+
+
+def test_umls_preferred_name_invalidates_snapshot(queue, encoder):
+    concept, mapping = queue
+    mapping.source_code_description = ''
+    mapping.source_vocabulary_id = 'LOINC'
+    mapping.source_code = 'unloaded-source-code'
+    mapping.save()
+    precompute()
+    release = UmlsRelease.objects.create(release_version='test')
+    cui = UmlsConcept.objects.create(cui='C1234567', release=release)
+    term = UmlsSourceCode.objects.create(
+        concept=cui, root_source='LNC', code=mapping.source_code,
+        name=concept.concept_name, is_preferred=True, term_type='PT',
+    )
+    precompute()
+    assert ConceptEmbedding.objects.filter(concept=concept).exists()
+    term.name = 'Different name'
+    term.save(update_fields=['name'])
+    with patch.object(Command, '_retrieve_candidates', return_value=set()) as retrieve:
+        precompute()
+    retrieve.assert_called_once()
 
 
 def test_measure_never_writes_and_force_reencodes(queue, encoder):

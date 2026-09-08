@@ -968,7 +968,8 @@ followed by `build_concept_embeddings`.
 
 `SuggestEmbeddingSnapshot` persists the candidate union by precompute options
 and model/retrieval version. One SQL query compares order-independent content
-checksums of concepts, synonyms, and eligible queue rows and checks that every
+checksums of concepts, synonyms, eligible queue rows, and relevant preferred
+UMLS terms and checks that every
 cached candidate still has a vector. Unchanged inputs and complete vectors
 return without lexical retrieval, model loading, or writes. This query scans
 the input tables; "one query" does not mean constant-time work. Changed input
