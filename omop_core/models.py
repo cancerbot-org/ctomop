@@ -1950,9 +1950,9 @@ class SourceCodeConceptMapping(models.Model):
             'field existed.'
         ),
     )
-    umls_cui = models.CharField(
-        max_length=20, blank=True, default='',
-        help_text='UMLS CUI used to bridge this mapping, when suggest_strategy is umls.',
+    umls_cui = models.TextField(
+        blank=True, default='',
+        help_text='Comma-separated UMLS CUIs used to retrieve candidates for this mapping.',
     )
     occurrence_count = models.IntegerField(default=0)
     first_seen = models.DateTimeField(null=True, blank=True)

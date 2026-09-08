@@ -679,6 +679,15 @@ class TestSuggestRunLifecycle:
         assert resp.data['total'] == 3
         assert fake.calls[0][1]['min_occurrences'] == 1
 
+    @pytest.mark.parametrize('maximum', [3, 50])
+    def test_reference_exposes_the_active_batch_ceiling(self, maximum):
+        fake = FakeSuggestDispatcher()
+        fake.max_codes = maximum
+        with use_suggest_dispatcher(fake):
+            response = self.client.get('/api/v1/code-mappings/reference/')
+        assert response.status_code == 200
+        assert response.data['suggest_max_per_run'] == maximum
+
     def test_the_total_is_known_before_any_work_runs(self):
         """The strip needs a denominator on its first poll, not a bar filling
         against a moving total."""
@@ -1147,3 +1156,26 @@ class TestICD10UmlsLookup:
         assert len(candidates) == 1
         assert candidates[0]['concept_id'] == 63650001
         assert cui_str == 'C0008031'
+
+
+@pytest.mark.parametrize('cui_count', [3, 6])
+def test_suggest_persists_all_bridge_cuis_without_varchar_overflow(
+    cui_count, umls_release, condition_domain, snomed_vocab, icd10cm_vocab, concept_class,
+):
+    target = ConceptFactory(
+        concept_id=777001, concept_code='44054006', concept_name='Test destination',
+        vocabulary=snomed_vocab, domain=condition_domain, concept_class=concept_class,
+        standard_concept='S',
+    )
+    cuis = [f'C{n:07d}' for n in range(1, cui_count + 1)]
+    for value in cuis:
+        cui = UmlsConcept.objects.create(cui=value, preferred_name='Test bridge', release=umls_release)
+        UmlsSourceCode.objects.create(concept=cui, root_source='ICD10CM', code='TEST.OVERFLOW', term_type='PT', name='Test source')
+        UmlsSourceCode.objects.create(concept=cui, root_source='SNOMEDCT_US', code=target.concept_code, term_type='PT', name='Test destination')
+    mapping = queue_row('TEST.OVERFLOW', source_vocabulary_id='ICD10CM', domain_id='Condition', omop_table='condition')
+    results = suggest_mappings('condition', source_vocabulary_id='ICD10CM', strategies=['umls'], min_occurrences=1)
+    assert results[0]['updated'] is True
+    mapping.refresh_from_db()
+    assert mapping.target_concept_id == target.pk
+    assert mapping.umls_cui == ','.join(cuis)
+    assert len(mapping.umls_cui) > 20

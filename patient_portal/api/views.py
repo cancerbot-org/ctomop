@@ -10226,6 +10226,7 @@ def _code_mapping_reference_payload():
         # Source vocabulary tabs for the Code Mapping page. Ordered: non-standard
         # first (the work queue), then uncoded, then standard (reference).
         'source_vocabulary_tabs': _source_vocabulary_tabs(),
+        'suggest_max_per_run': get_suggest_dispatcher().max_codes,
     }
 
 

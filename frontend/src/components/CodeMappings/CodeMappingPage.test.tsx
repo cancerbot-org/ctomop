@@ -1105,14 +1105,32 @@ describe("CodeMappingPage", () => {
       expect(controls[0]).toHaveTextContent("Suggest");
       for (const [index, name] of ["UMLS", "Lexical", "Vectors"].entries()) {
         const checkbox = within(toolbar).getByRole("checkbox", { name });
-        expect(controls[index + 1]).toBe(checkbox);
+        expect(controls[index + 2]).toBe(checkbox);
         expect(checkbox).toBeChecked();
       }
-      expect(within(toolbar).queryByRole("spinbutton")).not.toBeInTheDocument();
+      const batchSize = within(toolbar).getByRole("spinbutton", { name: "Number of suggestions" });
+      expect(controls[1]).toBe(batchSize);
+      expect(batchSize).toHaveValue(50);
+      expect(batchSize.nextElementSibling).toHaveTextContent("Using");
+      fireEvent.change(batchSize, { target: { value: "25" } });
       fireEvent.click(within(toolbar).getByRole("button", { name: "Suggest" }));
       await waitFor(() => expect(mockPost).toHaveBeenCalled());
+      expect(mockPost.mock.calls[0][1]).toMatchObject({ limit: 25 });
       expect(mockPost.mock.calls[0][1]).not.toHaveProperty("lexical_limit");
       expect(mockPost.mock.calls[0][1]).not.toHaveProperty("min_occurrences");
+    });
+
+    it("uses the active server batch cap as the default", async () => {
+      const page = renderPage();
+      const originalGet = mockGet.getMockImplementation()!;
+      mockGet.mockImplementation((url: string) => url === "/v1/code-mappings/reference/"
+        ? Promise.resolve({ data: { ...reference, suggest_max_per_run: 3 } }) : originalGet(url));
+      // Refresh the reference by switching away and remounting with the capped response.
+      page.unmount();
+      render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
+      await waitFor(() => expect(screen.getByLabelText("Number of suggestions")).toHaveValue(3));
+      fireEvent.change(screen.getByLabelText("Number of suggestions"), { target: { value: "4" } });
+      expect(screen.getByRole("button", { name: "Suggest" })).toBeDisabled();
     });
 
     it("shows incremental progress while the run is still working", async () => {
