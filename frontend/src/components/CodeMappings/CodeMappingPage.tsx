@@ -77,6 +77,13 @@ interface ConceptResult {
   suggested_unit?: string;
 }
 
+interface DestinationOption extends Omit<ConceptResult, "concept_id"> {
+  concept_id: number | null;
+  selectable: boolean;
+  origins: string[];
+  selected: boolean;
+}
+
 interface VocabularyRef {
   vocabulary_id: string;
   vocabulary_name: string;
@@ -460,6 +467,23 @@ export default function CodeMappingPage() {
   const [searchVocabulary, setSearchVocabulary] = useState("");
   const [conceptSearchQuery, setConceptSearchQuery] = useState("");
   const [conceptResults, setConceptResults] = useState<ConceptResult[]>([]);
+  const [destinationOptions, setDestinationOptions] = useState<DestinationOption[]>([]);
+  const [loadingDestinations, setLoadingDestinations] = useState(false);
+  const [destinationError, setDestinationError] = useState("");
+
+  useEffect(() => {
+    setDestinationOptions([]);
+    setDestinationError("");
+    if (dialogMode !== "edit" || !selectedRow?.mapping_id) return;
+    let active = true;
+    setLoadingDestinations(true);
+    api.get<{ destination_options: DestinationOption[] }>(`/v1/code-mappings/${selectedRow.mapping_id}/`)
+      .then(({ data }) => { if (active) setDestinationOptions(data.destination_options || []); })
+      .catch(() => { if (active) setDestinationError("Could not load imported destinations. Close and reopen this mapping to retry."); })
+      .finally(() => { if (active) setLoadingDestinations(false); });
+    return () => { active = false; };
+  }, [dialogMode, selectedRow?.mapping_id]);
+
   const [searchingConcepts, setSearchingConcepts] = useState(false);
   const [checkingUmls, setCheckingUmls] = useState(false);
   const [umlsCheckMessage, setUmlsCheckMessage] = useState("");
@@ -727,11 +751,11 @@ export default function CodeMappingPage() {
   };
 
   /** Apply a concept to the form: id, name, code, vocabulary, class, standard flag. */
-  const applyConcept = (concept: ConceptResult) => {
+  const applyConcept = (concept: ConceptResult, adoptDomain = false) => {
     setForm((prev) => {
       // A concept only supplies the domain when the curator has not chosen one;
       // Domain is theirs, and the table follows from it, not from the concept.
-      const domainId = prev.domain_id || concept.domain_id || "";
+      const domainId = (adoptDomain ? concept.domain_id : prev.domain_id) || concept.domain_id || "";
       return {
         ...prev,
         domain_id: domainId,
@@ -742,7 +766,7 @@ export default function CodeMappingPage() {
         destination_concept_class_id: concept.concept_class_id || "",
         standard_concept: concept.standard_concept || "",
         destination_invalid_reason: concept.invalid_reason || "",
-        omop_table: prev.omop_table || omopTableFor(reference, domainId),
+        omop_table: (adoptDomain ? "" : prev.omop_table) || omopTableFor(reference, domainId),
       };
     });
   };
@@ -1715,6 +1739,47 @@ export default function CodeMappingPage() {
                 <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Destination — the OMOP concept it means
                 </legend>
+
+                {dialogMode === "edit" && (
+                  <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3">
+                    {(selectedRow?.destination_count || destinationOptions.length) > 1 && (
+                      <p className="mb-2 font-semibold text-amber-900">
+                        Multiple destinations are available for this source code. Review the source data alternatives and choose the correct destination.
+                      </p>
+                    )}
+                    {loadingDestinations && <p role="status">Loading source destinations…</p>}
+                    {destinationError && <p role="alert" className="text-red-700">{destinationError}</p>}
+                    {destinationOptions.length > 0 && (
+                      <>
+                        <label htmlFor="imported-destination" className="mb-1 block text-sm font-medium">
+                          Source data destinations ({destinationOptions.length})
+                        </label>
+                        <select id="imported-destination" className={INPUT_CLASS}
+                          value={destinationOptions.some((option) => String(option.concept_id) === form.destination_concept_id) ? form.destination_concept_id : ""}
+                          onChange={(event) => {
+                            const option = destinationOptions.find((item) => String(item.concept_id) === event.target.value);
+                            if (option?.selectable && option.concept_id !== null) {
+                              applyConcept({ ...option, concept_id: option.concept_id }, true);
+                            }
+                          }}>
+                          <option value="">Choose a destination</option>
+                          {destinationOptions.map((option) => (
+                            <option key={`${option.vocabulary_id}:${option.concept_code}`}
+                              value={option.concept_id === null ? `unavailable:${option.vocabulary_id}:${option.concept_code}` : String(option.concept_id)}
+                              disabled={!option.selectable}>
+                              {option.concept_name} — {option.vocabulary_id}:{option.concept_code} — OMOP {option.concept_id ?? "not loaded"}
+                              {option.origins.length ? ` (${option.origins.join(", ")})` : ""}
+                              {!option.selectable ? " — unavailable" : ""}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-xs text-slate-600">
+                          Save your choice below. Imported alternatives are retained for review; unavailable targets cannot be selected.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {/* Search sits at the top: picking a concept fills everything below it. */}
                 <div className="mb-4">
