@@ -456,11 +456,6 @@ export default function CodeMappingPage() {
   const [strategies, setStrategies] = useState({
     umls: true, vectors: true, lexical: true,
   });
-  // How many trigram survivors reach the reranker and the ranker's prompt. The
-  // one knob that trades recall against the cost of every stage after it, so it
-  // sits next to the checkbox for the stage that produces them.
-  // Keep the input empty while editing; coerce only when sending.
-  const [lexicalLimit, setLexicalLimit] = useState<number | "">(10);
   const [dialogMode, setDialogMode] = useState<"new" | "edit" | null>(null);
   const [selectedRow, setSelectedRow] = useState<CodeMappingRow | null>(null);
   const [form, setForm] = useState<MappingForm>(emptyForm);
@@ -843,7 +838,6 @@ export default function CodeMappingPage() {
         source_code: form.source_code, source_vocabulary_id: form.source_vocabulary_id,
         source_code_description: form.source_code_description, omop_table: form.omop_table,
         strategies: enabled,
-        lexical_limit: Number(lexicalLimit) || 10,
       });
       if (data.suggested) {
         applyConcept(data.suggested);
@@ -975,7 +969,6 @@ export default function CodeMappingPage() {
         {
           source_vocabulary_id: selectedVocabulary,
           strategies: activeStrategies,
-          lexical_limit: Number(lexicalLimit) || 10,
           replace: effectiveReplace,
         },
       );
@@ -1342,40 +1335,18 @@ export default function CodeMappingPage() {
           })}
         </div>
 
-        {duplicateCodes.length > 0 && (
-          <div role="alert" className="mb-4 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
-            <p className="font-semibold">Error: {duplicateCodes.length} duplicate source code{duplicateCodes.length === 1 ? "" : "s"} on this tab</p>
-            <p className="mt-1">These source codes occur in multiple mapping rows. Follow a link, then select the row to open its edit dialog and delete unwanted duplicates. Hidden rejected mappings are included.</p>
-            <ul aria-label="Duplicate source codes" className="mt-2 max-h-60 space-y-2 overflow-y-auto">
-              {duplicateCodes.map((group) => (
-                <li key={JSON.stringify([group.vocabulary, group.code])}>
-                  <span className="font-mono font-semibold">{group.vocabulary || "Uncoded"}: {group.code}</span>
-                  <ul className="ml-4 list-disc">
-                    {group.rows.map((row) => (
-                      <li key={mappingRowId(row)}>
-                        <a
-                          href={`#${mappingRowId(row)}`}
-                          onClick={(event) => { event.preventDefault(); revealDuplicate(row); }}
-                          className="rounded underline hover:text-red-950 focus:outline-2 focus:outline-red-600"
-                        >
-                          {row.source_code} — {sectionForRow(row)} · {row.source_vocabulary_id || "Uncoded"}
-                          {row.status === "rejected" ? " · rejected" : ""}
-                          {row.mapping_id != null ? ` · mapping #${row.mapping_id}` : ""}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* At the top of the tab, not buried in a section header: this is how
-            an empty queue gets filled, so it has to be visible before there is
-            anything to scroll past. Shown on every tab and disabled on the
-            standard ones — a button that silently vanishes reads as a bug. */}
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        {/* Keep the primary action immediately below the source tabs. */}
+        <div role="group" aria-label="Suggest controls" className="mb-4 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void runSuggest()}
+            disabled={suggesting || !hasRetrieval}
+            title="Propose destinations for queued source codes on this tab."
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Sparkles size={13} />
+            {suggesting ? "Suggesting…" : "Suggest"}
+          </button>
           {(["umls", "lexical", "vectors"] as const).map((key) => (
             <span key={key} className="inline-flex items-center gap-1">
               <label className="inline-flex items-center gap-1 text-xs text-slate-600">
@@ -1397,36 +1368,8 @@ export default function CodeMappingPage() {
                   {STRATEGY_LABELS[key]}
                 </span>
               </label>
-              {/* Beside Lexical, because it is Lexical's shortlist that every
-                  later stage is sized by: the reranker orders it and the
-                  ranking model reads all of it in one prompt. */}
-              {key === "lexical" && (
-                <input
-                  aria-label="Lexical candidates per code"
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={lexicalLimit}
-                  onChange={(e) =>
-                    setLexicalLimit(e.target.value === "" ? "" : Number(e.target.value))
-                  }
-                  disabled={!strategies.lexical}
-                  title="How many trigram matches become candidate destinations for each code. More costs more to rerank and rank."
-                  className="h-8 w-14 rounded-md border border-slate-300 px-2 text-xs disabled:bg-slate-100 disabled:text-slate-400"
-                />
-              )}
             </span>
           ))}
-          <button
-            type="button"
-            onClick={() => void runSuggest()}
-            disabled={suggesting || !hasRetrieval}
-            title="Propose destinations for queued source codes on this tab."
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Sparkles size={13} />
-            {suggesting ? "Suggesting…" : "Suggest"}
-          </button>
           {suggestModelVersion && (
             <span className="text-xs font-medium text-slate-500">suggest {suggestModelVersion}</span>
           )}
@@ -1510,6 +1453,35 @@ export default function CodeMappingPage() {
             >
               Cancel
             </button>
+          </div>
+        )}
+
+        {duplicateCodes.length > 0 && (
+          <div role="alert" className="mb-4 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <p className="font-semibold">Error: {duplicateCodes.length} duplicate source code{duplicateCodes.length === 1 ? "" : "s"} on this tab</p>
+            <p className="mt-1">These source codes occur in multiple mapping rows. Follow a link, then select the row to open its edit dialog and delete unwanted duplicates. Hidden rejected mappings are included.</p>
+            <ul aria-label="Duplicate source codes" className="mt-2 max-h-60 space-y-2 overflow-y-auto">
+              {duplicateCodes.map((group) => (
+                <li key={JSON.stringify([group.vocabulary, group.code])}>
+                  <span className="font-mono font-semibold">{group.vocabulary || "Uncoded"}: {group.code}</span>
+                  <ul className="ml-4 list-disc">
+                    {group.rows.map((row) => (
+                      <li key={mappingRowId(row)}>
+                        <a
+                          href={`#${mappingRowId(row)}`}
+                          onClick={(event) => { event.preventDefault(); revealDuplicate(row); }}
+                          className="rounded underline hover:text-red-950 focus:outline-2 focus:outline-red-600"
+                        >
+                          {row.source_code} — {sectionForRow(row)} · {row.source_vocabulary_id || "Uncoded"}
+                          {row.status === "rejected" ? " · rejected" : ""}
+                          {row.mapping_id != null ? ` · mapping #${row.mapping_id}` : ""}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
