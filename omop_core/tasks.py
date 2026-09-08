@@ -48,5 +48,5 @@ def suggest_mappings_task(run_id: str, params: dict[str, Any]) -> dict[str, Any]
         'state': run.state,
         'done': run.done,
         'total': run.total,
-        'updated': run.updated,
+        'destinations': run.destinations,
     }

@@ -4193,8 +4193,12 @@ class SuggestRun(models.Model):
     # the progress bar at zero for two thirds of the wait.
     retrieved = models.IntegerField(default=0)
     done = models.IntegerField(default=0)
-    updated = models.IntegerField(default=0)
-    ranked = models.IntegerField(default=0)
+    # What the run actually achieved, and the number the curator is shown: codes
+    # that came out of it with a destination they did not have going in. Not
+    # "rows written" -- a code the ranker declined is written too, so the run
+    # records that it tried, and counting those would claim destinations nobody
+    # proposed.
+    destinations = models.IntegerField(default=0)
 
     strategy_counts = models.JSONField(default=dict, blank=True)
     landed_in = models.JSONField(default=dict, blank=True)
@@ -4213,7 +4217,8 @@ class SuggestRun(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f'SuggestRun {self.id} ({self.state} {self.done}/{self.total})'
+        return (f'SuggestRun {self.id} ({self.state} {self.done}/{self.total}, '
+                f'{self.destinations} destination(s))')
 
 
 class ConceptEmbedding(models.Model):

@@ -790,18 +790,29 @@ decide what it touches and how long it takes.
 
 ### It reads the tab, not the clinical tables
 
-The candidate set is `suggestable_mappings()`: rows in
-`source_code_concept_mapping` whose
+The candidate set is `suggestable_mappings()`: every `proposed` row on the tab
+with **no destination yet**, whatever its provenance. A row with nothing in the
+destination column has nothing that could be overwritten — an
+`open-wearables-seed` or `hk-labs` row waiting for a concept is exactly what
+Suggest is for, and staging has 69 of them (67 + 2).
 
-* `origin_system` is **empty or begins with `suggest`**, and
-* `status` is `proposed`, and
-* `target_concept` is null (unless the caller asks to re-suggest).
+Provenance decides only what **Replace** may re-answer. A row that already has a
+destination is revisited only with `resuggest`, and then only if its
+`origin_system` is empty or begins with `suggest` — meaning nothing but a
+previous Suggest run ever set it. An `HT-One`, `HT-FHIR` or `athena` destination
+was asserted by an importer that knew more than the source text does (75,257 of
+staging's 85,318 rows), so re-deriving it would spend a model call to make the
+answer worse. In practice the ICD-10 and RxNorm tabs return nothing, because
+every row on them already has an importer's destination.
 
-An `HT-One`, `HT-FHIR`, `athena` or `hk-labs` row carries a destination its
-importer asserted from more than the source text — 75,257 of staging's 85,318
-rows — so re-deriving it would spend a model call to make the answer worse. In
-practice this means the **Uncoded tab** (blank source vocabulary) is where
-Suggest does its work, and the ICD-10 and RxNorm tabs correctly return nothing.
+Rows are ordered **untried-first, then by occurrence**. Occurrence alone is the
+order a curator should meet codes in, but on its own it starves the queue: a
+code the ranker declines keeps no destination, so it stays eligible and, being
+high-occurrence, retakes the front of the very next run. On the staging sample
+*every* code in the top slots was declined, so those slots would never free up
+and the backlog behind them would never be reached. Sorting rows the current
+`suggestion_model_version` has not attempted ahead of ones it has means each run
+advances; declined codes come round again once the tab is drained.
 
 It used to derive the queue instead, by grouping a whole clinical table on
 `concept_id = 0` and subtracting every existing mapping. That cost 4-7s per
@@ -877,24 +888,20 @@ Raising it needs retrieval to get cheaper, not the timeout to get longer — eac
 extra code adds another trigram query, while ranking adds ~3.5s to a run of any
 size.
 
-### A run records that it tried, not just what it found
+### What the curator is shown
 
-A code the ranker declined, and one the Athena guard skipped, both end with no
-destination — and both are as finished as a code that got one. Eligibility
-therefore excludes rows already stamped with the **current**
-`suggestion_model_version`, not just rows with a target. Filtering on the target
-alone put every unresolvable code back at the front of the next run: rows are
-ordered by occurrence and capped by the ceiling, so the same top N would be
-re-retrieved and re-ranked on every click and the backlog behind them would
-never be reached.
+The headline number is **new destinations written** (`SuggestRun.destinations`)
+— what the run achieved. Not "rows written": a code the ranker declined is
+written too, so the run records that it tried, and counting those would claim
+destinations nobody proposed. `done`/`total` is the separate "how far through"
+number.
 
-A model-version bump reaches previously-answered rows on its own, because the
-version stamped on them is no longer the current one. "Replace Current
-Suggestions" (`resuggest`) re-answers them in place — it does **not** delete
-them, which it used to: while the candidate set came from a clinical scan a
-deleted row would be found again and recreated, but now a deleted row is a code
-that has left the queue for good, taking its `occurrence_count` and `first_seen`
-with it.
+### Replace re-answers rows, it does not delete them
+
+It used to delete: while the candidate set came from a clinical scan, a deleted
+row would be found again and recreated. Now that Suggest reads the tab, a
+deleted row is a code that has left the queue for good, taking its
+`occurrence_count` and `first_seen` with it.
 
 ### Vectors cannot run alone
 

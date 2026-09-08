@@ -68,7 +68,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.conf import settings
 from django.contrib.postgres.search import TrigramSimilarity
-from django.db.models import Case, CharField, Count, F, Max, Q, Value, When
+from django.db.models import (
+    Case, CharField, Count, F, IntegerField, Max, Q, Value, When,
+)
 from django.db.models.functions import Upper
 
 from omop_core.models import (
@@ -384,42 +386,43 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
                          limit=None, resuggest=False):
     """The queue rows on one tab that a Suggest run is allowed to write to.
 
-    This is the whole candidate set: Suggest reads the tab, and the tab is
-    ``source_code_concept_mapping``.  Three filters decide it.
+    **Every row on the tab with no destination yet.**  That is the whole default
+    candidate set, whatever its provenance: a row with nothing in the
+    destination column has nothing that could be overwritten, so an
+    ``open-wearables-seed`` or ``hk-labs`` row waiting for a concept is exactly
+    what Suggest is for.  On staging that is 69 rows a provenance-only filter
+    would have skipped.
 
-    **Provenance empty, or beginning with ``suggest``.**  Those are the rows
-    whose destination nobody but a previous Suggest run has ever set.  A row
-    stamped ``HT-One``, ``HT-FHIR``, ``athena`` or ``hk-labs`` carries a
-    destination its importer asserted from more than the source text -- on
-    staging that is 75,257 of 85,318 rows -- and re-deriving it here would
-    overwrite a better answer with a worse one, at the cost of a model call each.
+    **Provenance decides only what *Replace* may re-answer.**  A row that already
+    has a destination is only revisited when *resuggest* is set, and then only if
+    its ``origin_system`` is empty or begins with ``suggest`` -- meaning nothing
+    but a previous Suggest run ever set it.  An ``HT-One``, ``HT-FHIR`` or
+    ``athena`` destination was asserted by an importer that knew more than the
+    source text does (75,257 of staging's 85,318 rows), and re-deriving it would
+    spend a model call to make the answer worse.
 
     **``proposed`` only.**  ``approved`` is a curator's sign-off and ``rejected``
     is equally a decision; re-proposing a rejected code put it back at the front
     of the queue on every run, where it spent a model call and created nothing.
 
-    **Not already answered by this model version**, unless *resuggest*.  Note
-    "answered", not "given a destination": a code the ranker declined, or that
-    the Athena guard skipped, is as finished as one with a target, and both leave
-    ``target_concept`` null.  Filtering on the target alone put every
-    unresolvable code straight back at the front of the next run -- rows are
-    ordered by occurrence and capped by *limit*, so the same top N would be
-    re-retrieved and re-ranked on every click and the backlog behind them would
-    never be reached.  ``suggestion_model_version`` is what records the attempt.
+    Ordered **untried-first, then by occurrence**.  Occurrence alone is the order
+    a curator should meet codes in -- the code seen 400 times is worth more
+    attention than the one seen once -- but on its own it starves the queue.  A
+    code the ranker declines keeps no destination, so it stays eligible and, being
+    high-occurrence, reappears at the front of the very next run; on the staging
+    sample every code in the top slots was declined, so those slots would never
+    free up and the backlog behind them would never be reached.  Sorting rows the
+    current ``suggestion_model_version`` has not yet attempted ahead of ones it
+    has means each run advances, and declined codes come round again only once
+    the tab is exhausted.
 
-    *resuggest* is what the page's "Replace Current Suggestions" asks for, and a
-    model-version bump reaches previously-answered rows on its own, because the
-    version stamped on them is no longer the current one.
-
-    Ordered by occurrence, because that is the order a curator should meet them
-    in: the code seen 400 times is worth more of their attention than the one
-    seen once.  ``min_occurrences <= 1`` drops the filter rather than comparing
-    against 1, so rows seeded with no count at all still appear.
+    ``min_occurrences <= 1`` drops the threshold rather than comparing against 1,
+    so rows seeded with no count at all still appear.
     """
+    machine_set = Q(origin_system='') | Q(origin_system__istartswith='suggest')
     rows = (
         SourceCodeConceptMapping.objects
         .filter(status='proposed')
-        .filter(Q(origin_system='') | Q(origin_system__istartswith='suggest'))
         .select_related('source_concept')
     )
     # None means every clinical table, which is what the embedding precompute
@@ -428,14 +431,21 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
         rows = rows.filter(omop_table=omop_table)
     if source_vocabulary_id is not None:
         rows = rows.filter(source_vocabulary_id__in=vocabulary_aliases(source_vocabulary_id))
-    if not resuggest:
-        rows = rows.filter(
-            Q(target_concept__isnull=True)
-            & ~Q(suggestion_model_version=SUGGESTION_MODEL_VERSION)
-        )
+    if resuggest:
+        # Rows with no destination, plus ones whose destination only a previous
+        # Suggest run put there.
+        rows = rows.filter(Q(target_concept__isnull=True) | machine_set)
+    else:
+        rows = rows.filter(target_concept__isnull=True)
     if min_occurrences > 1:
         rows = rows.filter(occurrence_count__gte=min_occurrences)
-    rows = rows.order_by('-occurrence_count', 'source_code', 'id')
+    rows = rows.annotate(
+        already_tried=Case(
+            When(suggestion_model_version=SUGGESTION_MODEL_VERSION, then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
+        ),
+    ).order_by('already_tried', '-occurrence_count', 'source_code', 'id')
     return list(rows[:limit] if limit else rows)
 
 

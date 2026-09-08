@@ -205,11 +205,16 @@ const suggestProgressCount = (run: SuggestRunProgress) => {
 const describeSuggestRun = (run: SuggestRunProgress) => {
   if (run.state === "failure") return run.error || "The suggest run failed.";
   if (run.state === "success") {
-    if (!run.updated) return "Done — nothing on this tab was awaiting a suggestion.";
-    return `Done — ${run.ranked} of ${run.updated} code(s) got a destination.`;
+    if (run.total === 0) return "Done — nothing on this tab was awaiting a suggestion.";
+    return `Done — wrote ${run.destinations} new destination(s) across ${run.total} code(s).`;
   }
   if (run.total === 0) return "Nothing queued on this tab.";
-  if (run.done > 0) return `Writing suggestions… ${run.done} of ${run.total}`;
+  // The destination count is what the run is for, so it is shown while the run
+  // is still going rather than only at the end.
+  if (run.done > 0) {
+    return `Writing suggestions… ${run.done} of ${run.total}`
+      + ` · ${run.destinations} destination(s)`;
+  }
   if (run.retrieved > 0) return `Searching for candidates… ${run.retrieved} of ${run.total}`;
   return "Starting…";
 };
@@ -226,8 +231,8 @@ type SuggestRunProgress = {
   total: number;
   retrieved: number;
   done: number;
-  updated: number;
-  ranked: number;
+  /** New destinations written — what the run achieved, and the headline number. */
+  destinations: number;
   strategy_counts: Record<string, number>;
   landed_in: Record<string, number>;
   error: string;
@@ -1040,11 +1045,8 @@ export default function CodeMappingPage() {
       .map(([strategy, n]) => `${n} via ${strategy}`)
       .join(", ");
     setBanner(
-      run.updated
-        // `ranked` is the count that got a destination; `updated` includes rows
-        // where the ranker declined, which are written so they are not retried.
-        ? `Reviewed ${run.updated} of ${run.total} queued code(s), `
-          + `${run.ranked} with a suggested destination`
+      run.total
+        ? `Wrote ${run.destinations} new destination(s) across ${run.total} queued code(s)`
           + (byStrategy ? ` (${byStrategy})` : "")
           + (where ? ` — ${where}.` : ".")
         // Suggest reads this tab, so an empty result means the tab has no row

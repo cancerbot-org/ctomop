@@ -345,23 +345,33 @@ class TestSuggestableMappings:
         queue_row('UNCLAIMED')
         assert [m.source_code for m in suggestable_mappings('measurement')] == ['UNCLAIMED']
 
-    def test_a_previous_suggestion_is_eligible(self):
-        """Only a Suggest run ever set it, so a better run may reset it."""
+    def test_a_previous_suggestion_with_no_destination_is_eligible(self):
         queue_row('MACHINE GUESS', origin_system='suggest v0.1')
         assert [m.source_code for m in suggestable_mappings('measurement')] == ['MACHINE GUESS']
 
     @pytest.mark.parametrize('provenance', ['HT-One', 'HT-FHIR', 'athena', 'hk-labs',
                                             'open-wearables-seed', 'fhir-upload'])
-    def test_an_importer_row_is_left_alone(self, provenance):
-        """75,257 of staging's 85,318 rows. Their importer knew more than the
-        source text does, and re-deriving would cost a model call to make the
-        answer worse."""
+    def test_an_importer_row_with_no_destination_is_eligible(self, provenance):
+        """There is nothing to overwrite. Staging has 69 of these -- 67
+        open-wearables-seed and 2 hk-labs -- and they are exactly what Suggest
+        is for."""
         queue_row('IMPORTED', origin_system=provenance)
-        assert suggestable_mappings('measurement') == []
+        assert [m.source_code for m in suggestable_mappings('measurement')] == ['IMPORTED']
 
-    def test_provenance_match_is_case_insensitive(self):
-        queue_row('SHOUTED', origin_system='Suggest v0.2')
-        assert len(suggestable_mappings('measurement')) == 1
+    @pytest.mark.parametrize('provenance', ['HT-One', 'HT-FHIR', 'athena', 'hk-labs'])
+    def test_an_importer_destination_is_never_re_answered(self, provenance,
+                                                          measurement_concept):
+        """Its importer knew more than the source text does -- 75,257 of
+        staging's 85,318 rows -- so re-deriving it would spend a model call to
+        make the answer worse. Not even Replace touches it."""
+        queue_row('IMPORTED', origin_system=provenance, target_concept=measurement_concept)
+        assert suggestable_mappings('measurement') == []
+        assert suggestable_mappings('measurement', resuggest=True) == []
+
+    def test_replace_matches_suggest_provenance_case_insensitively(self, measurement_concept):
+        queue_row('SHOUTED', origin_system='Suggest v0.2', target_concept=measurement_concept)
+        assert suggestable_mappings('measurement') == []
+        assert len(suggestable_mappings('measurement', resuggest=True)) == 1
 
     def test_approved_is_a_decision(self):
         queue_row('SIGNED OFF', status='approved')
@@ -374,12 +384,12 @@ class TestSuggestableMappings:
         assert suggestable_mappings('measurement') == []
 
     def test_a_row_that_already_has_a_destination_is_skipped(self, measurement_concept):
-        queue_row('ANSWERED', target_concept=measurement_concept)
+        queue_row('HAS ONE', target_concept=measurement_concept)
         assert suggestable_mappings('measurement') == []
 
-    def test_resuggest_reaches_rows_that_already_have_one(self, measurement_concept):
-        """The only way a model-version bump reaches what the last one answered."""
-        queue_row('ANSWERED', target_concept=measurement_concept)
+    def test_replace_reaches_a_destination_only_a_suggest_run_set(self, measurement_concept):
+        queue_row('HAS ONE', target_concept=measurement_concept,
+                  origin_system=SUGGESTION_PROVENANCE)
         assert len(suggestable_mappings('measurement', resuggest=True)) == 1
 
     def test_below_the_threshold_is_skipped(self):
@@ -415,23 +425,38 @@ class TestSuggestableMappings:
                  suggestable_mappings('condition', source_vocabulary_id='ICD10')}
         assert codes == {'A00.0', 'A00.1'}
 
-    def test_a_code_this_model_version_already_tried_is_not_retried(self):
-        """A declined code has no target, so filtering on the target alone put
-        it straight back at the front of the next run -- for ever, since rows
-        are ordered by occurrence and capped by the run's ceiling."""
+    def test_a_declined_code_stays_eligible(self):
+        """It has no destination, so it is still work to do."""
         queue_row('DECLINED', origin_system=SUGGESTION_PROVENANCE,
                   suggestion_model_version=SUGGESTION_MODEL_VERSION)
-        assert suggestable_mappings('measurement') == []
-
-    def test_an_older_model_version_is_tried_again(self):
-        queue_row('OLD GUESS', origin_system='suggest v0.1',
-                  suggestion_model_version='v0.1')
         assert len(suggestable_mappings('measurement')) == 1
 
-    def test_resuggest_reaches_a_row_this_version_already_tried(self):
-        queue_row('DECLINED', origin_system=SUGGESTION_PROVENANCE,
+    def test_untried_codes_come_before_ones_this_version_declined(self):
+        """Occurrence alone starves the queue: a declined code keeps no
+        destination, so it stays eligible and, being high-occurrence, retakes
+        the front of the very next run. On the staging sample every code in the
+        top slots was declined, so they would never free up."""
+        queue_row('DECLINED BUT BUSY', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
                   suggestion_model_version=SUGGESTION_MODEL_VERSION)
-        assert len(suggestable_mappings('measurement', resuggest=True)) == 1
+        queue_row('NEVER TRIED', occurrence_count=12)
+        codes = [m.source_code for m in suggestable_mappings('measurement')]
+        assert codes == ['NEVER TRIED', 'DECLINED BUT BUSY']
+
+    def test_a_declined_code_comes_round_again_once_the_tab_is_drained(self):
+        queue_row('DECLINED', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        assert [m.source_code for m in suggestable_mappings('measurement')] == ['DECLINED']
+
+    def test_an_older_model_version_sorts_as_untried(self):
+        queue_row('OLD GUESS', occurrence_count=12, origin_system='suggest v0.1',
+                  suggestion_model_version='v0.1')
+        queue_row('THIS VERSION', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        codes = [m.source_code for m in suggestable_mappings('measurement')]
+        assert codes == ['OLD GUESS', 'THIS VERSION']
 
     def test_another_table_is_not_touched(self):
         queue_row('DRUGGY', omop_table='drug_exposure', domain_id='Drug')
@@ -755,13 +780,26 @@ class TestPipelineIntegration:
         assert row.target_concept_id is None
         assert row.origin_system == ''
 
-    def test_an_importer_row_is_never_rewritten(self, glucose_bridge):
-        row = queue_row('2345-7', source_vocabulary_id='LOINC', origin_system='HT-One')
+    def test_an_importer_destination_is_never_rewritten(self, glucose_bridge,
+                                                        measurement_concept):
+        """A destination its importer asserted stands. A run must not spend a
+        model call to replace it with one derived from the source text alone."""
+        row = queue_row('2345-7', source_vocabulary_id='LOINC', origin_system='HT-One',
+                        target_concept=measurement_concept)
         results = suggest_mappings('measurement', min_occurrences=10, strategies=['umls'])
         assert results == []
         row.refresh_from_db()
         assert row.origin_system == 'HT-One'
-        assert row.target_concept_id is None
+        assert row.target_concept_id == measurement_concept.concept_id
+
+    def test_an_importer_row_with_no_destination_is_filled_in(self, glucose_bridge):
+        """Nothing to overwrite, and 69 such rows on staging."""
+        row = queue_row('2345-7', source_vocabulary_id='LOINC',
+                        origin_system='open-wearables-seed')
+        results = suggest_mappings('measurement', min_occurrences=10, strategies=['umls'])
+        assert len(results) == 1
+        row.refresh_from_db()
+        assert row.target_concept_id == glucose_bridge.concept_id
 
     def test_an_unmatchable_code_keeps_no_destination(self, measurement_domain,
                                                       loinc_vocab, lab_class):
