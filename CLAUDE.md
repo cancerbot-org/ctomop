@@ -938,9 +938,9 @@ Suggest slower — it makes it stop reranking, silently.
 `manage.py build_concept_embeddings` embeds every standard concept (1,523,060
 rows, ~2.8 hours). `manage.py precompute_suggest_embeddings` embeds only the
 concepts the queue can actually retrieve — it walks the eligible rows, takes
-each one's top-N lexical candidates, and embeds the union. On staging that is
-**287 concepts** rather than 1.5M. `--measure` reports the cost and writes
-nothing:
+each one's top-N lexical candidates plus UMLS candidates, and embeds the union.
+The original lexical-only staging sample retrieved **287 concepts** rather than
+1.5M. `--measure` reports the cost and writes nothing:
 
 ```bash
 manage.py precompute_suggest_embeddings --measure
@@ -949,6 +949,43 @@ manage.py precompute_suggest_embeddings --measure --source-vocabulary ICD10
 
 Retrieval is the expensive half of that command too (one trigram query per queue
 row), which is why it is a command and not part of a click.
+
+After a successful `load_athena_vocabularies` (including `--concepts-only`),
+`load_mappings`, `sync_athena_mappings`, `load_umls_release`, `sync_umls_release`,
+or any `import_*crossmap*` command,
+candidate precomputation runs automatically (#1092). With `CELERY_BROKER_URL`
+configured, `omop_core.precompute_suggest_embeddings` runs on a Celery worker;
+without it, the command runs inline. Dispatch is deferred until commit and
+nested mapping loads dispatch only once, after the outer load succeeds.
+Dry runs and failed loads do not dispatch. Workers need sentence-transformers
+and access to `BAAI/bge-small-en-v1.5`; failures propagate rather than recording
+successful maintenance. A configured broker failure is not silently run inline.
+
+The automatic run uses `--min-occurrences 1 --lexical-limit 100` to cover all
+eligible queue rows and the largest shortlist the UI allows. It inserts only
+missing vectors. `--skip-suggest-embeddings` on a loader suppresses maintenance
+for that load and its nested loaders, useful when doing an initial bulk import
+followed by `build_concept_embeddings`.
+
+`SuggestEmbeddingSnapshot` persists the candidate union by precompute options
+and model/retrieval version. One SQL query compares order-independent content
+checksums of concepts, synonyms, eligible queue rows, and relevant UMLS source
+terms and CUI siblings, and checks that every
+cached candidate still has a vector. Unchanged inputs and complete vectors
+return without lexical retrieval, model loading, or writes. This query scans
+the input tables; "one query" does not mean constant-time work. Changed input
+content (including same-count replacements and bulk SQL writes) invalidates the
+snapshot. A deleted vector is rebuilt from the saved candidate IDs. Changed
+shortlist/minimum-count options have separate snapshots. Increment
+`retrieval_version` in the command when candidate selection changes.
+
+`--measure` never writes snapshots or vectors. `--force` re-embeds candidates;
+use it after changing the embedding model, since the existing vector table does
+not record model versions. Existing vectors are otherwise retained, including
+when a vocabulary load changes a concept's name. Maintenance is asynchronous
+when queued: candidates become available after the worker completes, not before
+the loader returns. A changed queue or vocabulary requires retrieval again and
+can take minutes on a large queue; the command is not universally seconds-long.
 
 ---
 
