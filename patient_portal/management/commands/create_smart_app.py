@@ -8,9 +8,16 @@ Usage:
         --client-id my-client-id
 
 The command is idempotent: running it again updates the existing record.
+
+Redirect URIs are validated against `ALLOWED_REDIRECT_URI_SCHEMES` before this
+command writes anything, so outside DEBUG only https is accepted and the http
+default above works for local development only (#146). This guards this command
+only; a direct ORM write elsewhere still bypasses it, exactly as it bypasses
+`Application.clean`.
 """
 
-from django.core.management.base import BaseCommand
+from django.core.exceptions import ValidationError
+from django.core.management.base import BaseCommand, CommandError
 from patient_portal.models import Identity
 
 
@@ -44,11 +51,61 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # Import here so the command can be imported before migrations run
-        from oauth2_provider.models import Application
+        from oauth2_provider.models import get_application_model
+        from oauth2_provider.settings import oauth2_settings
+        from oauth2_provider.validators import AllowedURIValidator
+
+        Application = get_application_model()
 
         name = options['name']
         client_id = options['client_id']
         redirect_uris = options['redirect_uris']
+
+        # django-oauth-toolkit checks the redirect scheme in `Application.clean`,
+        # which runs on every path that calls `full_clean` -- the admin and the
+        # `/o/applications/register|<pk>/update/` views. It does NOT run here:
+        # this command writes through `Application.objects.update_or_create`,
+        # and neither `update_or_create` nor `Model.save` calls `full_clean`.
+        # So the one path that registers redirect URIs here was the one path the
+        # setting did not reach (#146). (`create_service_client` also writes via
+        # `update_or_create`, but never sets `redirect_uris`, and
+        # `/o/applications/register/` does run `full_clean`.)
+        #
+        # Borrow the toolkit's own validator, with the same arguments
+        # `Application.clean` passes it, rather than hand-rolling a scheme
+        # comparison: that way this command and the admin refuse the same
+        # non-empty URIs, including the malformed-absolute (`https:/host`) and
+        # wildcard-host forms that comparing schemes alone lets through. The
+        # empty case is checked separately below, because `Application.clean`
+        # rejects it through a different branch.
+        allowed_schemes = {
+            scheme.lower() for scheme in Application().get_allowed_schemes()
+        }
+        validate_redirect_uri = AllowedURIValidator(
+            allowed_schemes,
+            name='redirect uri',
+            allow_path=True,
+            allow_query=True,
+            allow_hostname_wildcard=oauth2_settings.ALLOW_URI_WILDCARDS,
+        )
+        # `Application.clean` refuses an empty `redirect_uris` for the
+        # authorization-code grant (models.py:229-234). The validator loop below
+        # never sees an empty string, so without this the command would accept
+        # what the admin refuses.
+        if not redirect_uris.split():
+            raise CommandError(
+                '--redirect-uris cannot be empty for the authorization-code grant.'
+            )
+
+        for uri in redirect_uris.split():
+            try:
+                validate_redirect_uri(uri)
+            except ValidationError as exc:
+                raise CommandError(
+                    '{}: {} (allowed schemes: {}).'.format(
+                        uri, '; '.join(exc.messages), ', '.join(sorted(allowed_schemes))
+                    )
+                ) from exc
 
         # Resolve owner
         owner = None
