@@ -462,8 +462,13 @@ OAUTH2_PROVIDER = {
     'REFRESH_TOKEN_EXPIRE_SECONDS': 86400 * 30,
     # Require PKCE for all public (SPA) clients
     'PKCE_REQUIRED': True,
-    # Allow http for local dev; https enforced in production via ALLOWED_REDIRECT_URI_SCHEMES
-    'ALLOWED_REDIRECT_URI_SCHEMES': ['https', 'http'],
+    # `http` is allowed only under DEBUG, for the SPA's local dev server.
+    # Outside DEBUG an OAuth client may only register an https redirect URI: a
+    # plaintext one would carry the authorization code -- and, on the
+    # implicit-style paths, the token -- over an unencrypted hop.
+    # This used to read ['https', 'http'] unconditionally, under a comment
+    # saying https was enforced in production. Nothing enforced it (#146).
+    'ALLOWED_REDIRECT_URI_SCHEMES': ['https', 'http'] if DEBUG else ['https'],
     # client_credentials enables service-to-service auth for any API client
     # (hospital systems, foundations, platform services) without a user session
     'ALLOWED_GRANT_TYPES': [
