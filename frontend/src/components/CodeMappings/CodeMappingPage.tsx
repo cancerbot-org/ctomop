@@ -207,7 +207,10 @@ const describeSuggestRun = (run: SuggestRunProgress) => {
   if (run.state === "failure") return run.error || "The suggest run failed.";
   if (run.state === "success") {
     if (run.total === 0) return "Done — nothing on this tab was awaiting a suggestion.";
-    return `Done — wrote ${run.destinations} new destination(s) across ${run.total} code(s).`;
+    return `Done — wrote ${run.destinations} new destination(s) across ${run.total} code(s).`
+      // A run is capped well below a tab's backlog, so without this the curator
+      // cannot tell from the page that another run is warranted.
+      + (run.remaining ? ` ${run.remaining} still awaiting a suggestion — run Suggest again.` : "");
   }
   if (run.total === 0) return "Nothing queued on this tab.";
   // The destination count is what the run is for, so it is shown while the run
@@ -221,6 +224,8 @@ const describeSuggestRun = (run: SuggestRunProgress) => {
 };
 
 const SUGGEST_POLL_INTERVAL_MS = 1000;
+// Consecutive, not cumulative: a run lasting minutes may lose the odd poll.
+const SUGGEST_POLL_MAX_FAILURES = 5;
 // Ten minutes: CELERY_TASK_TIME_LIMIT is 900s, so a run that has said nothing
 // for this long is not slow, it is unattended.
 const SUGGEST_POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -234,6 +239,8 @@ type SuggestRunProgress = {
   done: number;
   /** New destinations written — what the run achieved, and the headline number. */
   destinations: number;
+  /** Codes still awaiting a suggestion on this tab once the run finished. */
+  remaining: number;
   strategy_counts: Record<string, number>;
   landed_in: Record<string, number>;
   error: string;
@@ -987,6 +994,7 @@ export default function CodeMappingPage() {
    button disabled, recoverable only by reloading the page. */
   const pollSuggestRun = async (started: SuggestRunProgress) => {
     let current = started;
+    let failures = 0;
     const deadline = Date.now() + SUGGEST_POLL_TIMEOUT_MS;
     // The inline dispatcher (a machine with no broker) finishes before the 202
     // is even written, so a run can arrive already terminal — poll only while
@@ -1003,11 +1011,21 @@ export default function CodeMappingPage() {
       }
       await new Promise((resolve) => setTimeout(resolve, SUGGEST_POLL_INTERVAL_MS));
       if (suggestRunRef.current !== started.run_id) return current;  // superseded or unmounted
-      const { data } = await api.get<SuggestRunProgress>(
-        `/v1/code-mappings/suggest-runs/${started.run_id}/`,
-      );
-      current = data;
-      if (suggestRunRef.current === started.run_id) setSuggestRun(data);
+      try {
+        const { data } = await api.get<SuggestRunProgress>(
+          `/v1/code-mappings/suggest-runs/${started.run_id}/`,
+        );
+        failures = 0;
+        current = data;
+        if (suggestRunRef.current === started.run_id) setSuggestRun(data);
+      } catch (err) {
+        // One blip is not a failed run. The work is on a worker and carries on
+        // writing destinations; treating a dropped GET as failure would show
+        // "Failed to suggest mappings" over a run that succeeded, and skip the
+        // refetch that puts its rows on screen.
+        failures += 1;
+        if (failures > SUGGEST_POLL_MAX_FAILURES) throw err;
+      }
     }
     return current;
   };
@@ -1030,6 +1048,7 @@ export default function CodeMappingPage() {
         ? `Wrote ${run.destinations} new destination(s) across ${run.total} queued code(s)`
           + (byStrategy ? ` (${byStrategy})` : "")
           + (where ? ` — ${where}.` : ".")
+          + (run.remaining ? ` ${run.remaining} still awaiting a suggestion — run Suggest again.` : "")
         // Suggest reads this tab, so an empty result means the tab has no row
         // left whose provenance is empty or "suggest" — importer rows are
         // deliberately left alone.
@@ -1746,7 +1765,7 @@ export default function CodeMappingPage() {
                       <button
                         type="button"
                         onClick={() => void suggestCurrentCode()}
-                        disabled={searchingConcepts || !Object.values(strategies).some(Boolean)}
+                        disabled={searchingConcepts || !hasRetrieval}
                         className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
                       >
                         <Sparkles size={13} />

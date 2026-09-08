@@ -156,6 +156,7 @@ function suggestRun(overrides: Record<string, unknown> = {}) {
     retrieved: 0,
     done: 0,
     destinations: 0,
+    remaining: 0,
     strategy_counts: {},
     landed_in: {},
     model_version: "v0.2",
@@ -1113,6 +1114,53 @@ describe("CodeMappingPage", () => {
         expect(screen.getByTestId("suggest-progress"))
           .toHaveTextContent("Done — wrote 4 new destination(s) across 4 code(s)."),
         { timeout: 4000 });
+    });
+
+    it("says how many remain so the curator knows to run it again", async () => {
+      // A run is capped well below a tab's backlog, so finishing is not the
+      // same as being done.
+      mockPost.mockResolvedValue({
+        data: suggestRun({ total: 5, done: 5, destinations: 3, remaining: 28 }),
+      });
+      renderPage();
+      await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
+      fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
+      await waitFor(() =>
+        expect(screen.getByTestId("suggest-progress"))
+          .toHaveTextContent("28 still awaiting a suggestion — run Suggest again."));
+    });
+
+    it("keeps polling through a transient failure", async () => {
+      // The work is on a worker and carries on; treating a dropped GET as a
+      // failed run would show an error over a run that succeeded.
+      mockPost.mockResolvedValue({
+        data: suggestRun({ state: "running", total: 2, retrieved: 1 }),
+      });
+      let polls = 0;
+      mockGet.mockImplementation((url: string) => {
+        if (url.startsWith("/v1/code-mappings/suggest-runs/")) {
+          polls += 1;
+          if (polls === 1) return Promise.reject(new Error("network blip"));
+          return Promise.resolve({
+            data: suggestRun({ state: "success", total: 2, done: 2, destinations: 2 }),
+          });
+        }
+        if (url === "/v1/code-mappings/") return Promise.resolve({ data: [proposedRow] });
+        if (url === "/v1/code-mappings/reference/") return Promise.resolve({ data: reference });
+        return Promise.resolve({ data: {} });
+      });
+      render(
+        <MemoryRouter>
+          <CodeMappingPage />
+        </MemoryRouter>,
+      );
+      await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
+      fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
+      await waitFor(() =>
+        expect(screen.getByTestId("suggest-progress"))
+          .toHaveTextContent("wrote 2 new destination(s)"),
+        { timeout: 6000 });
+      expect(screen.queryByText("Failed to suggest mappings.")).not.toBeInTheDocument();
     });
 
     it("surfaces a failed run rather than leaving the bar stuck", async () => {

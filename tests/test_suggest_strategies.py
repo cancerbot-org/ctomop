@@ -581,6 +581,16 @@ class TestSuggestAPIStrategies:
         assert resp.status_code == 400
         assert 'cannot run alone' in str(resp.data)
 
+    def test_vectors_alone_is_rejected_by_suggest_one_too(self):
+        resp = self.client.post(
+            '/api/v1/code-mappings/suggest-one/',
+            data={'source_code': 'X', 'omop_table': 'measurement',
+                  'strategies': ['vectors']},
+            format='json',
+        )
+        assert resp.status_code == 400
+        assert 'cannot run alone' in str(resp.data)
+
     def test_vectors_with_a_retriever_is_accepted(self):
         assert self._post(
             strategies=['lexical', 'vectors'], min_occurrences=99999,
@@ -699,6 +709,24 @@ class TestSuggestRunLifecycle:
             resp = self._post(min_occurrences=1, limit=3)
         assert resp.data['total'] == 3
         assert resp.data['done'] == 3
+
+    def test_the_run_reports_what_the_tab_still_holds(self, measurement_concept):
+        """A run is capped well below a tab's backlog, so without this the
+        curator cannot tell another run is warranted."""
+        for i in range(5):
+            queue_row(f'CODE-{i}')
+        with use_suggest_dispatcher(InlineSuggestDispatcher()):
+            resp = self._post(min_occurrences=1, limit=2)
+        assert resp.data['total'] == 2
+        assert resp.data['remaining'] == 3
+
+    def test_nothing_remains_once_every_code_has_been_tried(self, measurement_concept):
+        """Including the ones that got no destination: re-running only
+        re-declines them, so advising another click would go nowhere."""
+        queue_row('ONLY ONE')
+        with use_suggest_dispatcher(InlineSuggestDispatcher()):
+            resp = self._post(min_occurrences=1, limit=5)
+        assert resp.data['remaining'] == 0
 
     def test_a_failure_lands_on_the_row_not_in_a_worker_log(self, monkeypatch):
         """The page polls the row; an exception that only reached the log would

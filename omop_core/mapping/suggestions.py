@@ -385,6 +385,17 @@ def vocabulary_aliases(source_vocabulary_id):
 def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
                          min_occurrences=DEFAULT_MIN_OCCURRENCES,
                          limit=None, resuggest=False):
+    """The rows a run will work through, at most *limit* of them."""
+    rows = suggestable_queryset(
+        omop_table, source_vocabulary_id=source_vocabulary_id,
+        min_occurrences=min_occurrences, resuggest=resuggest,
+    )
+    return list(rows[:limit] if limit else rows)
+
+
+def suggestable_queryset(omop_table=None, *, source_vocabulary_id=None,
+                         min_occurrences=DEFAULT_MIN_OCCURRENCES,
+                         resuggest=False):
     """The queue rows on one tab that a Suggest run is allowed to write to.
 
     **Every row on the tab with no destination yet.**  That is the whole default
@@ -455,7 +466,12 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
         rows = rows.filter(target_concept__isnull=True)
     if min_occurrences > 1:
         rows = rows.filter(occurrence_count__gte=min_occurrences)
-    rows = rows.annotate(
+    return _suggestable_queryset_ordered(rows)
+
+
+def _suggestable_queryset_ordered(rows):
+    """Apply the run order. Split out so a caller can count without fetching."""
+    return rows.annotate(
         has_destination=Case(
             When(target_concept__isnull=True, then=Value(0)),
             default=Value(1),
@@ -468,7 +484,6 @@ def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
         ),
     ).order_by('already_tried', 'has_destination', '-occurrence_count',
                'source_code', 'id')
-    return list(rows[:limit] if limit else rows)
 
 
 def unmapped_source_values(omop_table, min_occurrences=DEFAULT_MIN_OCCURRENCES,
@@ -1038,8 +1053,14 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             mapping.source_vocabulary_id, mapping.source_code[:SOURCE_CODE_MAX],
             chosen['concept_id'],
         ):
-            entry.update(suggested=None, note=ATHENA_DUPLICATE_MESSAGE)
+            # Athena already maps this code to this concept, so writing our own
+            # would duplicate it -- Athena's row is the mapping, and it stands.
+            # Nothing is proposed here, so nothing resolved it either: leaving
+            # the strategy stamped had the row read "suggested via UMLS" with no
+            # suggestion, and the run's banner count it as one.
             chosen, note = None, ATHENA_DUPLICATE_MESSAGE
+            job['strategy_used'] = None
+            entry.update(suggested=None, note=note, strategy_used=None)
         if dry_run:
             results.append(entry)
             report('writing', len(results))

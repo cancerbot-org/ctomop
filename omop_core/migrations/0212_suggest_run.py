@@ -35,6 +35,7 @@ class Migration(migrations.Migration):
                 ('retrieved', models.IntegerField(default=0)),
                 ('done', models.IntegerField(default=0)),
                 ('destinations', models.IntegerField(default=0)),
+                ('remaining', models.IntegerField(default=0)),
                 ('strategy_counts', models.JSONField(blank=True, default=dict)),
                 ('landed_in', models.JSONField(blank=True, default=dict)),
                 ('model_version', models.CharField(blank=True, default='', max_length=20)),

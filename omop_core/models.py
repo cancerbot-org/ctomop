@@ -4199,6 +4199,14 @@ class SuggestRun(models.Model):
     # records that it tried, and counting those would claim destinations nobody
     # proposed.
     destinations = models.IntegerField(default=0)
+    # Codes a *next* run would newly work on: still eligible, and not already
+    # attempted by this model version. A run is capped well below a tab's
+    # backlog, so without this the curator cannot tell from the page that
+    # another run is warranted. Excluding what this version already tried is
+    # what makes it advice rather than a number: re-running only re-declines
+    # those, so once it reads 0 the next thing to move the queue is a new model
+    # version, not another click.
+    remaining = models.IntegerField(default=0)
 
     strategy_counts = models.JSONField(default=dict, blank=True)
     landed_in = models.JSONField(default=dict, blank=True)
