@@ -938,6 +938,37 @@ class TestSourceEnrichment:
         assert mapping.source_code_description == 'Fictional Analyte Level in Serum'
         assert mapping.umls_source_name == 'Fictional Analyte Level in Serum'
 
+    def test_a_curator_note_is_not_overwritten(self, umls_release, measurement_domain,
+                                               loinc_vocab, lab_class):
+        """The candidate set is every queue row with no destination, whatever
+        raised it, so the row may carry a note a person wrote."""
+        queue_row('2345-7', source_vocabulary_id='LOINC', origin_system='hk-labs',
+                  notes='waiting on lab confirmation')
+
+        suggest_mappings('measurement', min_occurrences=10, strategies=['lexical'])
+
+        mapping = SourceCodeConceptMapping.objects.get(source_code='2345-7')
+        assert mapping.notes == 'waiting on lab confirmation'
+        assert mapping.suggestion_model_version == SUGGESTION_MODEL_VERSION, (
+            'the run still records that it tried'
+        )
+
+    def test_a_blank_note_is_filled_in(self, measurement_domain, loinc_vocab, lab_class):
+        queue_row('2345-7', source_vocabulary_id='LOINC', notes='')
+        suggest_mappings('measurement', min_occurrences=10, strategies=['lexical'])
+        assert SourceCodeConceptMapping.objects.get(source_code='2345-7').notes
+
+    def test_a_previous_runs_note_is_replaced(self, measurement_domain, loinc_vocab,
+                                              lab_class):
+        """suggestion_model_version is only ever set beside notes here, so it is
+        the record of who wrote what is there now."""
+        queue_row('2345-7', source_vocabulary_id='LOINC',
+                  origin_system='suggest v0.1', suggestion_model_version='v0.1',
+                  notes='an older run said this')
+        suggest_mappings('measurement', min_occurrences=10, strategies=['lexical'])
+        mapping = SourceCodeConceptMapping.objects.get(source_code='2345-7')
+        assert mapping.notes != 'an older run said this'
+
     def test_a_curator_description_is_not_overwritten(
         self, umls_release, measurement_domain, loinc_vocab, lab_class,
     ):

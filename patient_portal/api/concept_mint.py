@@ -13,6 +13,16 @@ from omop_core.models import Concept, ConceptClass, Domain, Vocabulary
 from omop_core.mapping.suggestions import lexical_candidates, umls_candidates
 from omop_core.services.pk import next_pk
 
+# How many existing concepts the curator is shown before they may mint a new
+# one. Minting is a curator decision, so this is the mint flow's own policy and
+# not the suggest pipeline's -- `lexical_candidates` is shared with it only as a
+# trigram search, and its default is tuned for what a ranking model reads in one
+# prompt (ten). A person deciding whether a concept already exists is doing a
+# different job: a match sitting at rank 11-25 that they never saw becomes a
+# duplicate concept in the vocabulary, permanently. The direct name/code lookup
+# below already uses 25; this keeps the two halves of one review the same width.
+REVIEW_CANDIDATES = 25
+
 
 class MintInput(serializers.Serializer):
     vocabulary_id = serializers.CharField(max_length=20)
@@ -49,7 +59,8 @@ def mint_destination(request):
         # Run each retrieval path: this is a candidate review, not an automatic
         # ranker decision. Failures propagate, so an outage cannot authorize minting.
         umls, _ = umls_candidates(data['source_code'], data['source_vocabulary_id'], data['domain_id'])
-        lexical = lexical_candidates(data['concept_name'], data['domain_id'])
+        lexical = lexical_candidates(data['concept_name'], data['domain_id'],
+                                     limit=REVIEW_CANDIDATES)
         ids = list(dict.fromkeys(c['concept_id'] for c in umls + lexical))
         direct = Concept.objects.filter(
             _concept_name_search_filter(data['concept_name']) | Q(concept_code=data['concept_code']),

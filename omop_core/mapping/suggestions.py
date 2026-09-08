@@ -114,6 +114,7 @@ CANDIDATE_LIMIT = 10
 # tokens per source code.
 LEXICAL_LIMIT_MAX = 100
 
+
 # Ranking calls run concurrently. They are network-bound (4-6s each, measured)
 # and touch no database, so the workers need no connection of their own -- which
 # is the only reason threads are safe here: a thread that opened its own
@@ -1061,15 +1062,26 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
         mapping.suggested_target_concept = concept
         mapping.destination_vocabulary_id = concept.vocabulary_id if concept else ''
         mapping.origin_system = SUGGESTION_PROVENANCE
-        mapping.suggestion_model_version = SUGGESTION_MODEL_VERSION
-        mapping.notes = note
         mapping.suggest_strategy = job['strategy_used'] or ''
         mapping.umls_cui = job['umls_cui'] or ''
         fields = [
             'target_concept', 'suggested_target_concept', 'destination_vocabulary_id',
-            'origin_system', 'suggestion_model_version', 'notes', 'suggest_strategy',
+            'origin_system', 'suggestion_model_version', 'suggest_strategy',
             'umls_cui', 'updated_at',
         ]
+        # Notes is a free-text field a curator writes in, and the row we are
+        # writing to may not be one a Suggest run created -- the candidate set is
+        # every queue row with no destination, whatever raised it. Replacing
+        # "waiting on lab confirmation" with "No candidate concept found by any
+        # enabled strategy." loses the only copy of something a person wrote.
+        #
+        # A blank note, or one a previous run wrote, is ours to replace:
+        # suggestion_model_version is only ever set alongside notes here, so it
+        # is the record of who wrote what is there now.
+        if not mapping.notes or mapping.suggestion_model_version:
+            mapping.notes = note
+            fields.append('notes')
+        mapping.suggestion_model_version = SUGGESTION_MODEL_VERSION
         # Source-side enrichment is written only when it was missing: these
         # describe the code, not the suggestion, and a curator may have
         # corrected them.
