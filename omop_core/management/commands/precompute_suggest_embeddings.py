@@ -9,8 +9,8 @@ anything in the queue) but "embed the concepts the queue can actually retrieve".
 
 That set is small and exactly derivable:
 
-    for every queue row with empty or ``suggest`` provenance
-        take its top-N lexical candidates
+    for every eligible queue row (including replaceable Suggest answers)
+        take its top-N lexical candidates and UMLS candidates
         embed any of them that is not embedded yet
 
 This command is also the measurement tool for deciding how to trigger it.
@@ -38,6 +38,7 @@ from omop_core.mapping.suggestions import (
     _source_description,
     lexical_candidates,
     suggestable_mappings,
+    umls_candidates,
 )
 from omop_core.models import ConceptEmbedding, SuggestEmbeddingSnapshot
 from omop_core.services.embedding_snapshot import read_snapshot, snapshot_key
@@ -89,7 +90,7 @@ class Command(BaseCommand):
         key = snapshot_key({
             'model': MODEL_NAME,
             'suggestion_version': SUGGESTION_MODEL_VERSION,
-            'retrieval_version': 1,
+            'retrieval_version': 2,
             'source_vocabulary_id': options['source_vocabulary_id'],
             'min_occurrences': options['min_occurrences'],
             'limit': options['limit'],
@@ -191,7 +192,7 @@ class Command(BaseCommand):
         )
         queue_seconds = time.time() - started
         self.stdout.write(
-            f'Queue rows (provenance empty or "suggest"): {len(rows)} '
+            f'Eligible queue rows: {len(rows)} '
             f'in {_fmt(queue_seconds)}'
         )
         if not rows:
@@ -218,6 +219,12 @@ class Command(BaseCommand):
             text, _umls_name = _source_description(mapping, source_concept)
             hits = lexical_candidates(text or mapping.source_code, domain_id,
                                       limit=lexical_limit)
+            # Warm both paths independently: callers can disable UMLS even
+            # when its single definitive hit would otherwise skip lexical.
+            umls_hits, _cui = umls_candidates(
+                mapping.source_code, mapping.source_vocabulary_id, domain_id,
+            )
+            hits = [*hits, *umls_hits]
             if not hits:
                 no_candidates += 1
             candidate_ids.update(hit['concept_id'] for hit in hits)

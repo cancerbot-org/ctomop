@@ -161,6 +161,32 @@ def test_measure_never_writes_and_force_reencodes(queue, encoder):
     assert encoder[1].encode.call_count == 2
 
 
+def test_umls_candidates_and_changed_bridge_invalidate_snapshot(queue, encoder,
+                                                              django_assert_num_queries):
+    _, mapping = queue
+    mapping.source_vocabulary_id = 'LOINC'
+    mapping.source_code = 'source-with-umls-bridge'
+    mapping.save()
+    release = UmlsRelease.objects.create(release_version='test')
+    cui = UmlsConcept.objects.create(cui='C1234567', release=release)
+    UmlsSourceCode.objects.create(
+        concept=cui, root_source='LNC', code=mapping.source_code,
+        name='Source', is_preferred=True, term_type='PT',
+    )
+    destinations = [ConceptFactory(concept_name=name) for name in ('Unrelated alpha', 'Unrelated beta')]
+    precompute()
+    assert not ConceptEmbedding.objects.filter(concept__in=destinations).exists()
+    for destination in destinations:
+        UmlsSourceCode.objects.create(
+            concept=cui, root_source='LNC', code=destination.concept_code,
+            name=destination.concept_name, is_preferred=False, term_type='SY',
+        )
+    precompute()
+    assert ConceptEmbedding.objects.filter(concept__in=destinations).count() == 2
+    with django_assert_num_queries(1):
+        precompute()
+
+
 def test_failed_encoding_does_not_cache_success(queue, encoder):
     encoder[1].encode.side_effect = RuntimeError('model unavailable')
     with pytest.raises(RuntimeError, match='model unavailable'):
@@ -176,14 +202,18 @@ def test_empty_queue_repeats_in_one_query(django_assert_num_queries, encoder):
     encoder[0].assert_not_called()
 
 
-@pytest.mark.parametrize('loader', LOADERS)
+@pytest.mark.parametrize('loader', (*LOADERS, 'load_umls_release', 'sync_umls_release'))
 @pytest.mark.parametrize('mode', ('success', 'dry_run', 'skip', 'failure'))
 def test_loader_completion_hook(loader, mode):
     command = importlib.import_module(f'omop_core.management.commands.{loader}').Command
     options = {'stdout': StringIO(), 'skip_checks': True}
     if loader == 'import_fhir_crossmaps':
         options.update(type='cpt-to-snomed', file='unused.json')
+    if loader == 'load_umls_release':
+        options.update(archive='unused.zip', release_version='test', release_url='https://example.invalid')
     if mode == 'dry_run':
+        if loader not in LOADERS:
+            pytest.skip('Standalone UMLS loaders do not offer dry runs.')
         options['dry_run'] = True
     if mode == 'skip':
         options['skip_suggest_embeddings'] = True

@@ -45,9 +45,13 @@ def read_snapshot(key):
                 UNION ALL
                 SELECT 'umls', count(*),
                        coalesce(sum(hashtextextended(
-                           ROW(id, root_source, code, name)::text, 0)::numeric), 0)
+                           ROW(id, concept_id, root_source, code, name,
+                               is_preferred)::text, 0)::numeric), 0)
                 FROM umls_source_code
-                WHERE is_preferred AND code IN (SELECT source_code FROM eligible)
+                WHERE concept_id IN (
+                    SELECT concept_id FROM umls_source_code
+                    WHERE code IN (SELECT source_code FROM eligible)
+                )
             ), fingerprint AS (
                 SELECT jsonb_agg(jsonb_build_array(kind, n, digest::text)
                                  ORDER BY kind) AS value
