@@ -113,12 +113,19 @@ def test_batch_suggest_skips_athena_supplied_candidate(athena, monkeypatch, dry_
     )
     monkeypatch.setattr(suggestions, 'umls_candidates', lambda *args: ([{'concept_id': athena.target_concept_id}], 'C1'))
     result = suggestions.suggest_mappings('condition', strategies=['umls'], dry_run=dry_run)
-    assert result[0]['updated'] is False
     assert result[0]['suggested'] is None
     assert result[0]['note'] == ATHENA_DUPLICATE_MESSAGE
     queued.refresh_from_db()
     assert queued.target_concept_id is None, 'the duplicate must not be written'
     assert SourceCodeConceptMapping.objects.count() == 2
+    # A dry run writes nothing at all. A real one records that it tried, so the
+    # code is not re-retrieved and re-ranked on every later run -- it has no
+    # destination, and filtering on that alone would pin it to the front of the
+    # queue for ever.
+    assert result[0]['updated'] is (not dry_run)
+    assert queued.suggestion_model_version == (
+        '' if dry_run else suggestions.SUGGESTION_MODEL_VERSION
+    )
 
 
 def test_single_suggest_explains_athena_duplicate(athena, monkeypatch):

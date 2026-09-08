@@ -110,10 +110,14 @@ class Command(BaseCommand):
                 # between the scan and the insert, and the unique constraint on
                 # (source_vocabulary_id, source_code) is the right thing to let
                 # win -- its row carries real ingest provenance.
-                created = SourceCodeConceptMapping.objects.bulk_create(
-                    rows, ignore_conflicts=True,
-                )
-            landed = sum(1 for row in created if row.pk is not None)
+                #
+                # Counted with a before/after delta, not from the returned
+                # instances: Django turns RETURNING off whenever on_conflict is
+                # set, so every returned row has pk None and counting those
+                # reports 0 after inserting thousands.
+                before = SourceCodeConceptMapping.objects.count()
+                SourceCodeConceptMapping.objects.bulk_create(rows, ignore_conflicts=True)
+                landed = SourceCodeConceptMapping.objects.count() - before
             total += landed
             self.stdout.write(f'{table}: enqueued {landed} of {len(rows)} row(s).')
 

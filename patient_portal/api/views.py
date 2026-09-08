@@ -82,6 +82,8 @@ from omop_core.mapping.suggestions import (
     CANDIDATE_LIMIT,
     DEFAULT_MIN_OCCURRENCES,
     LEXICAL_LIMIT_MAX,
+    STRATEGY_LEXICAL,
+    STRATEGY_UMLS,
     SUGGESTION_MODEL_VERSION,
     VOCAB_TO_UMLS_ROOT,
     suggest_one_mapping,
@@ -9746,15 +9748,20 @@ def code_mapping_suggest(request):
         return Response({'min_occurrences': 'Must be at least 1.'},
                         status=status.HTTP_400_BAD_REQUEST)
 
+    # The ceiling comes from the dispatcher, not a constant: a deployment with
+    # no broker runs the whole thing inside the request, where 50 codes is ~125s
+    # against a 30s gunicorn default. See omop_core/services/suggest_jobs.py.
+    dispatcher = get_suggest_dispatcher()
+    max_codes = getattr(dispatcher, 'max_codes', SUGGEST_MAX_PER_RUN)
     try:
-        limit = int(request.data.get('limit') or SUGGEST_MAX_PER_RUN)
+        limit = int(request.data.get('limit') or max_codes)
     except (TypeError, ValueError):
         return Response({'limit': 'Enter a whole number.'},
                         status=status.HTTP_400_BAD_REQUEST)
     if limit < 1:
         return Response({'limit': 'Must be at least 1.'},
                         status=status.HTTP_400_BAD_REQUEST)
-    limit = min(limit, SUGGEST_MAX_PER_RUN)
+    limit = min(limit, max_codes)
 
     # How many trigram survivors reach the reranker and the ranker's prompt.
     # Capped, because the shortlist is sent in one prompt per source code.
@@ -9789,6 +9796,17 @@ def code_mapping_suggest(request):
                 {'strategies': 'At least one strategy must be selected.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Vectors reorders what retrieval found; it finds nothing itself. On its
+        # own it would run to completion and report "no candidate concept" for
+        # every code, which reads as a broken tab rather than a bad selection.
+        if not {STRATEGY_UMLS, STRATEGY_LEXICAL} & set(raw_strategies):
+            return Response(
+                {'strategies': (
+                    'Vectors reranks the candidates retrieval found, so it '
+                    'cannot run alone. Select UMLS or Lexical as well.'
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         strategies = raw_strategies
     else:
         strategies = list(ALL_STRATEGIES)
@@ -9806,12 +9824,10 @@ def code_mapping_suggest(request):
 
     # Counted before the run starts so the page has a denominator to show from
     # the first poll, rather than a bar that fills against a moving total.
-    expected = 0
-    for tbl in tables:
-        expected += len(suggestable_mappings(
-            tbl, source_vocabulary_id=source_vocab,
-            min_occurrences=min_occurrences, limit=limit, resuggest=replace,
-        ))
+    expected = len(suggestable_mappings(
+        list(tables), source_vocabulary_id=source_vocab,
+        min_occurrences=min_occurrences, limit=limit, resuggest=replace,
+    ))
 
     run = SuggestRun.objects.create(
         source_vocabulary_id=source_vocab,
@@ -9819,7 +9835,7 @@ def code_mapping_suggest(request):
         model_version=SUGGESTION_MODEL_VERSION,
         created_by=request.user if request.user.is_authenticated else None,
     )
-    get_suggest_dispatcher().dispatch(run, {
+    dispatcher.dispatch(run, {
         'tables': list(tables),
         'min_occurrences': min_occurrences,
         'limit': limit,
@@ -9842,8 +9858,7 @@ def _serialize_suggest_run(run):
         'total': run.total,
         'retrieved': run.retrieved,
         'done': run.done,
-        'updated': run.updated,
-        'ranked': run.ranked,
+        'destinations': run.destinations,
         'strategy_counts': run.strategy_counts or {},
         'landed_in': run.landed_in or {},
         'model_version': run.model_version,
@@ -10053,14 +10068,10 @@ def _table_for_hk_vocabulary(vocabulary_id):
 # browser saw a 502, and the proposals already committed were invisible because
 # the client never refetched. Ten leaves headroom, and the response says when
 # more remain.
-# A ceiling on one run, not on one request: the run is queued, so the gunicorn
-# timeout no longer sets it. What does is CELERY_TASK_TIME_LIMIT (900s default)
-# against ~3.5s per code, measured on staging. Fifty leaves a wide margin and is
-# more than any tab's current backlog, so a curator drains a tab in one click.
-#
-# The cost is linear in retrieval, not in ranking: ranking calls run
-# concurrently and add ~3.5s to a run of any size, while each extra code adds
-# another ~2s trigram query.
+# Fallback ceiling for a dispatcher that does not declare one. The real limits
+# are QUEUED_MAX_CODES / INLINE_MAX_CODES in omop_core/services/suggest_jobs.py,
+# because how many codes a run may attempt depends entirely on whether it is
+# genuinely queued or running inside the request.
 SUGGEST_MAX_PER_RUN = 50
 
 

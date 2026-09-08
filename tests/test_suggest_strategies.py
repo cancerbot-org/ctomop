@@ -21,6 +21,8 @@ from omop_core.models import (
 from omop_core.services.mapping_suggestions import (
     ALL_STRATEGIES,
     CANDIDATE_LIMIT,
+    SUGGESTION_MODEL_VERSION,
+    SUGGESTION_PROVENANCE,
     STRATEGY_LEXICAL,
     STRATEGY_UMLS,
     STRATEGY_VECTORS,
@@ -343,23 +345,33 @@ class TestSuggestableMappings:
         queue_row('UNCLAIMED')
         assert [m.source_code for m in suggestable_mappings('measurement')] == ['UNCLAIMED']
 
-    def test_a_previous_suggestion_is_eligible(self):
-        """Only a Suggest run ever set it, so a better run may reset it."""
+    def test_a_previous_suggestion_with_no_destination_is_eligible(self):
         queue_row('MACHINE GUESS', origin_system='suggest v0.1')
         assert [m.source_code for m in suggestable_mappings('measurement')] == ['MACHINE GUESS']
 
     @pytest.mark.parametrize('provenance', ['HT-One', 'HT-FHIR', 'athena', 'hk-labs',
                                             'open-wearables-seed', 'fhir-upload'])
-    def test_an_importer_row_is_left_alone(self, provenance):
-        """75,257 of staging's 85,318 rows. Their importer knew more than the
-        source text does, and re-deriving would cost a model call to make the
-        answer worse."""
+    def test_an_importer_row_with_no_destination_is_eligible(self, provenance):
+        """There is nothing to overwrite. Staging has 69 of these -- 67
+        open-wearables-seed and 2 hk-labs -- and they are exactly what Suggest
+        is for."""
         queue_row('IMPORTED', origin_system=provenance)
-        assert suggestable_mappings('measurement') == []
+        assert [m.source_code for m in suggestable_mappings('measurement')] == ['IMPORTED']
 
-    def test_provenance_match_is_case_insensitive(self):
-        queue_row('SHOUTED', origin_system='Suggest v0.2')
-        assert len(suggestable_mappings('measurement')) == 1
+    @pytest.mark.parametrize('provenance', ['HT-One', 'HT-FHIR', 'athena', 'hk-labs'])
+    def test_an_importer_destination_is_never_re_answered(self, provenance,
+                                                          measurement_concept):
+        """Its importer knew more than the source text does -- 75,257 of
+        staging's 85,318 rows -- so re-deriving it would spend a model call to
+        make the answer worse. Not even Replace touches it."""
+        queue_row('IMPORTED', origin_system=provenance, target_concept=measurement_concept)
+        assert suggestable_mappings('measurement') == []
+        assert suggestable_mappings('measurement', resuggest=True) == []
+
+    def test_replace_matches_suggest_provenance_case_insensitively(self, measurement_concept):
+        queue_row('SHOUTED', origin_system='Suggest v0.2', target_concept=measurement_concept)
+        assert suggestable_mappings('measurement') == []
+        assert len(suggestable_mappings('measurement', resuggest=True)) == 1
 
     def test_approved_is_a_decision(self):
         queue_row('SIGNED OFF', status='approved')
@@ -372,12 +384,12 @@ class TestSuggestableMappings:
         assert suggestable_mappings('measurement') == []
 
     def test_a_row_that_already_has_a_destination_is_skipped(self, measurement_concept):
-        queue_row('ANSWERED', target_concept=measurement_concept)
+        queue_row('HAS ONE', target_concept=measurement_concept)
         assert suggestable_mappings('measurement') == []
 
-    def test_resuggest_reaches_rows_that_already_have_one(self, measurement_concept):
-        """The only way a model-version bump reaches what the last one answered."""
-        queue_row('ANSWERED', target_concept=measurement_concept)
+    def test_replace_reaches_a_destination_only_a_suggest_run_set(self, measurement_concept):
+        queue_row('HAS ONE', target_concept=measurement_concept,
+                  origin_system=SUGGESTION_PROVENANCE)
         assert len(suggestable_mappings('measurement', resuggest=True)) == 1
 
     def test_below_the_threshold_is_skipped(self):
@@ -413,9 +425,93 @@ class TestSuggestableMappings:
                  suggestable_mappings('condition', source_vocabulary_id='ICD10')}
         assert codes == {'A00.0', 'A00.1'}
 
+    def test_a_declined_code_stays_eligible(self):
+        """It has no destination, so it is still work to do."""
+        queue_row('DECLINED', origin_system=SUGGESTION_PROVENANCE,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        assert len(suggestable_mappings('measurement')) == 1
+
+    def test_untried_codes_come_before_ones_this_version_declined(self):
+        """Occurrence alone starves the queue: a declined code keeps no
+        destination, so it stays eligible and, being high-occurrence, retakes
+        the front of the very next run. On the staging sample every code in the
+        top slots was declined, so they would never free up."""
+        queue_row('DECLINED BUT BUSY', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        queue_row('NEVER TRIED', occurrence_count=12)
+        codes = [m.source_code for m in suggestable_mappings('measurement')]
+        assert codes == ['NEVER TRIED', 'DECLINED BUT BUSY']
+
+    def test_a_declined_code_comes_round_again_once_the_tab_is_drained(self):
+        queue_row('DECLINED', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        assert [m.source_code for m in suggestable_mappings('measurement')] == ['DECLINED']
+
+    def test_an_older_model_version_sorts_as_untried(self):
+        queue_row('OLD GUESS', occurrence_count=12, origin_system='suggest v0.1',
+                  suggestion_model_version='v0.1')
+        queue_row('THIS VERSION', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        codes = [m.source_code for m in suggestable_mappings('measurement')]
+        assert codes == ['OLD GUESS', 'THIS VERSION']
+
     def test_another_table_is_not_touched(self):
         queue_row('DRUGGY', omop_table='drug_exposure', domain_id='Drug')
         assert suggestable_mappings('measurement') == []
+
+    def test_several_tables_are_selected_and_ordered_together(self):
+        """A tab maps to up to five clinical tables. Selecting per table would
+        order within each and apply the limit to each."""
+        queue_row('QUIET MEASUREMENT', occurrence_count=10, omop_table='measurement')
+        queue_row('BUSY DRUG', occurrence_count=900, omop_table='drug_exposure',
+                  domain_id='Drug')
+        rows = suggestable_mappings(['measurement', 'drug_exposure'])
+        assert [m.source_code for m in rows] == ['BUSY DRUG', 'QUIET MEASUREMENT']
+
+    def test_the_limit_counts_codes_not_codes_per_table(self):
+        for i in range(4):
+            queue_row(f'MEAS-{i}', omop_table='measurement')
+            queue_row(f'DRUG-{i}', omop_table='drug_exposure', domain_id='Drug')
+        rows = suggestable_mappings(['measurement', 'drug_exposure'], limit=3)
+        assert len(rows) == 3
+
+    def test_replace_takes_the_gaps_before_the_replacements(self, measurement_concept):
+        """An empty destination is a gap; a replaceable one is an improvement.
+        The gap is worth the model call first."""
+        queue_row('ALREADY ANSWERED', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  target_concept=measurement_concept)
+        queue_row('NO DESTINATION', occurrence_count=10)
+        rows = suggestable_mappings('measurement', resuggest=True)
+        assert [m.source_code for m in rows] == ['NO DESTINATION', 'ALREADY ANSWERED']
+
+    def test_untried_outranks_everything_including_a_gap(self, measurement_concept):
+        """Untried is the primary key or the queue starves: a run would spend
+        its whole budget re-trying declined gaps and never reach a replacement."""
+        queue_row('GAP TRIED', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        queue_row('GAP UNTRIED', occurrence_count=10)
+        queue_row('ANSWERED TRIED', occurrence_count=900,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  target_concept=measurement_concept,
+                  suggestion_model_version=SUGGESTION_MODEL_VERSION)
+        queue_row('ANSWERED UNTRIED', occurrence_count=10,
+                  origin_system=SUGGESTION_PROVENANCE,
+                  target_concept=measurement_concept)
+        rows = suggestable_mappings('measurement', resuggest=True)
+        assert [m.source_code for m in rows] == [
+            'GAP UNTRIED', 'ANSWERED UNTRIED', 'GAP TRIED', 'ANSWERED TRIED',
+        ]
+
+    def test_occurrence_orders_within_one_group(self):
+        queue_row('BUSY', occurrence_count=900)
+        queue_row('QUIET', occurrence_count=10)
+        rows = suggestable_mappings('measurement')
+        assert [m.source_code for m in rows] == ['BUSY', 'QUIET']
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +572,19 @@ class TestSuggestAPIStrategies:
         with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
             self._post(min_occurrences=99999)
         assert fake.calls[0][1]['lexical_limit'] == CANDIDATE_LIMIT
+
+    def test_vectors_alone_is_rejected(self):
+        """It reranks what retrieval found and retrieves nothing itself, so on
+        its own it reports "no candidate concept" for every code -- which reads
+        as a broken tab rather than a bad selection."""
+        resp = self._post(strategies=['vectors'])
+        assert resp.status_code == 400
+        assert 'cannot run alone' in str(resp.data)
+
+    def test_vectors_with_a_retriever_is_accepted(self):
+        assert self._post(
+            strategies=['lexical', 'vectors'], min_occurrences=99999,
+        ).status_code == 202
 
     def test_replace_requires_a_vocabulary(self):
         resp = self.client.post(
@@ -559,6 +668,37 @@ class TestSuggestRunLifecycle:
         assert resp.status_code == 202
         assert resp.data['state'] == 'success'
         assert resp.data['total'] == 1
+
+    def test_the_inline_path_has_a_much_smaller_ceiling(self):
+        """render.yaml leaves CELERY_BROKER_URL dashboard-managed on the web
+        service, so a deployment that has not filled it in runs inline -- inside
+        a request whose gunicorn default timeout is 30s. Fifty codes there is
+        ~125s and a 502."""
+        from omop_core.services.suggest_jobs import (
+            INLINE_MAX_CODES, QUEUED_MAX_CODES, CeleryDispatcher, InlineDispatcher,
+        )
+        assert InlineDispatcher.max_codes == INLINE_MAX_CODES
+        assert CeleryDispatcher.max_codes == QUEUED_MAX_CODES
+        assert INLINE_MAX_CODES < QUEUED_MAX_CODES
+
+    def test_the_run_limit_is_capped_by_the_dispatcher(self):
+        from omop_core.services.suggest_jobs import INLINE_MAX_CODES
+        with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
+            fake.max_codes = INLINE_MAX_CODES
+            self._post(min_occurrences=1, limit=50)
+        assert fake.calls[0][1]['limit'] == INLINE_MAX_CODES
+
+    def test_the_limit_counts_codes_however_many_tables_the_tab_maps_to(self):
+        """The Uncoded tab maps to all five clinical tables. The limit is a
+        performance bound on codes evaluated; tables are an implementation
+        detail of where the rows live."""
+        for i in range(4):
+            queue_row(f'MEAS-{i}', omop_table='measurement', domain_id='Measurement')
+            queue_row(f'OBS-{i}', omop_table='observation', domain_id='Observation')
+        with use_suggest_dispatcher(InlineSuggestDispatcher()):
+            resp = self._post(min_occurrences=1, limit=3)
+        assert resp.data['total'] == 3
+        assert resp.data['done'] == 3
 
     def test_a_failure_lands_on_the_row_not_in_a_worker_log(self, monkeypatch):
         """The page polls the row; an exception that only reached the log would
@@ -692,13 +832,26 @@ class TestPipelineIntegration:
         assert row.target_concept_id is None
         assert row.origin_system == ''
 
-    def test_an_importer_row_is_never_rewritten(self, glucose_bridge):
-        row = queue_row('2345-7', source_vocabulary_id='LOINC', origin_system='HT-One')
+    def test_an_importer_destination_is_never_rewritten(self, glucose_bridge,
+                                                        measurement_concept):
+        """A destination its importer asserted stands. A run must not spend a
+        model call to replace it with one derived from the source text alone."""
+        row = queue_row('2345-7', source_vocabulary_id='LOINC', origin_system='HT-One',
+                        target_concept=measurement_concept)
         results = suggest_mappings('measurement', min_occurrences=10, strategies=['umls'])
         assert results == []
         row.refresh_from_db()
         assert row.origin_system == 'HT-One'
-        assert row.target_concept_id is None
+        assert row.target_concept_id == measurement_concept.concept_id
+
+    def test_an_importer_row_with_no_destination_is_filled_in(self, glucose_bridge):
+        """Nothing to overwrite, and 69 such rows on staging."""
+        row = queue_row('2345-7', source_vocabulary_id='LOINC',
+                        origin_system='open-wearables-seed')
+        results = suggest_mappings('measurement', min_occurrences=10, strategies=['umls'])
+        assert len(results) == 1
+        row.refresh_from_db()
+        assert row.target_concept_id == glucose_bridge.concept_id
 
     def test_an_unmatchable_code_keeps_no_destination(self, measurement_domain,
                                                       loinc_vocab, lab_class):

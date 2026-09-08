@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Pencil, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import api from "@/api/axios";
@@ -193,22 +193,36 @@ const strategyLabel: Record<string, string> = {
 
  Retrieval is two thirds of the wall clock and finishes for every code before
  the first destination is written, so counting only writes would leave the bar
- at zero for most of the wait. */
-const suggestProgressCount = (run: SuggestRunProgress) =>
-  run.state === "success" ? run.total : Math.max(run.done, run.retrieved);
+ at zero for most of the wait. Once writing starts the count switches to `done`
+ rather than taking the max: retrieval is pinned at the total by then, and a bar
+ sitting at 100% beside a label reading "Writing suggestions… 2 of 50" is the
+ two halves of one strip contradicting each other. */
+const suggestProgressCount = (run: SuggestRunProgress) => {
+  if (run.state === "success") return run.total;
+  return run.done > 0 ? run.done : run.retrieved;
+};
 
 const describeSuggestRun = (run: SuggestRunProgress) => {
   if (run.state === "failure") return run.error || "The suggest run failed.";
   if (run.state === "success") {
-    return run.updated
-      ? `Done — proposed a destination for ${run.updated} of ${run.total} code(s).`
-      : "Done — nothing on this tab was awaiting a suggestion.";
+    if (run.total === 0) return "Done — nothing on this tab was awaiting a suggestion.";
+    return `Done — wrote ${run.destinations} new destination(s) across ${run.total} code(s).`;
   }
   if (run.total === 0) return "Nothing queued on this tab.";
-  if (run.done > 0) return `Writing suggestions… ${run.done} of ${run.total}`;
+  // The destination count is what the run is for, so it is shown while the run
+  // is still going rather than only at the end.
+  if (run.done > 0) {
+    return `Writing suggestions… ${run.done} of ${run.total}`
+      + ` · ${run.destinations} destination(s)`;
+  }
   if (run.retrieved > 0) return `Searching for candidates… ${run.retrieved} of ${run.total}`;
   return "Starting…";
 };
+
+const SUGGEST_POLL_INTERVAL_MS = 1000;
+// Ten minutes: CELERY_TASK_TIME_LIMIT is 900s, so a run that has said nothing
+// for this long is not slow, it is unattended.
+const SUGGEST_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Progress of one queued Suggest run, as /suggest-runs/<id>/ reports it. */
 type SuggestRunProgress = {
@@ -217,8 +231,8 @@ type SuggestRunProgress = {
   total: number;
   retrieved: number;
   done: number;
-  updated: number;
-  ranked: number;
+  /** New destinations written — what the run achieved, and the headline number. */
+  destinations: number;
   strategy_counts: Record<string, number>;
   landed_in: Record<string, number>;
   error: string;
@@ -473,6 +487,16 @@ export default function CodeMappingPage() {
   // itself before settling into the banner.
   const [suggestRun, setSuggestRun] = useState<SuggestRunProgress | null>(null);
   const [suggestFlash, setSuggestFlash] = useState(false);
+  // Which run the page is still interested in. A poll compares against this so
+  // a superseded run — or an unmounted page — stops rather than setting state
+  // nobody is showing.
+  const suggestRunRef = useRef<string | null>(null);
+  const flashTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    suggestRunRef.current = null;
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+  }, []);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -910,6 +934,10 @@ export default function CodeMappingPage() {
    * somewhere a curator re-points *into* — enumerating SNOMED's 1.09M concepts
    * would not be a queue.
    */
+  // Vectors reranks what retrieval found; it retrieves nothing itself, so a run
+  // without UMLS or Lexical would report "no candidate concept" for every code.
+  const hasRetrieval = strategies.umls || strategies.lexical;
+
   const runSuggest = async () => {
     // Replace is only valid when a specific vocabulary is selected (the backend
     // rejects replace without source_vocabulary_id to prevent global deletes).
@@ -943,8 +971,10 @@ export default function CodeMappingPage() {
           replace: effectiveReplace,
         },
       );
+      suggestRunRef.current = started.run_id;
       setSuggestRun(started);
       const finished = await pollSuggestRun(started);
+      if (suggestRunRef.current !== started.run_id) return;
       setSuggestRun(finished);
 
       if (finished.state === "failure") {
@@ -968,19 +998,35 @@ export default function CodeMappingPage() {
     }
   };
 
-  /** Poll until the run reaches a terminal state, updating the strip as it goes. */
+  /** Poll until the run reaches a terminal state, updating the strip as it goes.
+
+   Bounded, because "running" is not a promise. If a broker is configured but
+   nothing is consuming the queue, or the worker dies mid-run, the row never
+   leaves `running` — an unbounded loop would poll for ever with the Suggest
+   button disabled, recoverable only by reloading the page. */
   const pollSuggestRun = async (started: SuggestRunProgress) => {
     let current = started;
+    const deadline = Date.now() + SUGGEST_POLL_TIMEOUT_MS;
     // The inline dispatcher (a machine with no broker) finishes before the 202
     // is even written, so a run can arrive already terminal — poll only while
     // there is something left to watch.
     while (current.state === "queued" || current.state === "running") {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (Date.now() > deadline) {
+        return {
+          ...current,
+          state: "failure" as const,
+          error:
+            "The suggest run stopped reporting progress. It may still be running — "
+            + "reload to check, and make sure a Celery worker is consuming the queue.",
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, SUGGEST_POLL_INTERVAL_MS));
+      if (suggestRunRef.current !== started.run_id) return current;  // superseded or unmounted
       const { data } = await api.get<SuggestRunProgress>(
         `/v1/code-mappings/suggest-runs/${started.run_id}/`,
       );
       current = data;
-      setSuggestRun(data);
+      if (suggestRunRef.current === started.run_id) setSuggestRun(data);
     }
     return current;
   };
@@ -999,9 +1045,8 @@ export default function CodeMappingPage() {
       .map(([strategy, n]) => `${n} via ${strategy}`)
       .join(", ");
     setBanner(
-      run.updated
-        ? `Proposed a destination for ${run.updated} of ${run.total} queued code(s), `
-          + `${run.ranked} with a suggested destination`
+      run.total
+        ? `Wrote ${run.destinations} new destination(s) across ${run.total} queued code(s)`
           + (byStrategy ? ` (${byStrategy})` : "")
           + (where ? ` — ${where}.` : ".")
         // Suggest reads this tab, so an empty result means the tab has no row
@@ -1011,7 +1056,8 @@ export default function CodeMappingPage() {
           + `(seen ${Number(minOccurrences) || 1}+ times, provenance empty or "suggest").`,
     );
     setSuggestFlash(true);
-    window.setTimeout(() => setSuggestFlash(false), 2500);
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setSuggestFlash(false), 2500);
   };
 
   const toggleApproval = async (row: CodeMappingRow) => {
@@ -1332,13 +1378,21 @@ export default function CodeMappingPage() {
               <label className="inline-flex items-center gap-1 text-xs text-slate-600">
                 <input
                   type="checkbox"
-                  checked={strategies[key]}
+                  checked={strategies[key] && !(key === "vectors" && !hasRetrieval)}
+                  disabled={key === "vectors" && !hasRetrieval}
                   onChange={(e) =>
                     setStrategies((prev) => ({ ...prev, [key]: e.target.checked }))
                   }
-                  className="h-3.5 w-3.5 rounded border-slate-300"
+                  title={
+                    key === "vectors" && !hasRetrieval
+                      ? "Vectors reranks what retrieval found, so it needs UMLS or Lexical."
+                      : undefined
+                  }
+                  className="h-3.5 w-3.5 rounded border-slate-300 disabled:opacity-40"
                 />
-                {STRATEGY_LABELS[key]}
+                <span className={key === "vectors" && !hasRetrieval ? "text-slate-400" : ""}>
+                  {STRATEGY_LABELS[key]}
+                </span>
               </label>
               {/* Beside Lexical, because it is Lexical's shortlist that every
                   later stage is sized by: the reranker orders it and the
@@ -1363,8 +1417,8 @@ export default function CodeMappingPage() {
           <button
             type="button"
             onClick={() => void runSuggest()}
-            disabled={suggesting || !Object.values(strategies).some(Boolean)}
-            title="Propose mappings for unmapped source codes in this vocabulary."
+            disabled={suggesting || !hasRetrieval}
+            title="Propose destinations for queued source codes on this tab."
             className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Sparkles size={13} />

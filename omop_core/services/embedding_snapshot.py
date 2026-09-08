@@ -10,16 +10,25 @@ def snapshot_key(options):
 
 
 def read_snapshot(key):
+    from omop_core.mapping.suggestions import suggestable_mappings_queryset
+
+    eligible = suggestable_mappings_queryset(min_occurrences=1, resuggest=True)
+    queue_sql, queue_params = eligible.order_by().values(
+        'id', 'source_vocabulary_id', 'source_code', 'source_code_description',
+        'umls_source_name', 'source_concept_id', 'domain_id', 'omop_table',
+        'occurrence_count', 'target_concept_id', 'suggestion_model_version',
+    ).query.sql_with_params()
     # Order-independent content checksums detect bulk SQL loads and same-count
     # replacements, neither of which emits Django signals. Numeric sums avoid
     # bigint overflow. Counts distinguish empty tables and duplicate rows.
     # This is one query, but scans the inputs; it avoids per-code trigram work.
     with connection.cursor() as cursor:
-        cursor.execute("""
-            WITH inputs AS (
+        # The interpolated fragment is compiled by Django, never caller SQL.
+        cursor.execute(f"""
+            WITH eligible AS ({queue_sql}), inputs AS (
                 SELECT 'concept' AS kind, count(*) AS n,
                        coalesce(sum(hashtextextended(
-                           ROW(concept_id, concept_name, domain_id,
+                           ROW(concept_id, concept_name, concept_code, vocabulary_id, domain_id,
                                standard_concept, invalid_reason)::text, 0)::numeric), 0) AS digest
                 FROM concept
                 UNION ALL
@@ -30,13 +39,14 @@ def read_snapshot(key):
                 UNION ALL
                 SELECT 'queue', count(*),
                        coalesce(sum(hashtextextended(
-                           ROW(id, source_vocabulary_id, source_code,
-                               source_code_description, umls_source_name,
-                               source_concept_id, domain_id, omop_table,
-                               occurrence_count)::text, 0)::numeric), 0)
-                FROM source_code_concept_mapping
-                WHERE status = 'proposed'
-                  AND (origin_system = '' OR origin_system ILIKE 'suggest%%')
+                           ROW(eligible.*)::text, 0)::numeric), 0)
+                FROM eligible
+                UNION ALL
+                SELECT 'umls', count(*),
+                       coalesce(sum(hashtextextended(
+                           ROW(id, root_source, code, name)::text, 0)::numeric), 0)
+                FROM umls_source_code
+                WHERE is_preferred AND code IN (SELECT source_code FROM eligible)
             ), fingerprint AS (
                 SELECT jsonb_agg(jsonb_build_array(kind, n, digest::text)
                                  ORDER BY kind) AS value
@@ -54,7 +64,7 @@ def read_snapshot(key):
                    ) AS missing
             FROM fingerprint
             LEFT JOIN suggest_embedding_snapshot AS snapshot ON snapshot.key = %s
-        """, [key])
+        """, [*queue_params, key])
         current, cached, candidate_ids, missing = cursor.fetchone()
 
     # Django's PostgreSQL connection returns raw JSON strings for JSONField

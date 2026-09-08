@@ -790,18 +790,48 @@ decide what it touches and how long it takes.
 
 ### It reads the tab, not the clinical tables
 
-The candidate set is `suggestable_mappings()`: rows in
-`source_code_concept_mapping` whose
+The candidate set is `suggestable_mappings()`: every `proposed` row on the tab
+with **no destination yet**, whatever its provenance. A row with nothing in the
+destination column has nothing that could be overwritten — an
+`open-wearables-seed` or `hk-labs` row waiting for a concept is exactly what
+Suggest is for, and staging has 69 of them (67 + 2).
 
-* `origin_system` is **empty or begins with `suggest`**, and
-* `status` is `proposed`, and
-* `target_concept` is null (unless the caller asks to re-suggest).
+Provenance decides only what **Replace** may re-answer. A row that already has a
+destination is revisited only with `resuggest`, and then only if its
+`origin_system` is empty or begins with `suggest` — meaning nothing but a
+previous Suggest run ever set it. An `HT-One`, `HT-FHIR` or `athena` destination
+was asserted by an importer that knew more than the source text does (75,257 of
+staging's 85,318 rows), so re-deriving it would spend a model call to make the
+answer worse. In practice the ICD-10 and RxNorm tabs return nothing, because
+every row on them already has an importer's destination.
 
-An `HT-One`, `HT-FHIR`, `athena` or `hk-labs` row carries a destination its
-importer asserted from more than the source text — 75,257 of staging's 85,318
-rows — so re-deriving it would spend a model call to make the answer worse. In
-practice this means the **Uncoded tab** (blank source vocabulary) is where
-Suggest does its work, and the ICD-10 and RxNorm tabs correctly return nothing.
+Rows are ordered **untried, then gaps before replacements, then by
+occurrence**:
+
+1. **Untried before tried**, by the current `suggestion_model_version`. This is
+   the primary key *always*, because anything above it starves the queue. A
+   declined code keeps no destination, so it stays eligible and, being
+   high-occurrence, retakes the front of the very next run — on the staging
+   sample *every* code in the top slots was declined, so they would never free
+   up. Putting "no destination" above it has the same failure in the replacing
+   case: a run would spend its whole budget re-trying declined gaps and never
+   reach a replacement. Untried-first means every run advances; declined codes
+   come round again once the tab is drained.
+2. **No destination before has one**, within untried and within tried alike. An
+   empty destination is a gap, a replaceable one is an improvement, and the gap
+   is worth the model call first. Without Replace nothing has a destination, so
+   this key is constant.
+3. **Occurrence**, because that is the order a curator should meet codes in.
+
+### The limit counts codes, not codes per table
+
+A tab maps to one or more clinical tables — the Uncoded tab maps to all five —
+but that is only where the rows live. Each queue row carries its own
+`omop_table`, so rows are selected, ordered and limited **once, together**.
+
+Selecting per table applied the limit to each, so the Uncoded tab could evaluate
+5× the ceiling it was given, and the ordering above would only hold within a
+table rather than across the run.
 
 It used to derive the queue instead, by grouping a whole clinical table on
 `concept_id = 0` and subtracting every existing mapping. That cost 4-7s per
@@ -845,11 +875,58 @@ Where the remaining time goes, per code:
 | vector rerank | ~0.3s stored-vector lookup + ~0.025s query embedding |
 | embedding model load | ~5s, **once per gunicorn worker**, on its first Suggest |
 
-`SUGGEST_MAX_PER_CALL = 5` follows from that: Suggest is synchronous and
-production's `start.sh` runs bare gunicorn, whose default timeout is 30s.
-Batches measured at 3/9.5s, 5/24.1s, 8/28.7s, 10/38.3s. Raising it needs
-retrieval to get cheaper, not the timeout to get longer — each extra code adds
-another trigram query, while ranking adds ~3.5s to a batch of any size.
+### The run is queued, and how big it may be depends on that
+
+At ~3.5s per code a tab's backlog does not fit in a request, so `POST
+/v1/code-mappings/suggest/` returns **202** with a run id and the page polls
+`GET /v1/code-mappings/suggest-runs/<id>/`. Progress lives on a `SuggestRun`
+row rather than in Celery's task metadata: the counts must survive a worker
+restart, the poll can land on any gunicorn worker, and the inline dispatcher has
+no result backend to write into.
+
+`omop_core/services/suggest_jobs.py` picks how it runs, on the same rule as
+`derivation_jobs.py` — Celery when `CELERY_BROKER_URL` is set, inline otherwise
+— and **the ceiling depends on which**:
+
+| Dispatcher | Ceiling | Bounded by |
+|---|---|---|
+| `CeleryDispatcher` | `QUEUED_MAX_CODES = 50` | `CELERY_TASK_TIME_LIMIT` (900s) |
+| `InlineDispatcher` | `INLINE_MAX_CODES = 5` | the request, under `start.sh`'s bare gunicorn (30s default) |
+
+That split is not a nicety. `render.yaml` leaves `CELERY_BROKER_URL`
+dashboard-managed on the web service (`sync: false`), so a deployment that has
+not pasted the Redis URL in yet **falls back to inline** — and 50 codes inline is
+~125s of serial retrieval and a 502, the exact failure this design removes.
+Batches measured at 3/9.5s, 5/24.1s, 8/28.7s, 10/38.3s.
+
+The ceiling is a budget for the whole run, not per clinical table: a source
+vocabulary can map to five tables, and a per-table limit would let one run
+attempt five times its own ceiling.
+
+Raising it needs retrieval to get cheaper, not the timeout to get longer — each
+extra code adds another trigram query, while ranking adds ~3.5s to a run of any
+size.
+
+### What the curator is shown
+
+The headline number is **new destinations written** (`SuggestRun.destinations`)
+— what the run achieved. Not "rows written": a code the ranker declined is
+written too, so the run records that it tried, and counting those would claim
+destinations nobody proposed. `done`/`total` is the separate "how far through"
+number.
+
+### Replace re-answers rows, it does not delete them
+
+It used to delete: while the candidate set came from a clinical scan, a deleted
+row would be found again and recreated. Now that Suggest reads the tab, a
+deleted row is a code that has left the queue for good, taking its
+`occurrence_count` and `first_seen` with it.
+
+### Vectors cannot run alone
+
+It reranks what retrieval found and retrieves nothing itself, so a run with
+neither UMLS nor Lexical would report "no candidate concept" for every code. The
+API rejects that combination and the checkbox disables itself.
 
 ### The embeddings the reranker reads
 

@@ -68,7 +68,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.conf import settings
 from django.contrib.postgres.search import TrigramSimilarity
-from django.db.models import Case, CharField, Count, F, Max, Q, Value, When
+from django.db.models import (
+    Case, CharField, Count, F, IntegerField, Max, Q, Value, When,
+)
 from django.db.models.functions import Upper
 
 from omop_core.models import (
@@ -382,50 +384,99 @@ def vocabulary_aliases(source_vocabulary_id):
 def suggestable_mappings(omop_table=None, *, source_vocabulary_id=None,
                          min_occurrences=DEFAULT_MIN_OCCURRENCES,
                          limit=None, resuggest=False):
+    return list(suggestable_mappings_queryset(
+        omop_table, source_vocabulary_id=source_vocabulary_id,
+        min_occurrences=min_occurrences, limit=limit, resuggest=resuggest,
+    ))
+
+
+def suggestable_mappings_queryset(omop_table=None, *, source_vocabulary_id=None,
+                                 min_occurrences=DEFAULT_MIN_OCCURRENCES,
+                                 limit=None, resuggest=False):
     """The queue rows on one tab that a Suggest run is allowed to write to.
 
-    This is the whole candidate set: Suggest reads the tab, and the tab is
-    ``source_code_concept_mapping``.  Three filters decide it.
+    **Every row on the tab with no destination yet.**  That is the whole default
+    candidate set, whatever its provenance: a row with nothing in the
+    destination column has nothing that could be overwritten, so an
+    ``open-wearables-seed`` or ``hk-labs`` row waiting for a concept is exactly
+    what Suggest is for.  On staging that is 69 rows a provenance-only filter
+    would have skipped.
 
-    **Provenance empty, or beginning with ``suggest``.**  Those are the rows
-    whose destination nobody but a previous Suggest run has ever set.  A row
-    stamped ``HT-One``, ``HT-FHIR``, ``athena`` or ``hk-labs`` carries a
-    destination its importer asserted from more than the source text -- on
-    staging that is 75,257 of 85,318 rows -- and re-deriving it here would
-    overwrite a better answer with a worse one, at the cost of a model call each.
+    **Provenance decides only what *Replace* may re-answer.**  A row that already
+    has a destination is only revisited when *resuggest* is set, and then only if
+    its ``origin_system`` is empty or begins with ``suggest`` -- meaning nothing
+    but a previous Suggest run ever set it.  An ``HT-One``, ``HT-FHIR`` or
+    ``athena`` destination was asserted by an importer that knew more than the
+    source text does (75,257 of staging's 85,318 rows), and re-deriving it would
+    spend a model call to make the answer worse.
 
     **``proposed`` only.**  ``approved`` is a curator's sign-off and ``rejected``
     is equally a decision; re-proposing a rejected code put it back at the front
     of the queue on every run, where it spent a model call and created nothing.
 
-    **No destination yet**, unless *resuggest*.  A row that already has a
-    suggestion does not need another one.  *resuggest* is what the page's
-    "Replace Current Suggestions" asks for, and it is the only way a model
-    version bump reaches rows the previous version already answered.
+    Ordered **untried, then gaps before replacements, then by occurrence**.
 
-    Ordered by occurrence, because that is the order a curator should meet them
-    in: the code seen 400 times is worth more of their attention than the one
-    seen once.  ``min_occurrences <= 1`` drops the filter rather than comparing
-    against 1, so rows seeded with no count at all still appear.
+    *Untried is the primary key, always*, because anything above it starves the
+    queue.  A code the ranker declines keeps no destination, so it stays eligible
+    and, being high-occurrence, retakes the front of the very next run; on the
+    staging sample every code in the top slots was declined, so those slots would
+    never free up.  Putting "no destination" above it has the same failure in the
+    replacing case: a run would spend its whole budget re-trying declined gaps
+    and never reach a replacement.  Sorting on what the current
+    ``suggestion_model_version`` has not attempted means every run advances, and
+    declined codes come round again once the tab is drained.
+
+    Then, within untried and within tried alike, a code with no destination comes
+    before one being replaced: an empty destination is a gap, a replaceable one
+    is an improvement, and the gap is worth the model call first.  Without
+    *resuggest* nothing has a destination, so this key is constant.
+
+    Occurrence last, because it is the order a curator should meet codes in: the
+    code seen 400 times is worth more attention than the one seen once.
+
+    *omop_table* may be one table, several, or None for every one of them.  The
+    caller passes the tables its tab maps to and gets a single ordered list back
+    -- the ordering above only means anything across the whole run, and *limit*
+    counts codes, which is what the run's cost is measured in.
+
+    ``min_occurrences <= 1`` drops the threshold rather than comparing against 1,
+    so rows seeded with no count at all still appear.
     """
+    machine_set = Q(origin_system='') | Q(origin_system__istartswith='suggest')
     rows = (
         SourceCodeConceptMapping.objects
         .filter(status='proposed')
-        .filter(Q(origin_system='') | Q(origin_system__istartswith='suggest'))
         .select_related('source_concept')
     )
     # None means every clinical table, which is what the embedding precompute
-    # walks; a Suggest run always names one.
+    # walks; a run names the ones its tab maps to.
     if omop_table is not None:
-        rows = rows.filter(omop_table=omop_table)
+        tables = [omop_table] if isinstance(omop_table, str) else list(omop_table)
+        rows = rows.filter(omop_table__in=tables)
     if source_vocabulary_id is not None:
         rows = rows.filter(source_vocabulary_id__in=vocabulary_aliases(source_vocabulary_id))
-    if not resuggest:
+    if resuggest:
+        # Rows with no destination, plus ones whose destination only a previous
+        # Suggest run put there.
+        rows = rows.filter(Q(target_concept__isnull=True) | machine_set)
+    else:
         rows = rows.filter(target_concept__isnull=True)
     if min_occurrences > 1:
         rows = rows.filter(occurrence_count__gte=min_occurrences)
-    rows = rows.order_by('-occurrence_count', 'source_code', 'id')
-    return list(rows[:limit] if limit else rows)
+    rows = rows.annotate(
+        has_destination=Case(
+            When(target_concept__isnull=True, then=Value(0)),
+            default=Value(1),
+            output_field=IntegerField(),
+        ),
+        already_tried=Case(
+            When(suggestion_model_version=SUGGESTION_MODEL_VERSION, then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
+        ),
+    ).order_by('already_tried', 'has_destination', '-occurrence_count',
+               'source_code', 'id')
+    return rows[:limit] if limit else rows
 
 
 def unmapped_source_values(omop_table, min_occurrences=DEFAULT_MIN_OCCURRENCES,
@@ -891,6 +942,15 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
     destination, because minting an HK-* concept named after the source code
     would create a fake destination with no clinical meaning.
 
+    *omop_table* may be one clinical table, several, or None for all of them.
+    Each queue row carries the table it belongs to, so there is nothing to do
+    per table: the rows are selected, ordered and limited once, together.  That
+    matters for both correctness and cost -- the ordering is only meaningful
+    across the whole run, and *limit* counts codes, which is what a run's cost
+    is measured in.  Selecting per table instead applied *limit* to each, so a
+    tab mapping to five tables (the Uncoded tab does) could evaluate five times
+    the ceiling it was given.
+
     *strategies* controls the pipeline, which is not a waterfall of independent
     tiers but one retrieval and one ranking:
 
@@ -910,10 +970,11 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
         strategies = list(ALL_STRATEGIES)
     lexical_limit = max(1, min(int(lexical_limit or CANDIDATE_LIMIT), LEXICAL_LIMIT_MAX))
 
-    target = _QUARANTINE_TARGETS.get(omop_table)
-    if target is None:
-        raise ValueError(f'No quarantine vocabulary for table {omop_table!r}.')
-    _hk_vocabulary, domain_id, _concept_class_id, _slug_prefix = target
+    if omop_table is not None:
+        named = [omop_table] if isinstance(omop_table, str) else list(omop_table)
+        unknown = [t for t in named if t not in _QUARANTINE_TARGETS]
+        if unknown:
+            raise ValueError(f'No quarantine vocabulary for table(s) {unknown!r}.')
 
     mappings = suggestable_mappings(
         omop_table, source_vocabulary_id=source_vocabulary_id,
@@ -933,11 +994,14 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             mapping.source_vocabulary_id, mapping.source_code,
         )
         description, umls_source_name = _source_description(mapping, source_concept)
+        # The row knows its own table, so the domain comes from the row rather
+        # than from a table the caller happened to name.
+        fallback = _QUARANTINE_TARGETS.get(mapping.omop_table)
         job = _prepare(
             source_code=mapping.source_code,
             source_vocabulary_id=mapping.source_vocabulary_id,
             source_text=description,
-            domain_id=mapping.domain_id or domain_id,
+            domain_id=mapping.domain_id or (fallback[1] if fallback else ''),
             strategies=strategies,
             lexical_limit=lexical_limit,
         )
@@ -972,6 +1036,10 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             'vector_reranked': job['vector_reranked'],
             'umls_cui': job['umls_cui'],
             'mapping_id': mapping.id,
+            # "the row was written", not "a destination was found". A declined
+            # code and an Athena duplicate are both written -- that is how the
+            # attempt is recorded so the row is not retried on the next run --
+            # and both have `suggested` None. `ranked` counts destinations.
             'updated': False,
         }
         if chosen and athena_supplies_mapping(
@@ -979,9 +1047,7 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             chosen['concept_id'],
         ):
             entry.update(suggested=None, note=ATHENA_DUPLICATE_MESSAGE)
-            results.append(entry)
-            report('writing', len(results))
-            continue
+            chosen, note = None, ATHENA_DUPLICATE_MESSAGE
         if dry_run:
             results.append(entry)
             report('writing', len(results))
