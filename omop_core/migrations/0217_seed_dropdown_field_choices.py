@@ -89,8 +89,8 @@ DROPDOWN_CHOICES = {
         ('Unknown', []),
     ],
     'her2_status': [
-        ('Positive', [('431396003', 'SNOMED', 'Human epidermal growth factor 2 positive', True)]),
-        ('Negative', [('431396003', 'SNOMED', 'Human epidermal growth factor 2 negative', False)]),
+        ('Positive', [('431396003', 'SNOMED', 'Human epidermal growth factor 2 positive carcinoma of breast', True)]),
+        ('Negative', []),
         ('Equivocal', []),
         ('Unknown', []),
     ],
