@@ -3970,9 +3970,9 @@ class FhirConnection(models.Model):
         help_text="Owning tenant org, derived from the session that initiated the connect.",
     )
 
-    # Tokens — Fernet ciphertext. Plaintext is never persisted.
-    access_token_encrypted = models.TextField()
-    refresh_token_encrypted = models.TextField()
+    # Plain token storage; application-level encryption is not implemented (#60).
+    access_token = models.TextField()
+    refresh_token = models.TextField()
     expires_at = models.DateTimeField(help_text="UTC instant at which access_token expires.")
     scope_granted = models.CharField(max_length=500, blank=True, default="")
 

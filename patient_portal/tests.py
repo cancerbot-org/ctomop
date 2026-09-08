@@ -9513,8 +9513,8 @@ class OrganizationCleanupServiceTest(TestCase):
         FhirConnection.objects.create(
             person=person,
             institution=institution,
-            access_token_encrypted='enc-access',
-            refresh_token_encrypted='enc-refresh',
+            access_token='test-access',
+            refresh_token='test-refresh',
             expires_at=timezone.now() + timedelta(hours=1),
         )
 
