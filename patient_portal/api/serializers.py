@@ -16,7 +16,7 @@ from datetime import date
 import re
 from django.utils.timezone import localdate
 from django.utils import timezone
-from omop_core.services.access import has_org_admin_access
+from omop_core.services.access import get_admin_access_paths, has_org_admin_access
 from omop_core.services.patient_record_service import PATIENT_RECORD_OMOP_MAPPED_FIELDS
 
 #: Columns that Measurement and Observation validate as one value.
@@ -28,12 +28,15 @@ class UserSerializer(serializers.ModelSerializer):
     org_accesses = serializers.SerializerMethodField()
     is_patient = serializers.SerializerMethodField()
     person_id = serializers.SerializerMethodField()
+    effective_roles = serializers.SerializerMethodField()
+    patient_delegations = serializers.SerializerMethodField()
 
     class Meta:
         model = Identity
         fields = [
             'id', 'sub', 'email', 'name', 'is_staff', 'is_superuser',
             'is_org_admin', 'org_accesses', 'is_patient', 'person_id',
+            'effective_roles', 'patient_delegations',
             'must_change_password',
         ]
         read_only_fields = ['must_change_password']
@@ -60,80 +63,95 @@ class UserSerializer(serializers.ModelSerializer):
     def get_is_org_admin(self, obj):
         return has_org_admin_access(obj)
 
-    def get_org_accesses(self, obj):
-        """Return active org access along with the path that granted it.
-
-        Invitations create ``GroupAccess`` rows, while a trusted email domain
-        grants access without one.  Keeping both paths in this response lets
-        the profile explain why an organization appears in a user's access
-        list.
-        """
-        now = timezone.now()
+    def _active_grants(self, obj):
         from django.db.models import Q
-        pending_invitations = OrgInvitation.objects.filter(
-            email__iexact=obj.email,
-            confirmed_at__isnull=True,
-            cancelled_at__isnull=True,
-            expires_at__gt=now,
+        if not hasattr(self, '_role_grants'):
+            self._role_grants = {}
+        if obj.pk not in self._role_grants:
+            self._role_grants[obj.pk] = [
+                grant for grant in GroupAccess.objects.filter(identity=obj).filter(
+                    Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
+                ).select_related('org', 'group__organization').order_by('id')
+                if (grant.org or grant.group.organization).is_active
+            ]
+        return self._role_grants[obj.pk]
+
+    def get_effective_roles(self, obj):
+        """Every active application grant, without collapsing patient/provider roles."""
+        from patient_portal.models import PatientUser
+        roles = []
+        if obj.is_staff:
+            roles.append({'role': 'staff', 'scope': 'platform',
+                          'source': 'staff_flag', 'expires_at': None})
+        # is_patient is a legacy routing flag that excludes providers. An active
+        # patient link still grants self-access, even when that person is a doctor.
+        patient = PatientUser.objects.filter(identity=obj, is_active=True).first()
+        if patient:
+            roles.append({'role': 'patient', 'scope': 'patient',
+                          'person_id': patient.person_id, 'source': 'patient_link',
+                          'expires_at': None})
+        for grant in self._active_grants(obj):
+            org = grant.org or grant.group.organization
+            roles.append({
+                'role': grant.role,
+                'scope': 'organization' if grant.org_id else 'group',
+                'org_name': org.name, 'org_slug': org.slug,
+                'group_id': grant.group_id,
+                'group_name': grant.group.name if grant.group_id else None,
+                'source': 'org_grant' if grant.org_id else 'group_grant',
+                'expires_at': grant.expires_at,
+            })
+        return roles + self._trust_roles(obj)
+
+    def _trust_roles(self, obj):
+        if not hasattr(self, '_trust_role_cache'):
+            self._trust_role_cache = {}
+        if obj.pk not in self._trust_role_cache:
+            self._trust_role_cache[obj.pk] = [{
+                **{key: value for key, value in path.items() if key != 'org'},
+                'role': 'org_admin', 'scope': 'organization',
+                'org_name': path['org'].name, 'org_slug': path['org'].slug,
+            } for path in get_admin_access_paths(obj) if path['source'] != 'org_grant']
+        return self._trust_role_cache[obj.pk]
+
+    def get_patient_delegations(self, obj):
+        from omop_core.models import PersonalRepresentative
+        return list(PersonalRepresentative.objects.filter(
+            representative=obj, verification_status='VERIFIED',
+        ).order_by('person_id').values('person_id', 'relationship'))
+
+    def get_org_accesses(self, obj):
+        """Compatibility organization list; only active grants carry a role.
+
+        Trust-derived roles retain their granting scope and source. Pending
+        invitations cannot enable professional routes that consume this response.
+        """
+        accesses = []
+        for grant in self._active_grants(obj):
+            org = grant.org or grant.group.organization
+            accesses.append({
+                'org_name': org.name, 'org_slug': org.slug, 'role': grant.role,
+                'expires_at': grant.expires_at, 'access_via': ['explicit_grant'],
+                'group_name': grant.group.name if grant.group_id else None,
+            })
+        for invitation in OrgInvitation.objects.filter(
+            email__iexact=obj.email, confirmed_at__isnull=True,
+            cancelled_at__isnull=True, expires_at__gt=timezone.now(),
             org__is_active=True,
-        ).select_related('org').order_by('org__name')
-        pending_invitation_org_ids = set(pending_invitations.values_list('org_id', flat=True))
-        grants = GroupAccess.objects.filter(
-            identity=obj,
-        ).filter(
-            Q(expires_at__isnull=True) | Q(expires_at__gt=now)
-        ).select_related('org', 'group__organization').order_by('role')
-        accesses = {}
-        for g in grants:
-            org = g.org or (g.group and g.group.organization)
-            if not org or not org.is_active:
-                continue
-            access = accesses.setdefault(org.id, {
-                'org_name': org.name,
-                'org_slug': org.slug,
-                'role': g.role,
-                'expires_at': g.expires_at,
-                'access_via': [],
-            })
-            invitation_source = (
-                'invitation_pending'
-                if org.id in pending_invitation_org_ids
-                else 'invitation'
-            )
-            if invitation_source not in access['access_via']:
-                access['access_via'].append(invitation_source)
-
-        for invitation in pending_invitations:
-            org = invitation.org
-            access = accesses.setdefault(org.id, {
-                'org_name': org.name,
-                'org_slug': org.slug,
-                'role': invitation.role,
+        ).select_related('org').order_by('id'):
+            accesses.append({
+                'org_name': invitation.org.name, 'org_slug': invitation.org.slug,
+                'role': None, 'pending_role': invitation.role,
                 'expires_at': invitation.expires_at,
-                'access_via': [],
+                'access_via': ['invitation_pending'],
             })
-            if 'invitation_pending' not in access['access_via']:
-                access['access_via'].append('invitation_pending')
-
-        email = (obj.email or '').lower()
-        domain = email.rsplit('@', 1)[1] if '@' in email else ''
-        if domain:
-            trusted_orgs = Organization.objects.filter(
-                is_active=True,
-                trusts_granted__trusted_domain__iexact=domain,
-            ).distinct().order_by('name')
-            for org in trusted_orgs:
-                access = accesses.setdefault(org.id, {
-                    'org_name': org.name,
-                    'org_slug': org.slug,
-                    'role': None,
-                    'expires_at': None,
-                'access_via': [],
-                })
-                if 'trusted_domain' not in access['access_via']:
-                    access['access_via'].append('trusted_domain')
-
-        return sorted(accesses.values(), key=lambda access: access['org_name'].lower())
+        for role in self._trust_roles(obj):
+            accesses.append({
+                'org_name': role['org_name'], 'org_slug': role['org_slug'],
+                'role': 'org_admin', 'expires_at': role['expires_at'],
+                'access_via': [role['source']],
+            })
+        return sorted(accesses, key=lambda access: access['org_name'].lower())
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
