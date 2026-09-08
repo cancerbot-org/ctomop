@@ -130,7 +130,9 @@ def execute_run(run_id: str, params: dict) -> None:
     Never raises: a failure belongs on the row, where the page is already
     looking, rather than in a worker log the curator cannot see.
     """
-    from omop_core.mapping.suggestions import SUGGESTION_MODEL_VERSION, suggest_mappings
+    from omop_core.mapping.suggestions import (
+        SUGGESTION_MODEL_VERSION, suggest_mappings, suggestable_queryset,
+    )
 
     run = SuggestRun.objects.filter(pk=run_id).first()
     if run is None:
@@ -181,13 +183,33 @@ def execute_run(run_id: str, params: dict) -> None:
         if entry.get('updated') and suggested:
             vocab = suggested['vocabulary_id'] or (params['source_vocabulary_id'] or '')
             landed[vocab] = landed.get(vocab, 0) + 1
+        # Gated on a destination for the same reason `landed` is: a code the
+        # ranker declined, or one Athena already supplies, resolved to nothing,
+        # and counting it made the banner claim a strategy had answered it.
         strategy = entry.get('strategy_used')
-        if strategy:
+        if strategy and suggested:
             strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
+
+    # What a *next* run would newly work on: eligible, and not already attempted
+    # by this model version. Counting every eligible row instead would include
+    # the codes this run just declined -- still without a destination, but
+    # re-running only re-declines them, so "run Suggest again" would be advice
+    # that goes nowhere. Once every code has been tried this reads 0, which is
+    # the honest answer: the next thing to move it is a new model version.
+    try:
+        remaining = suggestable_queryset(
+            params.get('tables') or None,
+            source_vocabulary_id=params['source_vocabulary_id'],
+            min_occurrences=params['min_occurrences'],
+            resuggest=params['resuggest'],
+        ).exclude(suggestion_model_version=SUGGESTION_MODEL_VERSION).count()
+    except Exception:                             # noqa: BLE001 - a count must not fail a run
+        remaining = 0
 
     SuggestRun.objects.filter(pk=run.pk).update(
         state=SuggestRun.SUCCESS,
         total=len(results),
+        remaining=remaining,
         retrieved=len(results),
         done=len(results),
         destinations=sum(1 for r in results if r.get('updated') and r.get('suggested')),

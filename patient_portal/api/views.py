@@ -9874,6 +9874,7 @@ def _serialize_suggest_run(run):
         'retrieved': run.retrieved,
         'done': run.done,
         'destinations': run.destinations,
+        'remaining': run.remaining,
         'strategy_counts': run.strategy_counts or {},
         'landed_in': run.landed_in or {},
         'model_version': run.model_version,
@@ -9906,6 +9907,14 @@ def code_mapping_suggest_one(request):
     strategies = request.data.get('strategies') or list(ALL_STRATEGIES)
     if not source_code or not omop_table or not isinstance(strategies, list) or any(s not in ALL_STRATEGIES for s in strategies):
         return Response({'detail': 'source_code, omop_table, and valid strategies are required.'}, status=status.HTTP_400_BAD_REQUEST)
+    # Same rule as the batch endpoint: vectors reranks what retrieval found and
+    # retrieves nothing itself, so on its own it answers "no candidate concept"
+    # every time, which reads as a broken dialog rather than a bad selection.
+    if not {STRATEGY_UMLS, STRATEGY_LEXICAL} & set(strategies):
+        return Response({'strategies': (
+            'Vectors reranks the candidates retrieval found, so it cannot run '
+            'alone. Select UMLS or Lexical as well.'
+        )}, status=status.HTTP_400_BAD_REQUEST)
     try:
         lexical_limit = int(request.data.get('lexical_limit') or CANDIDATE_LIMIT)
     except (TypeError, ValueError):

@@ -11,9 +11,9 @@ def snapshot_key(options):
 
 
 def read_snapshot(key):
-    from omop_core.mapping.suggestions import suggestable_mappings_queryset
+    from omop_core.mapping.suggestions import suggestable_queryset
 
-    eligible = suggestable_mappings_queryset(min_occurrences=1, resuggest=True)
+    eligible = suggestable_queryset(min_occurrences=1, resuggest=True)
     queue_sql, queue_params = eligible.order_by().values(
         'id', 'source_vocabulary_id', 'source_code', 'source_code_description',
         'umls_source_name', 'source_concept_id', 'domain_id', 'omop_table',
