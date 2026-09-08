@@ -362,10 +362,10 @@ def _curated_writes():
     """Editable entries built from reviewer-approved concept mappings.
 
     The curation interface records a decision per field; this is what acts on
-    it. A row qualifies only when it carries everything a write needs — an
-    approved status, a resolved concept, an OMOP table this can write to, and a
-    source value for derivation to match on. Anything short of that stays
-    advisory rather than becoming a box that writes somewhere unfindable.
+    it.  A row qualifies when it carries an approved status, a resolved concept,
+    and an OMOP table.  The source value for derivation to match on defaults to
+    the concept's own code when the curator hasn't set an explicit override —
+    which is the common case for LOINC and SNOMED mappings.
     """
     from omop_core.models import FieldConceptMapping
 
@@ -373,7 +373,6 @@ def _curated_writes():
     rows = list(
         FieldConceptMapping.objects
         .filter(status='approved')
-        .exclude(source_value='')
         .exclude(omop_table='')
         .select_related('concept')
     )
@@ -389,9 +388,17 @@ def _curated_writes():
         concept_id = row.concept_id
         if target is None or concept_id is None:
             continue
+        # Fall back to the concept's own code when the curator hasn't set an
+        # explicit source_value.  Every hardcoded LOINC and DERIVED mapping
+        # already uses the concept code; curated rows should work the same way.
+        source_value = row.source_value or (
+            row.concept.concept_code if row.concept else None
+        )
+        if not source_value:
+            continue
         source_field = _MAPPING_SOURCE_FIELDS[target]
         width = source_field.max_length
-        if width is not None and len(row.source_value) > width:
+        if width is not None and len(source_value) > width:
             # Preserve the curator's key: truncating it would break derivation's
             # exact source-value match. Keep an entry so no fallback write recipe
             # can hide this invalid approved mapping.
@@ -413,7 +420,7 @@ def _curated_writes():
             'endpoint': _MAPPING_ENDPOINTS[target],
             'concept_id': concept_id,
             'type_concept_id': row.type_concept_id or CONCEPT_LAB_TYPE,
-            'source_value': row.source_value,
+            'source_value': source_value,
             'value_kind': row.value_kind or _value_kind(row.field_name),
             'curated': True,
         }

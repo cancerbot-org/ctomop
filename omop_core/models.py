@@ -3513,14 +3513,16 @@ class FieldConceptMapping(models.Model):
     the decision and never acting on it left every curated field exactly as
     unwritable as before.
 
-    "Enough detail" means a concept, an ``omop_table`` naming where the fact
-    lives, and a ``source_value`` to key it by. Without the last one derivation
-    cannot find the row it just wrote, so the mapping stays advisory.
+    "Enough detail" means a concept and an ``omop_table`` naming where the fact
+    lives.  The ``source_value`` key defaults to the concept's own code when left
+    blank — which is the right choice for LOINC and SNOMED mappings.  Set an
+    explicit source_value only when a different key is needed (e.g. a custom FHIR
+    extension URL for SCT fields).
 
     Each PatientRecord field can have at most one mapping. Several fields may
-    intentionally share one OMOP concept, as long as each writable field has its
-    own source_value key; otherwise the editor would supersede one field's fact
-    while saving the other.
+    intentionally share one OMOP concept, as long as each writable field has a
+    distinct source_value key; otherwise the editor would supersede one field's
+    fact while saving the other.
     """
     STATUS_CHOICES = [
         ('proposed', 'Proposed'),
@@ -3543,8 +3545,9 @@ class FieldConceptMapping(models.Model):
     source_value = models.CharField(
         max_length=100, blank=True, default='',
         help_text=(
-            'The *_source_value the fact is keyed by. Derivation matches on this, '
-            'so a mapping without one cannot make its field writable.'
+            'The *_source_value the fact is keyed by. Defaults to the concept '
+            'code when blank, which is correct for standard LOINC/SNOMED mappings. '
+            'Set an explicit value only when a different key is needed.'
         ),
     )
     value_kind = models.CharField(
