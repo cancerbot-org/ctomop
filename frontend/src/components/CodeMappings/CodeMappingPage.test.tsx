@@ -45,7 +45,6 @@ const proposedRow = {
   reviewer: "",              // never approved: the queue row this dialog exists for
   reviewed_at: null,
   occurrence_count: 14,
-  destination_count: 1,
   has_mapping: true,
 };
 
@@ -157,6 +156,7 @@ function suggestRun(overrides: Record<string, unknown> = {}) {
     retrieved: 0,
     done: 0,
     destinations: 0,
+    remaining: 0,
     strategy_counts: {},
     landed_in: {},
     model_version: "v0.2",
@@ -318,26 +318,24 @@ describe("CodeMappingPage", () => {
   describe("source retirement and section sorting", () => {
     const high: TestMappingRow = { ...proposedRow, mapping_id: 31, source_vocabulary_id: "ICD10", source_code: "Z10",
       origin_system: "Zulu", source_code_description: "Zebra", destination_concept_name: "Zinc", destination_concept_id: 20,
-      occurrence_count: 20, destination_count: 2,
-      source_retired: true, source_retirement_evidence: ["Athena ICD10CM concept 45582496: invalid reason D; validity ended 2022-09-30"], status: "unmapped" };
+      source_retired: true, source_retirement_evidence: ["Athena ICD10CM concept 45582496: invalid reason D; validity ended 2022-09-30"],
+      occurrence_count: 20, destination_count: 20, status: "unmapped" };
     const low: TestMappingRow = { ...high, mapping_id: 32, source_code: "A2", origin_system: "Alpha",
       source_code_description: "Apple", destination_concept_name: "Apple", destination_concept_id: 3, source_retired: false,
-      occurrence_count: 3, destination_count: 1, source_retirement_evidence: [], status: "proposed" };
+      source_retirement_evidence: [], occurrence_count: 3, destination_count: 3, status: "proposed" };
     const ids = (table: HTMLElement) => Array.from(table.querySelectorAll("tbody tr[id]")).map((row) => row.id);
 
-    it("shows Seen and destination counts in the table and retirement evidence in the dialog", async () => {
+    it("shows retirement in the dialog, where #1080 left it after taking its column", async () => {
+      // #1080 replaced the Retired column with Seen and added Dest count. The
+      // retirement metadata is still served and still shown, but only once a
+      // curator opens the row -- so this is the only place it can be asserted.
       renderPage([high, low]);
       const table = await screen.findByRole("table", { name: "Unmapped mappings" });
       const headers = within(table).getAllByRole("columnheader");
       expect(headers[1]).toHaveTextContent("Source code");
       expect(headers[2]).toHaveTextContent("Seen");
-      expect(headers[5]).toHaveTextContent("Concept ID");
-      expect(headers[6]).toHaveTextContent("Dest count");
       expect(within(table).queryByRole("columnheader", { name: "Retired" })).not.toBeInTheDocument();
       const row = document.getElementById("code-mapping-31")!;
-      expect(within(row).getAllByRole("cell")[2]).toHaveTextContent("20");
-      expect(within(row).getAllByRole("cell")[6]).toHaveTextContent("2");
-      expect(within(row).getAllByRole("cell")[6]).toHaveClass("text-red-600");
       fireEvent.click(within(row).getByRole("button", { name: "Edit Z10" }));
       expect(screen.getByTestId("source-retirement")).toHaveValue("Retired");
       expect(within(screen.getByRole("dialog")).getByRole("status")).toHaveTextContent("invalid reason D");
@@ -380,11 +378,15 @@ describe("CodeMappingPage", () => {
       expect(within(athena).queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
     });
 
-    it("shows missing retirement metadata as Unknown in the dialog", async () => {
-      renderPage([high, low, { ...low, mapping_id: 33, source_code: "A3", source_retired: null }]);
-      fireEvent.click(await screen.findByRole("button", { name: "Edit A3" }));
+    it("still labels missing retirement metadata as Unknown in the dialog", async () => {
+      // The Retired column and its sort went with #1080, so "sorts Unknown
+      // last" has no subject any more. What survives is the distinction the
+      // label exists for: absent metadata is not evidence of retirement.
+      renderPage([{ ...low, mapping_id: 33, source_code: "A3", source_retired: null }]);
+      const cell = await screen.findByText("A3", { selector: "td" });
+      fireEvent.click(cell.closest("tr")!);
+      await screen.findByText("Edit Mapping");
       expect(screen.getByTestId("source-retirement")).toHaveValue("Unknown");
-      expect(within(screen.getByRole("dialog")).queryByRole("status")).not.toBeInTheDocument();
     });
   });
 
@@ -396,7 +398,8 @@ describe("CodeMappingPage", () => {
     expect(screen.queryByRole("columnheader", { name: "Source code system" })).not.toBeInTheDocument();
   });
 
-  it("shows source descriptions and Seen beside source codes without an OMOP table column", async () => {
+  it("shows source descriptions beside source codes, and no OMOP table column", async () => {
+    // Seen came back as its own column in #1080, so only OMOP table is gone.
     renderPage();
     const row = (await screen.findByText("M-PROTEIN, SERUM", { selector: "td" })).closest("tr")!;
     const cells = within(row).getAllByRole("cell");
@@ -768,8 +771,12 @@ describe("CodeMappingPage", () => {
     it("shows import provenance so an SME knows what they are reviewing", async () => {
       await openDialog();
       expect(screen.getByText(/Proposed by import/)).toHaveTextContent("hk-labs");
-      expect(within(screen.getByRole("dialog")).getByText(/Seen/)).toHaveTextContent("Seen 14 times");
-      expect(within(screen.getByRole("dialog")).getByText(/Destinations/)).toHaveTextContent("Destinations 1");
+      // The occurrence count moved out of the provenance line and onto its own
+      // badge in #1080, alongside the new Seen column. The text is split across
+      // elements, so match the badge that contains it.
+      expect(
+        screen.getByText((_content, el) => el?.textContent === "Seen 14 times"),
+      ).toBeInTheDocument();
     });
 
     it("offers Update & Approve once the destination has moved", async () => {
@@ -874,7 +881,10 @@ describe("CodeMappingPage", () => {
   describe("Unmapped queue ordering", () => {
     const row = (over: Partial<typeof proposedRow>) => ({ ...proposedRow, ...over });
 
-    it("puts the most frequently seen codes first regardless of provenance", async () => {
+    it("puts the busiest code first, whoever raised it", async () => {
+      // #1080 replaced the provenance-then-author grouping with occurrence
+      // order across every section: the code seen 900 times is worth more of a
+      // curator's time than one seen once, whoever proposed it.
       renderPage([
         row({ mapping_id: 1, source_code: "HUMAN-ZOE", origin: "curator", created_by: "zoe@example.com", occurrence_count: 900 }),
         row({ mapping_id: 2, source_code: "HUMAN-ADA", origin: "curator", created_by: "ada@example.com", occurrence_count: 1 }),
@@ -888,6 +898,8 @@ describe("CodeMappingPage", () => {
       const codes = screen
         .getAllByText(/^(MACHINE|HUMAN-ADA|HUMAN-ZOE)$/, { selector: "td" })
         .map((cell) => cell.textContent);
+      // Zoe's 900 first, then the import's 5, then Ada's 1 -- who raised it no
+      // longer changes the order.
       expect(codes).toEqual(["HUMAN-ZOE", "MACHINE", "HUMAN-ADA"]);
     });
 
@@ -941,7 +953,6 @@ describe("CodeMappingPage", () => {
           `Created by zoe@example.com · approved by ada@example.com on ${when}`,
         ),
       ).toBeInTheDocument();
-      expect(within(screen.getByRole("dialog")).getByText(/Seen/)).toHaveTextContent("Seen 3 times");
     });
 
     it("shows both halves when an import raised it and a human signed it off", async () => {
@@ -1103,6 +1114,53 @@ describe("CodeMappingPage", () => {
         expect(screen.getByTestId("suggest-progress"))
           .toHaveTextContent("Done — wrote 4 new destination(s) across 4 code(s)."),
         { timeout: 4000 });
+    });
+
+    it("says how many remain so the curator knows to run it again", async () => {
+      // A run is capped well below a tab's backlog, so finishing is not the
+      // same as being done.
+      mockPost.mockResolvedValue({
+        data: suggestRun({ total: 5, done: 5, destinations: 3, remaining: 28 }),
+      });
+      renderPage();
+      await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
+      fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
+      await waitFor(() =>
+        expect(screen.getByTestId("suggest-progress"))
+          .toHaveTextContent("28 still awaiting a suggestion — run Suggest again."));
+    });
+
+    it("keeps polling through a transient failure", async () => {
+      // The work is on a worker and carries on; treating a dropped GET as a
+      // failed run would show an error over a run that succeeded.
+      mockPost.mockResolvedValue({
+        data: suggestRun({ state: "running", total: 2, retrieved: 1 }),
+      });
+      let polls = 0;
+      mockGet.mockImplementation((url: string) => {
+        if (url.startsWith("/v1/code-mappings/suggest-runs/")) {
+          polls += 1;
+          if (polls === 1) return Promise.reject(new Error("network blip"));
+          return Promise.resolve({
+            data: suggestRun({ state: "success", total: 2, done: 2, destinations: 2 }),
+          });
+        }
+        if (url === "/v1/code-mappings/") return Promise.resolve({ data: [proposedRow] });
+        if (url === "/v1/code-mappings/reference/") return Promise.resolve({ data: reference });
+        return Promise.resolve({ data: {} });
+      });
+      render(
+        <MemoryRouter>
+          <CodeMappingPage />
+        </MemoryRouter>,
+      );
+      await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
+      fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
+      await waitFor(() =>
+        expect(screen.getByTestId("suggest-progress"))
+          .toHaveTextContent("wrote 2 new destination(s)"),
+        { timeout: 6000 });
+      expect(screen.queryByText("Failed to suggest mappings.")).not.toBeInTheDocument();
     });
 
     it("surfaces a failed run rather than leaving the bar stuck", async () => {
