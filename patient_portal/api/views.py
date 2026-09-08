@@ -9760,14 +9760,9 @@ def code_mapping_suggest(request):
         tables = [table]
         source_vocab = None  # multi-table merge not needed
 
-    try:
-        min_occurrences = int(request.data.get('min_occurrences', 1))
-    except (TypeError, ValueError):
-        return Response({'min_occurrences': 'Enter a whole number.'},
-                        status=status.HTTP_400_BAD_REQUEST)
-    if min_occurrences < 1:
-        return Response({'min_occurrences': 'Must be at least 1.'},
-                        status=status.HTTP_400_BAD_REQUEST)
+    # Seen determines queue order, not eligibility. Ignore obsolete client
+    # thresholds so cached versions cannot hide low-frequency or uncounted codes.
+    min_occurrences = 1
 
     # The ceiling comes from the dispatcher, not a constant: a deployment with
     # no broker runs the whole thing inside the request, where 50 codes is ~125s

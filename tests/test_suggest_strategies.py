@@ -668,6 +668,17 @@ class TestSuggestRunLifecycle:
         assert resp.data['total'] == 3
         assert fake.calls[0][1]['min_occurrences'] == 1
 
+    @pytest.mark.parametrize('obsolete_threshold', [10, 999999, 0, 'obsolete'])
+    def test_cached_client_cannot_reenable_seen_threshold(self, obsolete_threshold):
+        queue_row('BUSY', occurrence_count=900)
+        queue_row('ONCE', occurrence_count=1)
+        queue_row('UNCOUNTED', occurrence_count=0)
+        with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
+            resp = self._post(min_occurrences=obsolete_threshold)
+        assert resp.status_code == 202
+        assert resp.data['total'] == 3
+        assert fake.calls[0][1]['min_occurrences'] == 1
+
     def test_the_total_is_known_before_any_work_runs(self):
         """The strip needs a denominator on its first poll, not a bar filling
         against a moving total."""

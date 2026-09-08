@@ -1095,16 +1095,24 @@ describe("CodeMappingPage", () => {
           .toHaveTextContent("nothing on this tab was awaiting a suggestion"));
     });
 
-    it("sends the lexical candidate count", async () => {
-      mockPost.mockResolvedValue({ data: suggestRun({}) });
+    it("puts Suggest first directly below the tabs, followed by the enabled strategies", async () => {
+      mockPost.mockResolvedValue({ data: suggestRun() });
       renderPage();
       await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
-      fireEvent.change(screen.getByLabelText(/lexical candidates per code/i), {
-        target: { value: "4" },
-      });
-      fireEvent.click(screen.getByRole("button", { name: /Suggest/ }));
+      const toolbar = screen.getByRole("group", { name: "Suggest controls" });
+      expect(screen.getByRole("tablist").nextElementSibling).toBe(toolbar);
+      const controls = toolbar.querySelectorAll("button, input");
+      expect(controls[0]).toHaveTextContent("Suggest");
+      for (const [index, name] of ["UMLS", "Lexical", "Vectors"].entries()) {
+        const checkbox = within(toolbar).getByRole("checkbox", { name });
+        expect(controls[index + 1]).toBe(checkbox);
+        expect(checkbox).toBeChecked();
+      }
+      expect(within(toolbar).queryByRole("spinbutton")).not.toBeInTheDocument();
+      fireEvent.click(within(toolbar).getByRole("button", { name: "Suggest" }));
       await waitFor(() => expect(mockPost).toHaveBeenCalled());
-      expect(mockPost.mock.calls[0][1]).toMatchObject({ lexical_limit: 4 });
+      expect(mockPost.mock.calls[0][1]).not.toHaveProperty("lexical_limit");
+      expect(mockPost.mock.calls[0][1]).not.toHaveProperty("min_occurrences");
     });
 
     it("shows incremental progress while the run is still working", async () => {
