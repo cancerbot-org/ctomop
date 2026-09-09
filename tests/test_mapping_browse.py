@@ -65,3 +65,42 @@ def test_duplicates_include_off_page_and_rejected_members(browse):
 def test_bad_paging_or_sort_is_a_validation_error(browse):
     assert browse(page_0='bad').status_code == 400
     assert browse(order_0='password').status_code == 400
+
+
+@pytest.mark.parametrize('search', ['', 'CODE'])
+@pytest.mark.parametrize('show_rejected', ['false', 'true'])
+def test_combined_counts_preserve_all_sections_and_rejections(browse, search, show_rejected):
+    row('CODE-A', source_vocabulary_id='ICD10CM')
+    row('CODE-B', status='approved')
+    row('CODE-C', status='rejected')
+    row('CODE-D', source_vocabulary_id='LOINC', status='approved')
+    row('CODE-E', origin_system='athena', status='approved')
+    row('CODE-F', origin_system='athena', status='rejected')
+    data = browse(source='ICD10CM', search=search, show_rejected=show_rejected).data
+    assert data['pages']['Unmapped']['total'] == (2 if show_rejected == 'true' else 1)
+    assert data['pages']['Mapped']['total'] == (2 if search else 1)
+    assert data['pages']['Athena Mapped']['total'] == (2 if show_rejected == 'true' else 1)
+    assert data['rejected_count'] == 1
+    assert len(data['results']) == sum(page['total'] for page in data['pages'].values())
+
+
+def test_default_browse_reuses_counts_and_loads_sections_together(browse):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    row('A')
+    row('B', status='approved')
+    row('C', origin_system='athena', status='approved')
+    with CaptureQueriesContext(connection) as queries:
+        response = browse(source='ICD10')
+    assert response.status_code == 200
+    assert len(response.data['results']) == 3
+    sql = [q['sql'] for q in queries]
+    assert not any('COUNT(*) AS "__count"' in query for query in sql)
+    assert sum('"source_code_concept_mapping"."id",' in query and 'LEFT OUTER JOIN "concept"' in query for query in sql) <= 2
+
+
+def test_spa_shell_is_not_cached_across_default_changes():
+    from django.urls import resolve
+    from django.test import RequestFactory
+    response = resolve('/code-mappings/').func(RequestFactory().get('/code-mappings/'))
+    assert 'no-store' in response['Cache-Control']

@@ -1380,3 +1380,31 @@ describe("saved batch log discovery", () => {
       .toHaveAttribute("href", "/code-mappings/suggest-runs/saved-run");
   });
 });
+
+
+describe("expanded ICD10 review feedback", () => {
+  it.each(["approved", "rejected"])("updates the expanded queue and counts immediately after a confirmed %s response", async (status) => {
+    const mapping = { ...proposedRow, source_vocabulary_id: "ICD10", source_code: "Z12.11", mapping_origin: "healthkey" };
+    let loads = 0;
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/v1/code-mappings/") {
+        if (++loads > 1) return new Promise(() => {});
+        return Promise.resolve({ data: {
+          results: [mapping], duplicates: [], selected_source: "ICD10", rejected_count: 0,
+          tabs: [{ vocabulary_id: "ICD10", label: "ICD10", is_standard: true, proposed: 1, approved: 0, athena: 0 }],
+          pages: { Unmapped: { page: 1, page_size: 50, total: 1 }, Mapped: { page: 1, page_size: 50, total: 0 }, "Athena Mapped": { page: 1, page_size: 50, total: 0 } },
+        } });
+      }
+      return Promise.resolve({ data: url.includes("reference") ? reference : {} });
+    });
+    mockPatch.mockResolvedValue({ data: { ...mapping, status } });
+    render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByText("Z12.11", { selector: "td" }));
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: status } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Update Mapping" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Unmapped (0)" })).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: "Unmapped mappings" })).queryByText("Z12.11")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Mapped (${status === "approved" ? 1 : 0})` })).toBeInTheDocument();
+  });
+});

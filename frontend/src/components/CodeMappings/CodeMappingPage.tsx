@@ -278,7 +278,7 @@ function tabForRow(row: CodeMappingRow): string {
   return VOCABULARY_ALIASES[row.source_vocabulary_id] ?? row.source_vocabulary_id;
 }
 
-function sectionForRow(row: CodeMappingRow): string {
+function sectionForRow(row: CodeMappingRow): MappingSection {
   if (row.mapping_origin === "athena") return "Athena Mapped";
   return row.status === "approved" ? "Mapped" : "Unmapped";
 }
@@ -994,6 +994,28 @@ export default function CodeMappingPage() {
     // approval. Background reload reconciles ordering, totals and other users.
     setRows((current) => current.map((row) => row.mapping_id === saved.mapping_id ? saved : row)
       .filter((row) => !browse || showRejected || row.status !== "rejected"));
+    setBrowse((current) => {
+      const previous = current?.results.find((row) => row.mapping_id === saved.mapping_id);
+      if (!current || !previous || previous.status === saved.status
+          || previous.source_vocabulary_id !== saved.source_vocabulary_id
+          || previous.mapping_origin === "athena") return current;
+      const pages = { ...current.pages };
+      for (const [row, delta] of [[previous, -1], [saved, 1]] as const) {
+        if (row.status === "rejected" && !showRejected) continue;
+        const section = sectionForRow(row);
+        pages[section] = { ...pages[section], total: Math.max(0, pages[section].total + delta) };
+      }
+      return {
+        ...current, pages,
+        results: current.results.map((row) => row.mapping_id === saved.mapping_id ? saved : row),
+        rejected_count: current.rejected_count + Number(saved.status === "rejected") - Number(previous.status === "rejected"),
+        tabs: current.tabs.map((tab) => tab.vocabulary_id === OVERALL_TAB || tab.vocabulary_id === tabForRow(saved) ? {
+          ...tab,
+          proposed: tab.proposed + Number(saved.status === "proposed") - Number(previous.status === "proposed"),
+          approved: tab.approved + Number(saved.status === "approved") - Number(previous.status === "approved"),
+        } : tab),
+      };
+    });
   };
 
   const submitForm = async (event: React.FormEvent) => {
