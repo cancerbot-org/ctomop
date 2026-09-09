@@ -234,9 +234,8 @@ const describeSuggestRun = (run: SuggestRunProgress) => {
 const SUGGEST_POLL_INTERVAL_MS = 1000;
 // Consecutive, not cumulative: a run lasting minutes may lose the odd poll.
 const SUGGEST_POLL_MAX_FAILURES = 5;
-// Ten minutes: CELERY_TASK_TIME_LIMIT is 900s, so a run that has said nothing
-// for this long is not slow, it is unattended.
-const SUGGEST_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+// Allow the worker's default 15-minute limit plus time waiting in the queue.
+const SUGGEST_POLL_TIMEOUT_MS = 20 * 60 * 1000;
 
 /** Progress of one queued Suggest run, as /suggest-runs/<id>/ reports it. */
 type SuggestRunProgress = {
@@ -431,10 +430,25 @@ function buildEditForm(row: CodeMappingRow, reference: Reference): MappingForm {
   };
 }
 
+type BrowseResponse = {
+  results: CodeMappingRow[];
+  duplicates: CodeMappingRow[];
+  tabs: { vocabulary_id: string; label: string; is_standard: boolean; proposed: number; approved: number; athena: number }[];
+  selected_source: string;
+  pages: Record<MappingSection, { page: number; page_size: number; total: number }>;
+  rejected_count: number;
+};
+const sectionNames: MappingSection[] = ["Unmapped", "Mapped", "Athena Mapped"];
+
 export default function CodeMappingPage() {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   const canApprove = !!(currentUser?.is_staff || currentUser?.is_org_admin);
+  const [browse, setBrowse] = useState<BrowseResponse | null>(null);
+  const [pages, setPages] = useState<Partial<Record<MappingSection, number>>>({});
+  const loadSequence = useRef(0);
+  const dialogRequest = useRef(0);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [rows, setRows] = useState<CodeMappingRow[]>([]);
   const [reference, setReference] = useState<Reference>(emptyReference);
   const [accuracy, setAccuracy] = useState<AccuracyResponse | null>(null);
@@ -454,8 +468,8 @@ export default function CodeMappingPage() {
   const [navigationTarget, setNavigationTarget] = useState<{ id: string } | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
-  const [suggestionLimit, setSuggestionLimit] = useState<number | "">(50);
-  const maxSuggestions = reference.suggest_max_per_run || 50;
+  const [suggestionLimit, setSuggestionLimit] = useState<number | "">(100);
+  const maxSuggestions = reference.suggest_max_per_run || 100;
   const validSuggestionLimit = suggestionLimit !== "" && Number.isInteger(suggestionLimit)
     && suggestionLimit >= 1 && suggestionLimit <= maxSuggestions;
   const [strategies, setStrategies] = useState({
@@ -503,39 +517,60 @@ export default function CodeMappingPage() {
   const flashTimer = useRef<number | null>(null);
 
   useEffect(() => () => {
+    dialogRequest.current += 1;
     suggestRunRef.current = null;
     if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => { setDebouncedSearch(searchQuery); setPages({}); }, 250);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
   const fetchAll = useCallback(async () => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setError("");
+    const params: Record<string, string | number> = {
+      browse: 1, search: debouncedSearch, show_rejected: String(showRejected),
+    };
+    if (activeVocabulary !== null) params.source = activeVocabulary;
+    sectionNames.forEach((section, index) => {
+      params[`page_${index}`] = pages[section] || 1;
+      const sort = sectionSorts[section];
+      params[`order_${index}`] = sort ? `${sort.descending ? "-" : ""}${sort.column}` : "-occurrence_count";
+    });
     try {
       const [rowResp, refResp, accuracyResp] = await Promise.all([
-        api.get<CodeMappingRow[]>("/v1/code-mappings/"),
+        api.get<BrowseResponse | CodeMappingRow[]>("/v1/code-mappings/", { params }),
         api.get<Reference>("/v1/code-mappings/reference/"),
         api.get<AccuracyResponse>("/v1/code-mappings/accuracy/"),
       ]);
-      setRows(rowResp.data);
+      if (sequence !== loadSequence.current) return;
+      // An older backend may still return the legacy array during rollout.
+      const result = rowResp.data;
+      setBrowse(Array.isArray(result) ? null : result);
+      setRows(Array.isArray(result) ? result : result.results);
       setReference({ ...emptyReference, ...(refResp.data || {}) });
-      setSuggestionLimit((current) => current === "" ? current : Math.min(current, refResp.data?.suggest_max_per_run || 50));
+      setSuggestionLimit((current) => current === "" ? current : Math.min(current, refResp.data?.suggest_max_per_run || 100));
       setAccuracy(accuracyResp.data);
     } catch {
-      setError("Failed to load code mappings.");
+      if (sequence === loadSequence.current) setError("Failed to load code mappings.");
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
-  }, []);
+  }, [activeVocabulary, debouncedSearch, showRejected, pages, sectionSorts]);
+
+  const refreshCurrent = useRef(fetchAll);
+  useEffect(() => { refreshCurrent.current = fetchAll; }, [fetchAll]);
 
   useEffect(() => {
-    // Wrapped: react-hooks/set-state-in-effect traces into the callback and
-    // errors on a direct call, and a red lint job turns every open PR red.
-    (async () => {
-      await fetchAll();
-    })();
+    (async () => { await fetchAll(); })();
+    return () => { loadSequence.current += 1; };
   }, [fetchAll]);
 
   const vocabularyTabs = useMemo(() => {
+    if (browse) return browse.tabs;
     const sourceVocabTabs = reference.source_vocabulary_tabs || [];
     const counts: Record<string, { proposed: number; approved: number; athena: number }> = {};
     sourceVocabTabs.forEach((v) => {
@@ -576,7 +611,7 @@ export default function CodeMappingPage() {
       athena: rows.filter((r) => r.mapping_origin === "athena").length,
     });
     return result;
-  }, [rows, reference]);
+  }, [rows, reference, browse]);
 
   // Land on work, not on the alphabetically-first tab.
   const defaultVocabulary = useMemo(() => {
@@ -587,7 +622,7 @@ export default function CodeMappingPage() {
     return vocabularyTabs[0]?.vocabulary_id ?? "";
   }, [vocabularyTabs]);
 
-  const selectedVocabulary = activeVocabulary ?? defaultVocabulary;
+  const selectedVocabulary = activeVocabulary ?? browse?.selected_source ?? defaultVocabulary;
   const overallTab = selectedVocabulary === OVERALL_TAB;
   // A vocabulary with no suggestions of its own still needs to show the
   // current model's live score; otherwise the dashboard has data while the
@@ -602,7 +637,7 @@ export default function CodeMappingPage() {
   // rejected mapping still owns its source code and can block re-creation.
   const duplicateCodes = useMemo(() => {
     const groups = new Map<string, { code: string; vocabulary: string; rows: CodeMappingRow[] }>();
-    for (const row of rows) {
+    for (const row of browse?.duplicates ?? rows) {
       const vocabulary = tabForRow(row);
       if (!overallTab && vocabulary !== selectedVocabulary) continue;
       const code = row.source_code.trim().toUpperCase();
@@ -615,9 +650,10 @@ export default function CodeMappingPage() {
     }
     return [...groups.values()].filter((group) => group.rows.length > 1)
       .sort((a, b) => a.vocabulary.localeCompare(b.vocabulary) || a.code.localeCompare(b.code));
-  }, [rows, overallTab, selectedVocabulary]);
+  }, [rows, overallTab, selectedVocabulary, browse]);
 
   const revealDuplicate = (row: CodeMappingRow) => {
+    if (browse) { openEditDialog(row); return; }
     setSearchQuery("");
     if (row.status === "rejected") setShowRejected(true);
     if (row.mapping_origin === "athena") setAthenaCollapsed(false);
@@ -635,6 +671,7 @@ export default function CodeMappingPage() {
   }, [navigationTarget]);
 
   const visibleRows = useMemo(() => {
+    if (browse) return rows;
     const q = searchQuery.trim().toLowerCase();
     return rows.filter((row) => {
       // Rejected rows are hidden but reachable. Filtering them out with no way
@@ -657,26 +694,26 @@ export default function CodeMappingPage() {
         String(row.destination_concept_id),
       ].some((value) => (value || "").toLowerCase().includes(q));
     });
-  }, [rows, searchQuery, selectedVocabulary, showRejected]);
+  }, [rows, searchQuery, selectedVocabulary, showRejected, browse]);
 
   // Three-section layout: UNMAPPED / MAPPED / ATHENA MAPPED.
   const athenaRows = useMemo(
-    () => visibleRows.filter((r) => r.mapping_origin === "athena").sort(byOccurrence),
-    [visibleRows],
+    () => visibleRows.filter((r) => r.mapping_origin === "athena").sort(browse ? () => 0 : byOccurrence),
+    [visibleRows, browse],
   );
   const unmappedRows = useMemo(
-    () => visibleRows.filter((r) => r.mapping_origin !== "athena" && r.status !== "approved").sort(byOccurrence),
-    [visibleRows],
+    () => visibleRows.filter((r) => r.mapping_origin !== "athena" && r.status !== "approved").sort(browse ? () => 0 : byOccurrence),
+    [visibleRows, browse],
   );
   const rejectedCount = useMemo(
-    () => rows.filter((r) => r.status === "rejected"
+    () => browse?.rejected_count ?? rows.filter((r) => r.status === "rejected"
       && r.mapping_origin !== "athena"
       && tabForRow(r) === selectedVocabulary).length,
-    [rows, selectedVocabulary],
+    [rows, selectedVocabulary, browse],
   );
   const mappedRows = useMemo(
-    () => visibleRows.filter((r) => r.mapping_origin !== "athena" && r.status === "approved").sort(byOccurrence),
-    [visibleRows],
+    () => visibleRows.filter((r) => r.mapping_origin !== "athena" && r.status === "approved").sort(browse ? () => 0 : byOccurrence),
+    [visibleRows, browse],
   );
 
   /** Source code systems offered for the chosen domain, blank option first. */
@@ -697,6 +734,10 @@ export default function CodeMappingPage() {
   }, [reference, form.domain_id, form.source_vocabulary_id]);
 
   const openNewDialog = () => {
+    dialogRequest.current += 1;
+    setError("");
+    setSearchingConcepts(false);
+    setCheckingUmls(false);
     setSelectedRow(null);
     setForm({ ...emptyForm });
     setSearchVocabulary("");
@@ -708,6 +749,10 @@ export default function CodeMappingPage() {
   };
 
   const openEditDialog = (row: CodeMappingRow) => {
+    dialogRequest.current += 1;
+    setError("");
+    setSearchingConcepts(false);
+    setCheckingUmls(false);
     setSelectedRow(row);
     setForm(buildEditForm(row, reference));
     setSearchVocabulary(row.destination_vocabulary_id || "");
@@ -719,6 +764,10 @@ export default function CodeMappingPage() {
   };
 
   const closeDialog = () => {
+    dialogRequest.current += 1;
+    setError("");
+    setSearchingConcepts(false);
+    setCheckingUmls(false);
     setMintOpen(false);
     setDialogMode(null);
     setSelectedRow(null);
@@ -729,6 +778,12 @@ export default function CodeMappingPage() {
   };
 
   const setField = (field: keyof MappingForm, value: string) => {
+    if (["source_code", "source_vocabulary_id", "source_code_description"].includes(field)) {
+      dialogRequest.current += 1;
+      setSearchingConcepts(false);
+      setCheckingUmls(false);
+      setError("");
+    }
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -737,6 +792,10 @@ export default function CodeMappingPage() {
    * systems are plausible, and which OMOP table the fact lands in.
    */
   const setDomain = (domainId: string) => {
+    dialogRequest.current += 1;
+    setSearchingConcepts(false);
+    setCheckingUmls(false);
+    setError("");
     setForm((prev) => {
       const offered = reference.source_code_systems_by_domain[domainId] || [];
       const stillOffered =
@@ -815,7 +874,10 @@ export default function CodeMappingPage() {
     // Keep the raw value in state and trim only for the request. Trimming
     // before setState meant typing a space produced the same string back, React
     // re-rendered without it, and a multi-word search could never be typed.
+    const request = ++dialogRequest.current;
     setConceptSearchQuery(query);
+    setSearchingConcepts(false);
+    setCheckingUmls(false);
     const q = query.trim();
     if (q.length < 3) {
       setConceptResults([]);
@@ -828,15 +890,18 @@ export default function CodeMappingPage() {
       // not wading through a million SNOMED hits.
       if (vocabulary) params.vocabulary_id = vocabulary;
       const resp = await api.get("/v1/concepts/search/", { params });
-      setConceptResults(resp.data.results || resp.data || []);
+      if (request === dialogRequest.current) setConceptResults(resp.data.results || resp.data || []);
     } catch {
-      setConceptResults([]);
+      if (request === dialogRequest.current) setConceptResults([]);
     } finally {
-      setSearchingConcepts(false);
+      if (request === dialogRequest.current) setSearchingConcepts(false);
     }
   };
 
   const suggestCurrentCode = async () => {
+    const request = ++dialogRequest.current;
+    setCheckingUmls(false);
+    setError("");
     setSearchingConcepts(true);
     try {
       const enabled = Object.entries(strategies).filter(([, on]) => on).map(([name]) => name);
@@ -845,15 +910,19 @@ export default function CodeMappingPage() {
         source_code_description: form.source_code_description, omop_table: form.omop_table,
         strategies: enabled,
       });
+      if (request !== dialogRequest.current) return;
       if (data.suggested) {
         applyConcept(data.suggested);
         setBanner(`Suggested via ${data.strategy_used || "waterfall"}.`);
       } else setError(data.note || "No suggestion found.");
-    } catch { setError("Failed to suggest a destination concept."); }
-    finally { setSearchingConcepts(false); }
+    } catch { if (request === dialogRequest.current) setError("Failed to suggest a destination concept."); }
+    finally { if (request === dialogRequest.current) setSearchingConcepts(false); }
   };
 
   const checkUmls = async () => {
+    const request = ++dialogRequest.current;
+    setSearchingConcepts(false);
+    setError("");
     setCheckingUmls(true);
     setUmlsCheckMessage("");
     try {
@@ -861,6 +930,7 @@ export default function CodeMappingPage() {
         source_code: form.source_code,
         source_vocabulary_id: form.source_vocabulary_id,
       });
+      if (request !== dialogRequest.current) return;
       if (!data.found) {
         setUmlsCheckMessage("Missing from UMLS");
         return;
@@ -872,9 +942,9 @@ export default function CodeMappingPage() {
       }));
       setUmlsCheckMessage("Found in UMLS");
     } catch {
-      setError("Failed to check UMLS.");
+      if (request === dialogRequest.current) setError("Failed to check UMLS.");
     } finally {
-      setCheckingUmls(false);
+      if (request === dialogRequest.current) setCheckingUmls(false);
     }
   };
 
@@ -910,7 +980,7 @@ export default function CodeMappingPage() {
         ? await api.patch(`/v1/code-mappings/${selectedRow.mapping_id}/`, payload)
         : await api.post("/v1/code-mappings/", payload);
       const repoint: RepointResult | null = resp.data?.repoint ?? null;
-      await fetchAll();
+      await refreshCurrent.current();
       // Hold the dialog open on a re-point so the curator sees what moved;
       // a silent close would leave them guessing whether it worked.
       if (repoint && repoint.rows_updated) {
@@ -993,7 +1063,7 @@ export default function CodeMappingPage() {
         setError(finished.error || "The suggest run failed.");
         return;
       }
-      await fetchAll();
+      await refreshCurrent.current();
       announceSuggestRun(finished);
     } catch (err) {
       const detail =
@@ -1104,7 +1174,7 @@ export default function CodeMappingPage() {
         notes: row.notes,
       });
       const repoint: RepointResult | null = resp.data?.repoint ?? null;
-      await fetchAll();
+      await refreshCurrent.current();
       if (repoint && repoint.rows_updated) {
         setBanner(
           `${row.source_code}: updated ${repoint.rows_updated} row(s) across `
@@ -1125,7 +1195,7 @@ export default function CodeMappingPage() {
     try {
       await api.delete(`/v1/code-mappings/${row.mapping_id}/`);
       closeDialog();
-      await fetchAll();
+      await refreshCurrent.current();
     } catch {
       setError("Failed to delete code mapping.");
     }
@@ -1134,12 +1204,13 @@ export default function CodeMappingPage() {
   const renderTable = (sectionRows: CodeMappingRow[], emptyText: string, section: MappingSection, { hideStatus = false }: { hideStatus?: boolean } = {}) => {
     const colCount = 7 + (hideStatus ? 0 : 2);
     const sort = sectionSorts[section];
+    const pagination = browse?.pages[section];
     const header = (label: string, column: SortColumn) => (
       <th className="px-4 py-3 font-semibold" aria-sort={sort?.column === column ? (sort.descending ? "descending" : "ascending") : "none"}>
         <button type="button" title={`Sort ${section} by ${label}`} className="inline-flex items-center gap-1 hover:underline focus:outline-2"
-          onClick={() => setSectionSorts((previous) => ({ ...previous, [section]: {
+          onClick={() => { setPages((previous) => ({ ...previous, [section]: 1 })); setSectionSorts((previous) => ({ ...previous, [section]: {
             column, descending: previous[section]?.column === column ? !previous[section]?.descending : false,
-          } }))}>
+          } })); }}>
           {label}<span aria-hidden="true">{sort?.column === column ? (sort.descending ? "↓" : "↑") : "↕"}</span>
         </button>
       </th>
@@ -1161,7 +1232,7 @@ export default function CodeMappingPage() {
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {sortMappingRows(sectionRows, sort).map((row) => (
+          {(browse ? sectionRows : sortMappingRows(sectionRows, sort)).map((row) => (
             <tr
               key={mappingRowId(row)}
               id={mappingRowId(row)}
@@ -1239,11 +1310,20 @@ export default function CodeMappingPage() {
           )}
         </tbody>
       </table>
+      {pagination && pagination.total > pagination.page_size && (
+        <nav aria-label={`${section} pages`} className="flex items-center justify-end gap-3 border-t p-3 text-sm">
+          <button type="button" disabled={loading || pagination.page <= 1}
+            onClick={() => setPages((previous) => ({ ...previous, [section]: pagination.page - 1 }))}>Previous</button>
+          <span>Page {pagination.page} of {Math.ceil(pagination.total / pagination.page_size)} · {pagination.total} mappings</span>
+          <button type="button" disabled={loading || pagination.page * pagination.page_size >= pagination.total}
+            onClick={() => setPages((previous) => ({ ...previous, [section]: pagination.page + 1 }))}>Next</button>
+        </nav>
+      )}
     </div>
     );
   };
 
-  if (loading) {
+  if (loading && rows.length === 0 && !browse) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
@@ -1278,6 +1358,8 @@ export default function CodeMappingPage() {
             New Mapping
           </button>
         </div>
+
+        {loading && <p role="status" className="mb-2 text-sm text-slate-500">Loading mappings…</p>}
 
         {error && !dialogMode && (
           <div role="alert" className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -1321,6 +1403,7 @@ export default function CodeMappingPage() {
                 role="tab"
                 aria-selected={selected}
                 onClick={() => {
+                  setPages({});
                   setActiveVocabulary(tab.vocabulary_id);
                   if (tab.vocabulary_id === OVERALL_TAB) {
                     setUnmappedCollapsed(true);
@@ -1541,7 +1624,7 @@ export default function CodeMappingPage() {
             className="mb-2 inline-flex items-center gap-1 text-sm font-semibold uppercase tracking-wide text-slate-700"
           >
             {unmappedCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-            Unmapped <span className="font-normal text-slate-500">({unmappedRows.length})</span>
+            Unmapped <span className="font-normal text-slate-500">({browse?.pages.Unmapped.total ?? unmappedRows.length})</span>
           </button>
           {!unmappedCollapsed && (
             <>
@@ -1554,7 +1637,7 @@ export default function CodeMappingPage() {
                 <input
                   type="checkbox"
                   checked={showRejected}
-                  onChange={(e) => setShowRejected(e.target.checked)}
+                  onChange={(e) => { setPages({}); setShowRejected(e.target.checked); }}
                 />
                 Show {rejectedCount} rejected
               </label>
@@ -1572,7 +1655,7 @@ export default function CodeMappingPage() {
             className="mb-2 inline-flex items-center gap-1 text-sm font-semibold uppercase tracking-wide text-slate-700"
           >
             {mappedCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-            Mapped <span className="font-normal text-slate-500">({mappedRows.length})</span>
+            Mapped <span className="font-normal text-slate-500">({browse?.pages.Mapped.total ?? mappedRows.length})</span>
           </button>
           {!mappedCollapsed && renderTable(mappedRows, "No approved mappings in this vocabulary.", "Mapped")}
         </section>
@@ -1585,7 +1668,7 @@ export default function CodeMappingPage() {
               className="mb-2 inline-flex items-center gap-1 text-sm font-semibold uppercase tracking-wide text-slate-700"
             >
               {athenaCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-              Athena Mapped <span className="font-normal text-slate-500">({athenaRows.length})</span>
+              Athena Mapped <span className="font-normal text-slate-500">({browse?.pages["Athena Mapped"].total ?? athenaRows.length})</span>
             </button>
             {!athenaCollapsed && renderTable(athenaRows, "No Athena mappings in this vocabulary.", "Athena Mapped", { hideStatus: true })}
           </section>

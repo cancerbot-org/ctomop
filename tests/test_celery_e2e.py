@@ -90,8 +90,8 @@ def test_refresh_is_derived_by_a_real_worker(celery_worker_process):
     assert record.derived_at is not None
 
 
-def test_suggest_queues_fifty_codes_for_a_real_worker(celery_worker_process):
-    """A broker-backed API run processes all 50 rows instead of the inline 3."""
+def test_suggest_queues_one_hundred_codes_for_a_real_worker(celery_worker_process):
+    """A broker-backed API run processes all 100 rows instead of the inline 3."""
     from rest_framework.test import APIClient
     from omop_core.models import SourceCodeConceptMapping
 
@@ -106,16 +106,16 @@ def test_suggest_queues_fifty_codes_for_a_real_worker(celery_worker_process):
             source_vocabulary_id='ICD10CM', source_code=f'E2E.{i:03d}',
             domain_id='Condition', omop_table='condition', status='proposed',
             occurrence_count=100-i,
-        ) for i in range(50)
+        ) for i in range(100)
     ])
     reference = client.get('/api/v1/code-mappings/reference/')
     assert reference.status_code == 200
-    assert reference.data['suggest_max_per_run'] == 50
+    assert reference.data['suggest_max_per_run'] == 100
     response = client.post('/api/v1/code-mappings/suggest/', {
-        'source_vocabulary_id': 'ICD10CM', 'limit': 50, 'strategies': ['umls'],
+        'source_vocabulary_id': 'ICD10CM', 'limit': 100, 'strategies': ['umls'],
     }, format='json')
     assert response.status_code == 202, response.data
-    assert response.data['total'] == 50
+    assert response.data['total'] == 100
     deadline = time.monotonic() + _POLL_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         response = client.get(
@@ -125,7 +125,7 @@ def test_suggest_queues_fifty_codes_for_a_real_worker(celery_worker_process):
             break
         time.sleep(0.5)
     assert response.data['state'] == 'success', response.data
-    assert response.data['done'] == 50
+    assert response.data['done'] == 100
     assert SourceCodeConceptMapping.objects.filter(
         source_code__startswith='E2E.', last_suggest_attempt__isnull=False,
-    ).count() == 50
+    ).count() == 100

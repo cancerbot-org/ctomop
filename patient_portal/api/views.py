@@ -9622,6 +9622,9 @@ def code_mapping_list(request):
             'target_concept', 'created_by', 'reviewer')
         from omop_core.services.athena_mapping_guard import without_icd10_athena_duplicates
         mappings = without_icd10_athena_duplicates(mappings)
+        if request.query_params.get('browse') == '1':
+            from omop_core.services.mapping_browse import browse_mappings
+            return Response(browse_mappings(mappings, request.query_params, _serialize_code_mapping_row))
         source_filter = request.query_params.get('source')
         if source_filter:
             mappings = mappings.filter(source_vocabulary_id=source_filter)
@@ -10092,18 +10095,10 @@ def _table_for_hk_vocabulary(vocabulary_id):
 
 
 # One Suggest click ranks at most this many codes.
-#
-# Sized against the request timeout, not just cost: gunicorn runs with
-# --timeout 120 (Dockerfile), and each code costs an indexed trigram retrieval
-# (~0.4-1.6s) plus one model call. At 50 the worker was killed mid-run, the
-# browser saw a 502, and the proposals already committed were invisible because
-# the client never refetched. Ten leaves headroom, and the response says when
-# more remain.
 # Fallback ceiling for a dispatcher that does not declare one. The real limits
-# are QUEUED_MAX_CODES / INLINE_MAX_CODES in omop_core/services/suggest_jobs.py,
-# because how many codes a run may attempt depends entirely on whether it is
-# genuinely queued or running inside the request.
-SUGGEST_MAX_PER_RUN = 50
+# are QUEUED_MAX_CODES / INLINE_MAX_CODES in omop_core/services/suggest_jobs.py.
+# Queued work runs outside the web request's timeout; inline stays bounded.
+SUGGEST_MAX_PER_RUN = 100
 
 
 def _merge_vocab_counts(counts):

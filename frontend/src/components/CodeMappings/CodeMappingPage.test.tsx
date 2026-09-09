@@ -1113,7 +1113,7 @@ describe("CodeMappingPage", () => {
       }
       const batchSize = within(toolbar).getByRole("spinbutton", { name: "Number of suggestions" });
       expect(controls[1]).toBe(batchSize);
-      expect(batchSize).toHaveValue(50);
+      expect(batchSize).toHaveValue(100);
       expect(batchSize.nextElementSibling).toHaveTextContent("Using");
       fireEvent.change(batchSize, { target: { value: "25" } });
       fireEvent.click(within(toolbar).getByRole("button", { name: "Suggest" }));
@@ -1242,5 +1242,61 @@ describe("CodeMappingPage", () => {
       }]);
       expect(await screen.findByText("99999-9", { selector: "td" })).toBeInTheDocument();
     });
+  });
+});
+
+describe("mapping dialog request isolation", () => {
+  const first = { ...proposedRow, source_code: "Z94.81", source_code_description: "Bone marrow transplant status" };
+  const second = { ...proposedRow, mapping_id: 99, source_code: "Z12.11", source_code_description: "Screening encounter" };
+
+  it("clears a previous code's no-match message when opening another code", async () => {
+    renderPage([first, second]);
+    fireEvent.click(await screen.findByText("Z94.81"));
+    mockPost.mockResolvedValueOnce({ data: { suggested: null, note: "No suitable concept: Z94.81" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Suggest" }));
+    expect(await screen.findByText("No suitable concept: Z94.81")).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByText("Z12.11"));
+    expect(within(screen.getByRole("dialog")).queryByText("No suitable concept: Z94.81")).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])("ignores a late suggestion for a closed dialog (destination=%s)", async (found) => {
+    renderPage([first, second]);
+    fireEvent.click(await screen.findByText("Z94.81"));
+    let resolve!: (value: unknown) => void;
+    mockPost.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Suggest" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByText("Z12.11"));
+    resolve({ data: { suggested: found ? loincHit : null, note: "No suitable concept: Z94.81" } });
+    await waitFor(() => expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Suggest" })).toBeEnabled());
+    expect(screen.queryByText("No suitable concept: Z94.81")).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("Z12.11")).toBeInTheDocument();
+    expect(screen.getByLabelText("Destination Concept ID")).toHaveValue(second.destination_concept_id);
+  });
+});
+
+describe("server mapping pages", () => {
+  it("requests the next page and sorts the full section on the server", async () => {
+    mockGet.mockImplementation((url: string, config?: { params?: Record<string, unknown> }) => {
+      if (url === "/v1/code-mappings/") {
+        const page = Number(config?.params?.page_0 || 1);
+        return Promise.resolve({ data: {
+          results: [{ ...proposedRow, source_code: page === 1 ? "FIRST PAGE" : "SECOND PAGE" }],
+          duplicates: [], selected_source: "",
+          tabs: [{ vocabulary_id: "", label: "Uncoded", is_standard: false, proposed: 101, approved: 0, athena: 0 }],
+          pages: { Unmapped: { page, page_size: 50, total: 101 }, Mapped: { page: 1, page_size: 50, total: 0 }, "Athena Mapped": { page: 1, page_size: 50, total: 0 } },
+          rejected_count: 0,
+        } });
+      }
+      return Promise.resolve({ data: url.includes("reference") ? reference : {} });
+    });
+    render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
+    expect(await screen.findByText("FIRST PAGE")).toBeInTheDocument();
+    expect(screen.getByText("Page 1 of 3 · 101 mappings")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("SECOND PAGE")).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle("Sort Unmapped by Seen"));
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/v1/code-mappings/", { params: expect.objectContaining({ page_0: 1, order_0: "occurrence_count" }) }));
   });
 });
