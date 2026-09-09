@@ -1,33 +1,35 @@
 """Deployment wiring must not replace staging data or split broker identities."""
 import os
 from pathlib import Path
-import runpy
 import subprocess
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-blueprint = runpy.run_path(str(ROOT / 'scripts/render_staging_blueprint.py'))['blueprint']
 
 
 def test_staging_reuses_existing_web_settings_and_shares_broker():
-    result = blueprint('existing-staging', 'frankfurt')
-    assert 'databases' not in result
-    web, worker, broker = result['services']
-    assert web['name'] == 'existing-staging'
+    result = yaml.safe_load((ROOT / 'render.yaml').read_text())
+    web, worker, broker = [s for s in result['services'] if s['name'].startswith('promop-staging')]
+    assert web['name'] == 'promop-staging'
+    assert all(d['name'] != 'ctomop_dev' for d in result.get('databases', []))
     assert web['branch'] == worker['branch'] == 'dev'
-    assert {s['region'] for s in result['services']} == {'frankfurt'}
+    assert {s['region'] for s in (web, worker, broker)} == {'oregon'}
     web_env = {e['key']: e for e in web['envVars']}
     worker_env = {e['key']: e for e in worker['envVars']}
     for key in ('DATABASE_URL', 'SECRET_KEY', 'AUDIT_HMAC_KEY', 'EXPORT_SIGNING_KEY'):
-        assert web_env[key] == {'key': key, 'sync': False}
+        expected = {'sync': False} if key == 'DATABASE_URL' else {'generateValue': True}
+        assert web_env[key] == {'key': key, **expected}
         assert worker_env[key]['fromService'] == {
             'name': web['name'], 'type': 'web', 'envVarKey': key,
         }
     assert web_env['CELERY_BROKER_URL'] == worker_env['CELERY_BROKER_URL']
     assert web_env['CELERY_RESULT_BACKEND'] == worker_env['CELERY_RESULT_BACKEND']
     assert web_env['DEBUG']['value'] == 'False'
+    assert web_env['ALLOWED_HOSTS']['value'] == 'promop-staging.onrender.com'
+    assert web_env['CORS_ALLOWED_ORIGINS']['value'] == 'https://promop-staging.onrender.com'
+    assert web_env['APP_BASE_URL']['value'] == 'https://promop-staging.onrender.com'
     assert web_env['CELERY_BROKER_URL']['fromService']['name'] == broker['name']
     assert worker_env['CELERY_WORKER_CONCURRENCY']['value'] == '1'
     assert broker['maxmemoryPolicy'] == 'noeviction'

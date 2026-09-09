@@ -1,72 +1,73 @@
 # Render staging Celery
 
-Suggest supports 50 codes when the web service has `CELERY_BROKER_URL` set.
-Without it, the API deliberately limits synchronous requests to 3 codes.
-Changing the number in the UI cannot enable background execution.
+Staging is `promop-staging` at https://promop-staging.onrender.com, on Render
+in Oregon, tracking `dev`. Local staging database access uses
+`STAGING_DATABASE_URL` from `.env`. Render processes use `DATABASE_URL` for
+that same existing database. This is not the old GCP staging deployment.
 
-## Staging Blueprint
+`render.yaml` now contains the concrete staging web, worker, and private
+Redis-compatible Key Value definitions alongside the existing production
+services. No generated file is needed. Staging does not create a new database
+or reference the production database.
 
-First identify the **existing** staging web service name and region in Render.
-Do not use the production `render.yaml` to provision staging: it tracks `main`
-and declares a database. Generate a staging-specific Blueprint using the actual
-service identity (the arguments below are examples, not discovered resources):
+## Environment settings
 
-```sh
-python scripts/render_staging_blueprint.py \
-  --web-service EXISTING-STAGING-NAME --region oregon > render.staging.yaml
-```
+The Blueprint sets staging's allowed host, CORS origin, and application URL,
+and explicitly points both web and worker at `promop-staging-redis` for
+`CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`.
 
-The generated file tracks `dev`, adds a worker and a private Key Value broker,
-and wires both web and worker to that broker. It reuses the web service's
-existing `DATABASE_URL`, `SECRET_KEY`, `AUDIT_HMAC_KEY`, `EXPORT_SIGNING_KEY`,
-and `ANTHROPIC_API_KEY`; it does not create a database or rotate signing keys.
-Local staging database access uses `STAGING_DATABASE_URL` in `.env`; Render
-processes use the existing web service's `DATABASE_URL` for that same database.
-No secret values belong in the generated file or the repository.
+`DATABASE_URL` stays dashboard-managed on the existing staging web service;
+its value is the staging database connection string stored locally under
+`STAGING_DATABASE_URL`. The worker references this web environment variable.
+Database credentials must not be committed to the public repository.
+
+The worker also references the web service's `SECRET_KEY`, `AUDIT_HMAC_KEY`,
+`EXPORT_SIGNING_KEY`, and `ANTHROPIC_API_KEY`. Render's `generateValue: true`
+preserves existing signing keys and supplies keys only if absent. The ranking
+API key and other external-service credentials stay dashboard-managed. Render
+ignores newly added `sync: false` entries during an existing Blueprint update;
+if a required external credential is absent, it must be set in Render first.
+
+## Apply
+
+Sync `render.yaml` from `dev` in the Blueprint managing these services. An
+ordinary Git-triggered code deploy does **not** create worker/broker resources
+or apply Blueprint environment settings. If staging is not Blueprint-managed,
+associate the existing service when creating the Blueprint. Do not attach a
+service already managed by one Blueprint to a second Blueprint.
 
 The worker uses a 2 GB plan (`1c-2g`) with concurrency 1 and prefetch 1. This
 avoids four processes independently loading the embedding model; it is not a
-claim that the reported 2 GB memory failure has been diagnosed. The broker is
-256 MB with `noeviction` so memory pressure cannot silently evict queued jobs.
-These are additional paid Render resources. Measure worker memory on the real
-vocabulary workload before increasing concurrency.
+diagnosis of the reported memory failure. The broker is 256 MB with
+`noeviction`, so memory pressure cannot silently evict queued jobs. These are
+additional paid Render resources. Measure memory before raising concurrency.
 
-Review the generated web build/start commands against the existing service's
-commands. If it already belongs to a Blueprint, incorporate these definitions
-into that Blueprint instead of attaching it to a second one. Otherwise, commit
-the generated file and configure Render to sync that path. The generator alone
-and a normal code deployment do **not** sync infrastructure.
+If using the Dashboard instead, create the worker and broker with the settings
+in `render.yaml`, supply the same database and secret values to the worker,
+and set the web service's broker and result backend to the broker's internal
+connection string. Preserve any existing explicit `CACHE_URL`. Otherwise,
+Django uses the broker for its shared cache.
 
-Keep all three services in the existing staging region/workspace/environment.
-The generated configuration explicitly sets `CELERY_RESULT_BACKEND` to the
-same broker on both services, replacing any stale override. If it has `CACHE_URL`, preserve it; otherwise Django uses the broker
-for its shared cache. Any additional worker task credentials configured on the
-web service must also be supplied to the worker.
+## Verify
 
-Start the worker and verify its logs show it connected to the staging broker
-and registered `omop_core.suggest_mappings`. Then activate the broker on the
-web service and redeploy it. For dashboard-managed services, create the worker
-and Key Value service using the generated definitions, and set the web's
-`CELERY_BROKER_URL` to that Key Value service's internal connection string.
-Worker secrets must match the existing web values.
-
-## Verify live behavior
-
-- The worker must respond to `celery -A ctomop inspect ping` from the Render shell.
+- Worker logs must show a connection to the staging broker and registration of
+  `omop_core.suggest_mappings`. From the Render shell,
+  `celery -A ctomop inspect ping` must get a worker response.
 - Authenticated `/api/v1/code-mappings/reference/` must return
   `suggest_max_per_run: 50`.
-- Run Suggest on a curator-approved queue, and confirm the web request returns
-  202 promptly, the worker receives the task, and the progress endpoint reaches
-  success. A displayed 50 alone proves broker configuration, not worker health.
-- Check web and worker memory metrics during that run. Do not run the full test
-  suite against staging.
+- Run Suggest on a curator-approved queue. The request must return 202 promptly,
+  the worker must receive the job, and its progress must reach success. Seeing
+  50 in the UI proves broker configuration, not worker health.
+- Check web and worker memory during the run. Do not run the test suite against
+  staging.
 
-A rollback clears the web service's broker URL (and any explicit result backend
-pointing at it) to restore inline execution. Drain running jobs before stopping
-the worker; keep the broker until queued work is accounted for.
+To roll back, remove staging's broker/result-backend references from the
+Blueprint and clear those web environment values in Render, then redeploy.
+This restores synchronous processing with the three-code limit. Drain running
+jobs before stopping the worker; retain Redis until queued work is accounted
+for so a later sync cannot discard pending work.
 
-Local integration coverage in `tests/test_celery_e2e.py` uses isolated PostgreSQL
-and Redis and a real Celery process. It verifies a 50-code Suggest run completes
-without external model API calls, as well as asynchronous patient derivation.
+Local tests use isolated PostgreSQL, Redis, and a real Celery worker to verify
+50-code Suggest runs and patient derivation without external model API calls.
 
 Render reference: https://render.com/docs/blueprint-spec
