@@ -1,4 +1,4 @@
-"""Bounded curation pages; legacy export/list consumers keep their array API."""
+"""Bounded curation pages with 100 codes per section."""
 from django.db.models import Case, CharField, Count, F, Q, Value, When, Window
 from django.db.models.functions import Upper, Trim
 from rest_framework.exceptions import ValidationError
@@ -8,7 +8,7 @@ from omop_core.services.mapping_destinations import with_destination_counts
 from omop_core.services.source_retirement import mapping_source_retirement
 
 OVERALL = '__overall__'
-PAGE_SIZE = 50
+PAGE_SIZE = 100
 ORDER_FIELDS = {
     'origin_system': 'origin_system', 'source_code': 'source_code',
     'occurrence_count': 'occurrence_count',

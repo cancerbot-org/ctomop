@@ -9626,7 +9626,7 @@ def code_mapping_list(request):
             from omop_core.services.mapping_browse import browse_mappings
             return Response(browse_mappings(mappings, request.query_params, _serialize_code_mapping_row))
         source_filter = request.query_params.get('source')
-        if source_filter:
+        if source_filter is not None:
             mappings = mappings.filter(source_vocabulary_id=source_filter)
         search = request.query_params.get('search')
         if search:
@@ -9640,8 +9640,17 @@ def code_mapping_list(request):
             if q.isdigit():
                 search_filter |= Q(target_concept_id=int(q))
             mappings = mappings.filter(search_filter)
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            mappings = mappings.filter(status=status_filter)
+        from rest_framework.pagination import PageNumberPagination
+        from omop_core.services.mapping_browse import PAGE_SIZE
         from omop_core.services.mapping_destinations import with_destination_counts
-        mappings = list(with_destination_counts(mappings).order_by('source_vocabulary_id', 'source_code', 'id'))
+        paginator = PageNumberPagination()
+        paginator.page_size = PAGE_SIZE
+        mappings = paginator.paginate_queryset(
+            with_destination_counts(mappings).order_by('source_vocabulary_id', 'source_code', 'id'), request,
+        )
         from omop_core.services.source_retirement import mapping_source_retirement
         source_metadata = mapping_source_retirement(mappings)
         rows = [
@@ -9651,10 +9660,19 @@ def code_mapping_list(request):
             )
             for mapping in mappings
         ]
-        status_filter = request.query_params.get('status')
-        if status_filter:
-            rows = [row for row in rows if row['status'] == status_filter]
-        return Response(rows)
+        # Preserve the legacy array shape while exposing navigation and totals.
+        response = Response(rows, headers={
+            'X-Total-Count': str(paginator.page.paginator.count),
+            'X-Page': str(paginator.page.number),
+            'X-Page-Size': str(PAGE_SIZE),
+        })
+        links = []
+        for relation, url in (('next', paginator.get_next_link()), ('prev', paginator.get_previous_link())):
+            if url:
+                links.append(f'<{url}>; rel="{relation}"')
+        if links:
+            response['Link'] = ', '.join(links)
+        return response
 
     with transaction.atomic():
         concept = _get_destination_concept(request.data)
