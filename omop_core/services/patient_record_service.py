@@ -700,6 +700,10 @@ def _build_snapshot(person: Person) -> OmopSnapshot:
     )
     death = Death.objects.filter(person=person).only('death_date').first()
 
+    from omop_core.services.omop_projection import without_cleared_history
+    measurements = without_cleared_history(measurements, 'measurement')
+    observations = without_cleared_history(observations, 'observation')
+
     # Build code/source indexes
     meas_by_code: dict[str, list] = defaultdict(list)
     meas_by_source: dict[str, list] = defaultdict(list)
@@ -862,19 +866,19 @@ def refresh_patient_record(person: Person) -> PatientRecord:
 
         patient_info.custom_fields = _get_custom_patient_field_data(snapshot)
 
-        _compute_derived_fields(patient_info)
-
-        # Restore user-edited values when derivation produced nothing for that
-        # field (no OMOP fact backs it yet). Once an OMOP fact exists,
-        # derivation wins and the field is removed from user_edited_fields.
+        # Pending edits (including explicit clears) win until OMOP actually
+        # represents the saved value. A stale fact or a failed projection must
+        # not silently undo a user's change.
         still_orphaned = []
-        for field in user_edited:
+        for field, value in preserved.items():
             derived_value = getattr(patient_info, field, None)
-            if _is_empty(derived_value) and field in preserved and not _is_empty(preserved[field]):
-                setattr(patient_info, field, preserved[field])
+            matches = derived_value == value or (_is_empty(derived_value) and _is_empty(value))
+            if not matches:
+                setattr(patient_info, field, value)
                 still_orphaned.append(field)
-            # else: OMOP fact exists — derivation wins, drop from tracking
-        patient_info.user_edited_fields = sorted(still_orphaned) or []
+        patient_info.user_edited_fields = sorted(still_orphaned)
+
+        _compute_derived_fields(patient_info)
 
         patient_info.derivation_version = DERIVATION_VERSION
         patient_info.derived_at = timezone.now()

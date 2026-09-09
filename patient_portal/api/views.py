@@ -866,6 +866,10 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
+        return self._patch_record(request, person, patient_info)
+
+    def _patch_record(self, request, person, patient_info):
+        """Shared save path after the provider or self-service access check."""
         # patient_name targets Person, not PatientRecord, so it is handled by hand
         # here exactly as /patient-info/me/ handles it — through the same pair of
         # helpers, so the two routes cannot drift apart again. This is the route
@@ -880,99 +884,63 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         if mutations == PatientRecordSerializer(patient_info).data.get('genetic_mutations'):
             mutations = None
 
-        serializer = PatientRecordSerializer(patient_info, data=patch_data, partial=True)
-        serializer.is_valid(raise_exception=True)
-
-        def previous_value(obj, field):
-            fk_id = f'{field}_id'
-            return getattr(obj, fk_id, None) if hasattr(obj, fk_id) else getattr(obj, field, None)
-
-        previous_values = {
-            field: previous_value(patient_info, field)
-            for field in patch_data
-            if hasattr(patient_info, field)
-        }
-        # Track which OMOP-mapped fields the user is editing directly.
-        # These may not have OMOP backing yet; derivation will preserve them
-        # until a FieldConceptMapping projects them into an OMOP table.
-        direct_fields = set(patch_data) & PATIENT_RECORD_OMOP_MAPPED_FIELDS
         with transaction.atomic():
+            # Match derivation's lock order and serialize the read/modify/write
+            # of user_edited_fields as well as same-day OMOP projection.
+            patient_info = PatientRecord.objects.select_for_update().get(pk=patient_info.pk)
+            serializer = PatientRecordSerializer(patient_info, data=patch_data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            previous_values = {
+                field: getattr(patient_info, field)
+                for field in serializer.validated_data
+                if hasattr(patient_info, field)
+            }
+            direct_fields = {
+                field for field in serializer.validated_data
+                if field in PATIENT_RECORD_OMOP_MAPPED_FIELDS
+                and serializer.validated_data[field] != previous_values.get(field)
+            }
             _apply_patient_name(person, patient_name)
             if mutations is not None:
                 _write_genetic_mutations(person, mutations)
                 patient_info.refresh_from_db()
             serializer.save()
             if direct_fields:
-                # Re-read after serializer.save() in case a post_save signal
-                # modified user_edited_fields on the same row.
-                patient_info.refresh_from_db(fields=['user_edited_fields'])
-                edited = set(patient_info.user_edited_fields or [])
-                edited |= direct_fields
+                edited = set(patient_info.user_edited_fields or []) | direct_fields
                 patient_info.user_edited_fields = sorted(edited)
                 patient_info.save(update_fields=['user_edited_fields'])
             _write_record_revisions(patient_info, previous_values, request)
+            if direct_fields:
+                self._project_mapped_fields(person, patient_info, direct_fields, serializer.validated_data)
+                patient_info.refresh_from_db()
 
-        # Project mapped fields into OMOP tables.  This runs outside the
-        # transaction so a projection failure does not roll back the
-        # PatientRecord write — the value is safely stored and projection
-        # can be retried when the mapping is re-approved.
-        if direct_fields:
-            self._project_mapped_fields(person, patient_info, direct_fields, patch_data)
-
-        return Response({**serializer.data, 'previous_values': previous_values})
+        return Response({**PatientRecordSerializer(patient_info).data, 'previous_values': previous_values})
 
     @staticmethod
     def _project_mapped_fields(person, patient_info, direct_fields, patch_data):
-        """Project user-edited values into OMOP for fields with approved mappings.
+        """Project validated edits using the editor's curated or built-in recipe.
 
-        Runs after the PatientRecord PATCH lands. For each patched field that
-        has an approved FieldConceptMapping, upserts the corresponding OMOP
-        clinical fact so derivation picks it up.  Fields without a mapping are
-        left in user_edited_fields for later projection when a mapping is
-        approved.
+        Each projection uses a savepoint so failure preserves the PatientRecord
+        edit for a later retry. Read-only fields never reach this path.
         """
-        from omop_core.models import FieldConceptMapping
-        from omop_core.services.omop_projection import project_single_value
-        from omop_core.services.write_descriptor import mapping_target_for
+        from omop_core.services.omop_projection import project_single_value, projection_for_descriptor
+        from omop_core.services.write_descriptor import build_writable_field_descriptor
 
-        mappings = {
-            m.field_name: m
-            for m in FieldConceptMapping.objects.filter(
-                field_name__in=list(direct_fields),
-                status='approved',
-            ).exclude(omop_table='').select_related('concept')
-            if m.concept_id and mapping_target_for(m.omop_table)
-        }
-        if not mappings:
+        try:
+            with transaction.atomic():
+                descriptors = build_writable_field_descriptor()
+        except Exception:
+            logger.warning('Could not resolve OMOP projections', exc_info=True)
             return
-
-        projected_any = False
-        for field_name, mapping in mappings.items():
-            value = patch_data.get(field_name)
-            if value is None:
-                value = getattr(patient_info, field_name, None)
-            source_value = mapping.source_value or (
-                mapping.concept.concept_code if mapping.concept else None
-            )
-            if not source_value:
-                continue
-            projection = {
-                'omop_table': mapping_target_for(mapping.omop_table),
-                'concept_id': mapping.concept_id,
-                'type_concept_id': mapping.type_concept_id or 32817,
-                'source_value': source_value,
-            }
-            if project_single_value(person, field_name, value, projection):
-                projected_any = True
-
-        if projected_any:
-            try:
+        for field in direct_fields:
+            projection = projection_for_descriptor(descriptors.get(field))
+            if projection:
+                project_single_value(person, field, patch_data[field], projection)
+        try:
+            with transaction.atomic():
                 refresh_patient_record(person)
-            except Exception:
-                logger.warning(
-                    'Projection refresh failed for person %s', person.person_id,
-                    exc_info=True,
-                )
+        except Exception:
+            logger.warning('Projection refresh failed for person %s', person.pk, exc_info=True)
 
     @action(detail=True, methods=['get'], permission_classes=[ScopedTokenPermission, PatientSelfScopePermission])
     def provenance(self, request, pk=None):
@@ -1173,13 +1141,7 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get', 'patch', 'delete'], permission_classes=[PatientDeletePermission, PatientSelfScopePermission])
     def me(self, request):
-        """GET/DELETE the current user's record; PATCH name or projection-owned fields.
-
-        ``PatientRecord`` is a derived OMOP read model. This legacy endpoint
-        remains available for its read wire format. Mapped clinical fields are
-        read-only; ``patient_name`` updates ``Person`` and unmapped
-        projection-owned fields remain writable.
-        """
+        """Read, edit, or delete the current user's PatientRecord."""
         if request.method == 'DELETE':
             return self._delete_patient_account(request)
 
@@ -1221,63 +1183,9 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
                 'patient_name': full_name,
             })
 
-        patient_name, patch_data = _pop_patient_name(request.data)
-        mutations = patch_data.pop('genetic_mutations', None) if 'genetic_mutations' in patch_data else None
-        # See the provider PATCH route: unchanged projected mutations are an
-        # autosave echo and must not require write vocabulary concepts.
-        if mutations == PatientRecordSerializer(patient_info).data.get('genetic_mutations'):
-            mutations = None
-        echoed = _echoed_unchanged_fields(patient_info, patch_data)
-        mapped_fields = sorted((set(patch_data) & PATIENT_RECORD_OMOP_MAPPED_FIELDS) - echoed)
-        if mapped_fields:
-            return Response(
-                {
-                    'detail': (
-                        'OMOP-mapped PatientRecord fields are read-only. Write a complete '
-                        'clinical fact to the appropriate OMOP resource, then rederive the record.'
-                    ),
-                    'fields': mapped_fields,
-                },
-                status=status.HTTP_405_METHOD_NOT_ALLOWED,
-            )
-
-        serializer = PatientRecordSerializer(patient_info, data=patch_data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        writable_fields = {
-            name for name, field in serializer.fields.items() if not field.read_only
-        }
-        unsupported_fields = sorted(set(patch_data) - writable_fields - echoed)
-        if unsupported_fields:
-            return Response(
-                {'detail': 'Only projection-owned PatientRecord fields are writable.', 'fields': unsupported_fields},
-                status=status.HTTP_405_METHOD_NOT_ALLOWED,
-            )
-
-        if not patch_data and mutations is None and 'patient_name' not in request.data:
-            return Response(
-                {'detail': 'Supply patient_name or a projection-owned PatientRecord field.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        def previous_value(obj, field):
-            fk_id = f'{field}_id'
-            return getattr(obj, fk_id, None) if hasattr(obj, fk_id) else getattr(obj, field, None)
-
-        previous_values = {
-            field: previous_value(patient_info, field)
-            for field in patch_data
-            if hasattr(patient_info, field)
-        }
-        with transaction.atomic():
-            _apply_patient_name(person, patient_name)
-            if mutations is not None:
-                _write_genetic_mutations(person, mutations)
-                patient_info.refresh_from_db()
-            serializer.save()
-            _write_record_revisions(patient_info, previous_values, request)
-
+        response = self._patch_record(request, person, patient_info)
         return Response({
-            'patient_info': PatientRecordSerializer(patient_info).data,
+            'patient_info': {k: v for k, v in response.data.items() if k != 'previous_values'},
             'patient_name': f"{person.given_name or ''} {person.family_name or ''}".strip(),
         })
 

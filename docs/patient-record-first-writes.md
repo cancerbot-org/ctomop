@@ -45,7 +45,7 @@ Backend: PatientRecordSerializer.save()
     |
     +---> _project_mapped_fields()
     |       |
-    |       +---> For each patched field with an approved FieldConceptMapping:
+    |       +---> For each changed, validated field with a descriptor projection:
     |       |       project_single_value() upserts the OMOP fact
     |       |
     |       +---> refresh_patient_record() once at the end
@@ -113,11 +113,26 @@ across derivation. No `projection` key is present, so no OMOP fact is created.
 
 ### At PATCH time (`project_single_value`)
 
-When a field is patched and has an approved `FieldConceptMapping`, the backend
-calls `project_single_value()` to upsert the OMOP fact:
+Both the provider PATCH and `/patient-info/me/` use the same save path.
+Changed, validated fields use the writable descriptor, including built-in
+LOINC/SNOMED recipes and approved curated mappings, to call
+`project_single_value()`:
 
-- Upserts by `(person_id, source_value)` to avoid duplicates.
-- Updates the value on an existing fact; creates a new one if none exists.
+- Matches `(person_id, concept_id, source_value, current local date)`, excluding
+  erroneous rows. Repeated edits on the same day update that day's row, including
+  a matching imported row. Its original provenance is retained.
+- Creates a new row dated today when there is no matching row today. Earlier
+  dates remain unchanged as history.
+- Carries the descriptor's value kind, units, and unit concept into the fact.
+- Serializes same-day writes with database locks. Projection uses a savepoint,
+  so a failed projection leaves the PatientRecord edit pending.
+- A cleared Measurement or Observation stores null answer columns with
+  `value_source_value = "PatientRecord:cleared"`. Derivation excludes that row
+  and preceding rows with the same concept/source key, without changing stored
+  history. A subsequent day's result becomes current; correcting today's clear
+  reuses today's row and removes the marker.
+- Occurrence tables cannot express null or negative answers. Such edits remain
+  pending on PatientRecord until an appropriate answer mapping is available.
 - Sets `_skip_patient_record_refresh = True` on the OMOP instance to avoid
   recursive derivation.
 - One `refresh_patient_record()` call at the end picks up all projected facts.
@@ -126,14 +141,17 @@ calls `project_single_value()` to upsert the OMOP fact:
 
 When a curator approves a `FieldConceptMapping`, the `post_save` signal triggers
 `project_field_to_omop()`, which backfills all PatientRecords that have a
-user-edited value for that field.
+pending user-edited value for that field. It filters by `user_edited_fields`,
+not by comparing typed columns to an empty string, and uses the same dated
+writer and unit recipe as PATCH. Records with no pending edits are untouched.
 
 ## Derivation Preservation
 
 `refresh_patient_record()` snapshots `user_edited_fields` before derivation and
-restores values that derivation produced nothing for. Once an OMOP fact exists
-(from projection or any other source), derivation wins and the field drops from
-`user_edited_fields`.
+restores pending values, including nulls, until derivation represents the saved
+value. Matching fields drop from `user_edited_fields`; stale facts cannot erase
+a pending edit after a projection failure. Dependent calculations run after
+pending values are restored.
 
 ## Frontend Simplification
 
@@ -184,7 +202,7 @@ fields into two buckets:
    PatientRecord write. The value is safely stored and projection can be retried.
 
 3. **Derivation cannot overwrite user edits** — `user_edited_fields` tracking
-   ensures user values persist until an OMOP fact backs them.
+   ensures user values persist until derivation represents the saved value.
 
 4. **Mapping approval triggers backfill** — existing user edits are projected
    when a mapping is approved, without any manual step.

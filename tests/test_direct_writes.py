@@ -76,7 +76,7 @@ class TestDerivationPreservesUserEdits:
         assert refreshed.hemoglobin_g_dl == 12.5
         assert 'hemoglobin_g_dl' in refreshed.user_edited_fields
 
-    def test_omop_fact_overrides_user_edit(self):
+    def test_unprojected_edit_is_not_overwritten_by_a_different_fact(self):
         person = PersonFactory()
         record = PatientRecordFactory(person=person, hemoglobin_g_dl=12.5)
         record.user_edited_fields = ['hemoglobin_g_dl']
@@ -98,10 +98,9 @@ class TestDerivationPreservesUserEdits:
 
         refreshed = refresh_patient_record(person)
 
-        # OMOP fact wins
-        assert refreshed.hemoglobin_g_dl == 14.0
-        # Field is cleaned from user_edited_fields since OMOP backs it now
-        assert 'hemoglobin_g_dl' not in (refreshed.user_edited_fields or [])
+        # A different fact does not prove that this pending edit was projected.
+        assert refreshed.hemoglobin_g_dl == 12.5
+        assert 'hemoglobin_g_dl' in refreshed.user_edited_fields
 
     def test_empty_user_edit_not_preserved(self):
         """A user-edited field with an empty value is not preserved."""
@@ -334,7 +333,7 @@ class TestProjectSingleValue:
         )
         assert m.value_as_number == 12.5
 
-    def test_skips_empty_value(self):
+    def test_records_explicit_empty_value(self):
         concept = self._setup_concept()
         person = PersonFactory()
         projection = {
@@ -346,7 +345,10 @@ class TestProjectSingleValue:
 
         result = project_single_value(person, 'planned_therapies', None, projection)
 
-        assert result is False
-        assert not Observation.objects.filter(
+        assert result is True
+        obs = Observation.objects.get(
             person=person, observation_source_value='planned-therapies',
-        ).exists()
+        )
+        from omop_core.services.omop_projection import CLEAR_VALUE
+        assert obs.value_source_value == CLEAR_VALUE
+        assert obs.value_as_string is None

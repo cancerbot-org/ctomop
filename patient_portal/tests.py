@@ -11160,11 +11160,12 @@ class MeEndpointGuardTest(TestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertIn('patient_info', resp.data)
 
-    def test_confirmed_patient_clinical_patch_returns_405(self):
+    def test_confirmed_patient_clinical_patch_saves(self):
         resp = self._client(self.patient_user).patch(
-            '/api/patient-info/me/', {'disease': 'not directly writable'}, format='json'
+            '/api/patient-info/me/', {'disease': 'Breast Cancer'}, format='json'
         )
-        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.assertEqual(resp.data['patient_info']['disease'], 'Breast Cancer')
 
     def test_confirmed_patient_can_update_own_name_without_writing_patient_record(self):
         before = PatientRecord.objects.get(person=self.patient_person).disease
@@ -11368,11 +11369,12 @@ class V1MeEndpointTest(TestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertIn('patient_info', resp.data)
 
-    def test_v1_confirmed_patient_clinical_patch_returns_405(self):
+    def test_v1_confirmed_patient_clinical_patch_saves(self):
         resp = self._client(self.patient_user).patch(
-            '/api/v1/patient-records/me/', {'disease': 'not directly writable'}, format='json'
+            '/api/v1/patient-records/me/', {'disease': 'Breast Cancer'}, format='json'
         )
-        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.assertEqual(resp.data['patient_info']['disease'], 'Breast Cancer')
 
     # --- guard: clinical users without a patient record are blocked -----------
 
