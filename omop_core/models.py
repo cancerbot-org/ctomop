@@ -4248,6 +4248,11 @@ class SuggestRun(models.Model):
 
     strategy_counts = models.JSONField(default=dict, blank=True)
     landed_in = models.JSONField(default=dict, blank=True)
+    # Snapshots, not references to mutable mappings: completed runs stay readable
+    # after a curator changes a destination or another run retries the source.
+    # Nullable so older web/worker instances can still insert runs during rollout.
+    selection = models.JSONField(default=dict, blank=True, null=True)
+    activity = models.JSONField(default=list, blank=True, null=True)
     model_version = models.CharField(max_length=20, blank=True, default='')
     error = models.TextField(blank=True, default='')
 

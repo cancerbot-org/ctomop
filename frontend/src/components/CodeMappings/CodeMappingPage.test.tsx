@@ -1081,6 +1081,9 @@ describe("CodeMappingPage", () => {
           "Done — wrote 3 new destination(s) across 5 code(s).",
         ));
       expect(screen.getByTestId("suggest-progress")).toHaveTextContent("5/5");
+      const logLink = within(screen.getByTestId("suggest-progress")).getByRole("link", { name: "View run log" });
+      expect(logLink).toHaveAttribute("href", expect.stringContaining("/code-mappings/suggest-runs/"));
+      expect(logLink).toHaveAttribute("target", "_blank");
     });
 
     it("says so when nothing on the tab is awaiting a suggestion", async () => {
