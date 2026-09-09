@@ -9894,6 +9894,17 @@ def _serialize_suggest_run(run, *, include_activity=False):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def code_mapping_latest_suggest_run(request):
+    """Recover the latest saved run link after navigation or a page reload."""
+    if not _can_manage_field_mappings(request.user):
+        return Response({'detail': 'Organization admin access required.'},
+                        status=status.HTTP_403_FORBIDDEN)
+    run = SuggestRun.objects.only('id').order_by('-created_at', '-id').first()
+    return Response({'run_id': str(run.id) if run else None})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def code_mapping_suggest_run(request, run_id):
     """Progress of one queued Suggest run."""
     if not _can_manage_field_mappings(request.user):

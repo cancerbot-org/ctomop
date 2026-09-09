@@ -782,6 +782,20 @@ class TestSuggestRunLifecycle:
         assert poll.data['run_id'] == run_id
         assert poll.data['state'] == 'queued'
 
+    def test_latest_saved_run_is_discoverable_after_completion(self):
+        from omop_core.models import SuggestRun
+        path = '/api/v1/code-mappings/suggest-runs/latest/'
+        assert self.client.get(path).data == {'run_id': None}
+        SuggestRun.objects.create(state='success')
+        latest = SuggestRun.objects.create(state='success', activity=[{'message': 'Saved log'}])
+        response = self.client.get(path)
+        assert response.status_code == 200
+        assert response.data == {'run_id': str(latest.id)}
+        log = self.client.get(f'/api/v1/code-mappings/suggest-runs/{latest.id}/?include_activity=1')
+        assert log.data['activity'] == [{'message': 'Saved log'}]
+        self.client.force_authenticate(user=None)
+        assert self.client.get(path).status_code in (401, 403)
+
     def test_an_unknown_run_is_404_not_a_stuck_bar(self):
         import uuid as _uuid
         resp = self.client.get(f'/api/v1/code-mappings/suggest-runs/{_uuid.uuid4()}/')

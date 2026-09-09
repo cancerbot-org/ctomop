@@ -503,6 +503,7 @@ export default function CodeMappingPage() {
   const [searchingConcepts, setSearchingConcepts] = useState(false);
   const [checkingUmls, setCheckingUmls] = useState(false);
   const [umlsCheckMessage, setUmlsCheckMessage] = useState("");
+  const [suggestionMessage, setSuggestionMessage] = useState("");
   const [repointing, setRepointing] = useState<{ from: string; to: string } | null>(null);
   const [repointResult, setRepointResult] = useState<RepointResult | null>(null);
   const [replaceExisting, setReplaceExisting] = useState(false);
@@ -511,6 +512,15 @@ export default function CodeMappingPage() {
   // is in flight; `flash` marks the moment it finished so the strip can announce
   // itself before settling into the banner.
   const [suggestRun, setSuggestRun] = useState<SuggestRunProgress | null>(null);
+  const [latestRunId, setLatestRunId] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    api.get<{ run_id: string | null }>("/v1/code-mappings/suggest-runs/latest/")
+      .then(({ data }) => { if (active) setLatestRunId(data.run_id || null); })
+      .catch(() => { /* Older deployments may not yet expose saved-run discovery. */ });
+    return () => { active = false; };
+  }, []);
+
   const [suggestFlash, setSuggestFlash] = useState(false);
   // Which run the page is still interested in. A poll compares against this so
   // a superseded run — or an unmounted page — stops rather than setting state
@@ -745,6 +755,7 @@ export default function CodeMappingPage() {
   }, [reference, form.domain_id, form.source_vocabulary_id]);
 
   const openNewDialog = () => {
+    setSuggestionMessage("");
     dialogRequest.current += 1;
     setError("");
     setSearchingConcepts(false);
@@ -760,6 +771,7 @@ export default function CodeMappingPage() {
   };
 
   const openEditDialog = (row: CodeMappingRow) => {
+    setSuggestionMessage("");
     dialogRequest.current += 1;
     setError("");
     setSearchingConcepts(false);
@@ -775,6 +787,7 @@ export default function CodeMappingPage() {
   };
 
   const closeDialog = () => {
+    setSuggestionMessage("");
     dialogRequest.current += 1;
     setError("");
     setSearchingConcepts(false);
@@ -789,6 +802,7 @@ export default function CodeMappingPage() {
   };
 
   const setField = (field: keyof MappingForm, value: string) => {
+    if (field.startsWith("source_") || field.startsWith("destination_")) setSuggestionMessage("");
     if (["source_code", "source_vocabulary_id", "source_code_description"].includes(field)) {
       dialogRequest.current += 1;
       setSearchingConcepts(false);
@@ -803,6 +817,7 @@ export default function CodeMappingPage() {
    * systems are plausible, and which OMOP table the fact lands in.
    */
   const setDomain = (domainId: string) => {
+    setSuggestionMessage("");
     dialogRequest.current += 1;
     setSearchingConcepts(false);
     setCheckingUmls(false);
@@ -823,6 +838,7 @@ export default function CodeMappingPage() {
 
   /** Apply a concept to the form: id, name, code, vocabulary, class, standard flag. */
   const applyConcept = (concept: ConceptResult, adoptDomain = false) => {
+    setSuggestionMessage("");
     setForm((prev) => {
       // A concept only supplies the domain when the curator has not chosen one;
       // Domain is theirs, and the table follows from it, not from the concept.
@@ -910,6 +926,7 @@ export default function CodeMappingPage() {
   };
 
   const suggestCurrentCode = async () => {
+    setSuggestionMessage("");
     const request = ++dialogRequest.current;
     setCheckingUmls(false);
     setError("");
@@ -924,7 +941,7 @@ export default function CodeMappingPage() {
       if (request !== dialogRequest.current) return;
       if (data.suggested) {
         applyConcept(data.suggested);
-        setBanner(`Suggested via ${data.strategy_used || "waterfall"}.`);
+        setSuggestionMessage(`Suggested via ${data.strategy_used || "waterfall"}.`);
       } else setError(data.note || "No suggestion found.");
     } catch { if (request === dialogRequest.current) setError("Failed to suggest a destination concept."); }
     finally { if (request === dialogRequest.current) setSearchingConcepts(false); }
@@ -1075,6 +1092,7 @@ export default function CodeMappingPage() {
       );
       suggestRunRef.current = started.run_id;
       setSuggestRun(started);
+      setLatestRunId(started.run_id);
       const finished = await pollSuggestRun(started);
       if (suggestRunRef.current !== started.run_id) return;
       setSuggestRun(finished);
@@ -1094,7 +1112,6 @@ export default function CodeMappingPage() {
         ? Object.values(detail).map(String).join(" ")
         : "";
       setError(message || "Failed to suggest mappings.");
-      setSuggestRun(null);
     } finally {
       setSuggesting(false);
     }
@@ -1535,6 +1552,13 @@ export default function CodeMappingPage() {
           </section>
         </div>
 
+        {!suggestRun && latestRunId && (
+          <div className="mb-4 text-sm">
+            <Link to={`/code-mappings/suggest-runs/${latestRunId}`} target="_blank" rel="noopener noreferrer"
+              className="font-medium text-sky-700 underline hover:text-sky-900">View latest batch run log</Link>
+          </div>
+        )}
+
         {/* Directly under the Suggest button, because that is where the eye
             already is when the wait starts. The run is queued and a code costs
             ~3.5s, so a spinner alone would leave a curator unable to tell a
@@ -1884,6 +1908,12 @@ export default function CodeMappingPage() {
                       </>
                     )}
                   </div>
+                )}
+
+                {suggestionMessage && (
+                  <p role="status" className="mb-3 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800">
+                    {suggestionMessage}
+                  </p>
                 )}
 
                 {/* Search sits at the top: picking a concept fills everything below it. */}
