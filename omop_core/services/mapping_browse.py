@@ -28,9 +28,16 @@ def canonical_source(source):
 def browse_mappings(mappings, params, serialize):
     # Counts use the same Athena de-duplication as the visible rows.
     counts = {}
+    section_counts = {}
     for group in mappings.order_by().values('source_vocabulary_id', 'status', 'origin_system').annotate(n=Count('pk')):
         source = canonical_source(group['source_vocabulary_id'])
         bucket = counts.setdefault(source, dict(proposed=0, approved=0, athena=0))
+        totals = section_counts.setdefault(source, dict(unmapped=0, mapped=0, athena=0, rejected=0, athena_rejected=0))
+        section = ('athena_rejected' if group['origin_system'] == 'athena' and group['status'] == 'rejected' else
+                   'athena' if group['origin_system'] == 'athena' else
+                   'mapped' if group['status'] == 'approved' else
+                   'rejected' if group['status'] == 'rejected' else 'unmapped')
+        totals[section] += group['n']
         key = 'athena' if group['origin_system'] == 'athena' else group['status']
         if key in bucket:
             bucket[key] += group['n']
@@ -70,7 +77,19 @@ def browse_mappings(mappings, params, serialize):
         if search.isdigit():
             query |= Q(target_concept_id__icontains=search)
         filtered = filtered.filter(query)
-    rejected = filtered.filter(status='rejected').exclude(origin_system='athena').count()
+    if search:
+        totals = filtered.aggregate(
+            unmapped=Count('pk', filter=~Q(origin_system='athena') & ~Q(status__in=['approved', 'rejected'])),
+            mapped=Count('pk', filter=~Q(origin_system='athena') & Q(status='approved')),
+            athena=Count('pk', filter=Q(origin_system='athena') & ~Q(status='rejected')),
+            rejected=Count('pk', filter=~Q(origin_system='athena') & Q(status='rejected')),
+            athena_rejected=Count('pk', filter=Q(origin_system='athena', status='rejected')),
+        )
+    else:
+        selected_counts = section_counts.values() if source == OVERALL else [section_counts.get(canonical_source(source), {})]
+        totals = {key: sum(bucket.get(key, 0) for bucket in selected_counts)
+                  for key in ('unmapped', 'mapped', 'athena', 'rejected', 'athena_rejected')}
+    rejected = totals['rejected']
     if params.get('show_rejected') != 'true':
         filtered = filtered.exclude(status='rejected')
     section_queries = {
@@ -78,7 +97,9 @@ def browse_mappings(mappings, params, serialize):
         'Mapped': filtered.exclude(origin_system='athena').filter(status='approved'),
         'Athena Mapped': filtered.filter(origin_system='athena'),
     }
-    pages, results = {}, []
+    pages, selected_ids = {}, []
+    section_totals = [totals['unmapped'] + (rejected if params.get('show_rejected') == 'true' else 0),
+                      totals['mapped'], totals['athena'] + (totals['athena_rejected'] if params.get('show_rejected') == 'true' else 0)]
     for index, (section, query) in enumerate(section_queries.items()):
         try:
             requested_page = max(1, int(params.get(f'page_{index}', 1)))
@@ -88,7 +109,7 @@ def browse_mappings(mappings, params, serialize):
         field = ORDER_FIELDS.get(order.lstrip('-'))
         if field is None:
             raise ValidationError({'order': 'Unknown sort column.'})
-        total = query.count()
+        total = section_totals[index]
         page = min(requested_page, max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE))
         # Correlated destination counts and retirement lookups run only on the
         # bounded page unless the curator explicitly sorts by destination count.
@@ -96,10 +117,11 @@ def browse_mappings(mappings, params, serialize):
             query = with_destination_counts(query)
         ordering = F(field).desc(nulls_last=True) if order.startswith('-') else F(field).asc(nulls_last=True)
         ids = list(query.order_by(ordering, 'source_code', 'id').values_list('pk', flat=True)[(page - 1) * PAGE_SIZE:page * PAGE_SIZE])
-        page_rows = {row.pk: row for row in with_destination_counts(mappings.filter(pk__in=ids))}
-        # A concurrent delete or Athena import can remove a selected ID.
-        results.extend(page_rows[pk] for pk in ids if pk in page_rows)
+        selected_ids.extend(ids)
         pages[section] = dict(page=page, page_size=PAGE_SIZE, total=total)
+    # Load all three bounded sections together, preserving their selected order.
+    page_rows = {row.pk: row for row in with_destination_counts(mappings.filter(pk__in=selected_ids))}
+    results = [page_rows[pk] for pk in selected_ids if pk in page_rows]
     metadata = mapping_source_retirement(results + duplicates)
 
     def render(row):
