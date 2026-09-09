@@ -1535,9 +1535,6 @@ export default function CodeMappingPage() {
               </label>
             </span>
           ))}
-          {suggestModelVersion && (
-            <span className="text-xs font-medium text-slate-500">suggest {suggestModelVersion}</span>
-          )}
           <label className="inline-flex items-center gap-1 text-xs text-slate-600">
             <input
               type="checkbox"
@@ -1549,8 +1546,7 @@ export default function CodeMappingPage() {
           </label>
           <section aria-label="Suggestion accuracy" className="ml-auto flex max-w-full shrink-0 flex-wrap divide-x rounded-md border border-slate-200 bg-slate-50 text-right text-xs">
             <div className="px-3 py-2 text-left text-slate-500">
-              <div>Review counts: all models</div>
-              <div>Metrics: {selectedAccuracy?.model_version ? `suggest ${selectedAccuracy.model_version}` : "no model reviews"}</div>
+              <div>Metrics: {selectedAccuracy?.model_version ? selectedAccuracy.model_version : "no model reviews"}</div>
             </div>
             {([
               ['Approved', reviewTotals?.approved],
