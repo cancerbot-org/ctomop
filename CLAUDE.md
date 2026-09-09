@@ -737,17 +737,21 @@ If `remoteEntry.js` returns 500 on staging, check that `WHITENOISE_ROOT` points 
 
 ---
 
-## Copying Field Mappings Between Instances
+## Copying Curation Between Instances
 
-`copy_field_mappings` moves the field-mapping curation from another PRomop
-instance into this one. The curation is manual reviewer work, so it is copied
+`copy_curation` moves hand-curated mapping data from another PRomop instance
+into this one — both the `/field-mappings` tables and, opt-in, the
+`/code-mappings` table. The curation is manual reviewer work, so it is copied
 rather than redone.
+
+It was named `copy_field_mappings` until it grew the second screen; the old
+name is gone, not aliased.
 
 ```bash
 SOURCE_DATABASE_URL="postgresql://..." \
-  .venv/bin/python manage.py copy_field_mappings --dry-run
+  .venv/bin/python manage.py copy_curation --dry-run
 SOURCE_DATABASE_URL="postgresql://..." \
-  .venv/bin/python manage.py copy_field_mappings
+  .venv/bin/python manage.py copy_curation
 ```
 
 Destination is `DATABASE_URL`. The source is opened as a second connection
@@ -767,21 +771,43 @@ included explicitly with `--tables`:
 | `FieldChoice` + `FieldChoiceCode` | `(field_name, display)`; codes are replaced wholesale |
 | `FieldFormula` | `field_name` |
 | `FieldSynonym` | `(field_name, synonym_text)` |
+| `SourceCodeConceptMapping` | `(source_vocabulary_id, source_code)` — see below |
 
 `--dry-run` rolls back, and `--prune` also deletes local rows the source lacks
 (off by default, so a copy is additive). Everything runs in one transaction
 against the local database. To migrate the entire related curation set, pass
 `--tables mappings custom_fields choices formulas synonyms`.
 
+### Code mappings are opt-in
+
+`--tables code_mappings` copies `SourceCodeConceptMapping` — the
+**`/code-mappings`** screen, not `/field-mappings`. Never in the default set:
+ingest reads that table (`services/code_mapping.resolve_source_code`), so an
+approved row decides what a later import resolves to. Copying one changes ingest
+behaviour; `--prune` deletes live resolution rules.
+
+There are also seven file-based loaders for this table (`load_mappings`,
+`import_*_crossmaps`, `sync_athena_mappings`). Prefer those where one fits — an
+artifact diffs in git.
+
+Two rules apply to this table only:
+
+- **All three concept FKs are re-resolved** (`source_concept`, `target_concept`,
+  `suggested_target_concept`). They are `db_constraint=False`, so a stale source
+  id would be *accepted* and silently name a different concept. Unresolvable
+  references are nulled and warned about.
+- **`occurrence_count` / `first_seen` / `last_seen` are not copied** — they count
+  this deployment's own ingest traffic.
+
 Two things deliberately do not survive the trip:
 
 - **Row IDs.** Matching is on the natural key — the two instances number rows
   independently.
-- **`reviewer` / `created_by`.** These point at `Identity` rows whose IDs mean a
-  different person on each instance, so they are cleared. A wrong attribution is
-  worse than none.
+- **`reviewer` / `created_by` / `updated_by`.** These point at `Identity` rows
+  whose IDs mean a different person on each instance, so they are cleared. A
+  wrong attribution is worse than none.
 
-The concept FK is **re-resolved by `(vocabulary_id, concept_code)`**, not copied
+Concept FKs are **re-resolved by `(vocabulary_id, concept_code)`**, not copied
 as an id. Athena concept ids are stable across instances, but locally minted
 concepts (`Concept.source == 'HealthKey'`) are numbered per instance, so the
 same id can name a different concept on the target. A concept the target has
@@ -790,7 +816,7 @@ mapping still lands.
 
 Logic lives in `omop_core/services/field_curation_transfer.py`, split into
 `read_payload(using)` and `apply_payload(payload)` so the round trip is testable
-without a second test database (`tests/test_copy_field_mappings.py`).
+without a second test database (`tests/test_copy_curation.py`).
 
 ---
 
