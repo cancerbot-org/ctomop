@@ -10002,11 +10002,15 @@ def code_mapping_reference(request):
     return Response(_code_mapping_reference_payload())
 
 
-def _suggestion_accuracy_payload(queryset, model_version=None):
-    """Compute review-based accuracy for one immutable suggestion model."""
-    if model_version:
-        queryset = queryset.filter(suggestion_model_version=model_version)
-    counts = dict(queryset.values_list('suggestion_outcome').annotate(total=Count('id')))
+def _suggestion_review_totals(counts):
+    return {
+        'approved': counts.get('accepted', 0),
+        'rejected': counts.get('rejected', 0),
+        'overridden': counts.get('overridden', 0),
+    }
+
+
+def _suggestion_accuracy_from_counts(counts):
     accepted = counts.get('accepted', 0)
     overridden = counts.get('overridden', 0)
     rejected = counts.get('rejected', 0)
@@ -10023,7 +10027,7 @@ def _suggestion_accuracy_payload(queryset, model_version=None):
         'approved': accepted,
         'overridden': overridden,
         'rejected': rejected,
-        'suggestions': queryset.count(),
+        'suggestions': sum(counts.values()),
         'reviewed': precision_denominator,
         'precision': precision,
         'recall': recall,
@@ -10031,14 +10035,23 @@ def _suggestion_accuracy_payload(queryset, model_version=None):
     }
 
 
+def _suggestion_accuracy_payload(queryset, model_version=None):
+    if model_version:
+        queryset = queryset.filter(suggestion_model_version=model_version)
+    counts = dict(queryset.values_list('suggestion_outcome').annotate(total=Count('id')))
+    return _suggestion_accuracy_from_counts(counts)
+
+
+def _suggestion_version_key(version):
+    try:
+        return tuple(int(part) for part in version.removeprefix('v').split('.'))
+    except ValueError:
+        return (0,)
+
+
 def _suggestion_versions(queryset):
-    def key(version):
-        try:
-            return tuple(int(part) for part in version.removeprefix('v').split('.'))
-        except ValueError:
-            return (0,)
     return sorted(queryset.exclude(suggestion_model_version='').values_list(
-        'suggestion_model_version', flat=True).distinct(), key=key, reverse=True)
+        'suggestion_model_version', flat=True).distinct(), key=_suggestion_version_key, reverse=True)
 
 
 @api_view(['GET'])
@@ -10047,28 +10060,35 @@ def code_mapping_accuracy(request):
     """Suggestion quality, grouped by incoming source vocabulary and overall."""
     if not _can_manage_field_mappings(request.user):
         return Response({'detail': 'Organization admin access required.'}, status=status.HTTP_403_FORBIDDEN)
-    base = SourceCodeConceptMapping.objects.filter(suggestion_model_version__gt='')
-    latest = (_suggestion_versions(base) or [None])[0]
+    from collections import Counter, defaultdict
+    from omop_core.services.mapping_browse import canonical_source
 
-    # Group by canonical vocabulary (after merging aliases like ICD10CM→ICD10).
-    vocab_groups: dict[str, list[str]] = {}
-    for vocabulary_id in base.values_list('source_vocabulary_id', flat=True).distinct():
-        canonical = source_vocabularies.ICD10CM_MERGE.get(vocabulary_id, vocabulary_id) or ''
-        vocab_groups.setdefault(canonical, []).append(vocabulary_id)
+    # One small grouped query replaces several round trips for every tab.
+    grouped = SourceCodeConceptMapping.objects.filter(suggestion_model_version__gt='').order_by().values(
+        'source_vocabulary_id', 'suggestion_model_version', 'suggestion_outcome',
+    ).annotate(total=Count('id'))
+    sources = defaultdict(lambda: defaultdict(Counter))
+    overall_versions = defaultdict(Counter)
+    for group in grouped:
+        source = canonical_source(group['source_vocabulary_id'])
+        version, outcome, total = (group['suggestion_model_version'], group['suggestion_outcome'], group['total'])
+        sources[source][version][outcome] += total
+        overall_versions[version][outcome] += total
 
-    by_source_vocabulary = {}
-    for canonical, raw_vocabs in vocab_groups.items():
-        scoped = base.filter(source_vocabulary_id__in=raw_vocabs)
-        version = (_suggestion_versions(scoped) or [None])[0]
-        payload = _suggestion_accuracy_payload(scoped, version)
-        payload['model_version'] = version
-        by_source_vocabulary[canonical] = payload
+    def snapshot(versions):
+        latest = max(versions, key=_suggestion_version_key, default=None)
+        totals = Counter()
+        for counts in versions.values():
+            totals.update(counts)
+        return {
+            **_suggestion_accuracy_from_counts(versions.get(latest, {})),
+            'model_version': latest,
+            'review_totals': _suggestion_review_totals(totals),
+        }
 
-    overall = _suggestion_accuracy_payload(base, latest)
-    overall['model_version'] = latest
     return Response({
-        'overall': overall,
-        'by_source_vocabulary': by_source_vocabulary,
+        'overall': snapshot(overall_versions),
+        'by_source_vocabulary': {source: snapshot(versions) for source, versions in sources.items()},
         'suggest_model_version': SUGGESTION_MODEL_VERSION,
     })
 
