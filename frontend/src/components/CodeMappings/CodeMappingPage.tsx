@@ -122,6 +122,7 @@ interface RepointResult {
 }
 
 interface SuggestionAccuracy {
+  latest_reviewed?: SuggestionAccuracy | null;
   review_totals?: { approved: number; rejected: number; overridden: number };
   model_version?: string | null;
   accepted: number;
@@ -641,13 +642,12 @@ export default function CodeMappingPage() {
 
   const selectedVocabulary = activeVocabulary ?? browse?.selected_source ?? defaultVocabulary;
   const overallTab = selectedVocabulary === OVERALL_TAB;
-  // A vocabulary with no suggestions of its own still needs to show the
-  // current model's live score; otherwise the dashboard has data while the
-  // main curation page misleadingly shows dashes.
+  // Keep the latest reviewed model visible while a newer model awaits reviews.
   const scopedAccuracy = overallTab
     ? accuracy?.overall
     : accuracy?.by_source_vocabulary?.[selectedVocabulary];
-  const selectedAccuracy = scopedAccuracy ?? accuracy?.overall;
+  const modelAccuracy = scopedAccuracy ?? accuracy?.overall;
+  const selectedAccuracy = modelAccuracy?.latest_reviewed ?? modelAccuracy;
   // An empty-string key is the Uncoded bucket. Never borrow another tab's
   // reviews when this tab has none. The fallback supports older API responses.
   const reviewTotals = scopedAccuracy?.review_totals ?? scopedAccuracy;
@@ -1547,6 +1547,7 @@ export default function CodeMappingPage() {
           <section aria-label="Suggestion accuracy" className="ml-auto flex max-w-full shrink-0 flex-wrap divide-x rounded-md border border-slate-200 bg-slate-50 text-right text-xs">
             <div className="px-3 py-2 text-left text-slate-500">
               <div>Metrics: {selectedAccuracy?.model_version ? selectedAccuracy.model_version : "no model reviews"}</div>
+              {selectedAccuracy && <div>{selectedAccuracy.reviewed ? `${selectedAccuracy.reviewed} model reviews` : "Awaiting model reviews"}</div>}
             </div>
             {([
               ['Approved', reviewTotals?.approved],

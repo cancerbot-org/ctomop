@@ -107,3 +107,68 @@ def test_accuracy_uses_one_query_for_all_vocabularies():
     assert response.data['by_source_vocabulary']['']['review_totals']['rejected'] == 1
     assert response.data['by_source_vocabulary']['ICD10']['review_totals']['rejected'] == 2
     assert response.data['by_source_vocabulary']['OpenWearables']['review_totals']['rejected'] == 2
+
+
+@pytest.mark.parametrize(('outcomes', 'expected'), [
+    ([''], (None, None, None)),
+    (['rejected'], (0, 0, 0)),
+    (['overridden'], (0, 0, 0)),
+    (['rejected', 'overridden', ''], (0, 0, 0)),
+    (['accepted'], (1, 1, 1)),
+    (['accepted', 'rejected', 'overridden', ''], (1 / 3, 1 / 2, 0.4)),
+])
+def test_current_model_metrics_match_history(outcomes, expected):
+    from rest_framework.test import APIClient
+    from omop_core.mapping.suggestions import SUGGESTION_MODEL_VERSION
+
+    for index, outcome in enumerate(outcomes):
+        SourceCodeConceptMapping.objects.create(
+            source_vocabulary_id='LOINC', source_code=f'metric-{index}',
+            suggestion_model_version=SUGGESTION_MODEL_VERSION,
+            suggestion_outcome=outcome,
+        )
+    client = APIClient()
+    client.force_authenticate(Identity.objects.create_user(email='metrics@example.test', is_staff=True))
+    main = client.get('/api/v1/code-mappings/accuracy/').data
+    history = client.get('/api/v1/code-mappings/accuracy/dashboard/').data['models']
+    model = next(row for row in history if row['model_version'] == SUGGESTION_MODEL_VERSION)
+    for metrics in (main['overall'], main['by_source_vocabulary']['LOINC'], model):
+        assert metrics['suggestions'] == len(outcomes)
+        assert metrics['reviewed'] == sum(bool(outcome) for outcome in outcomes)
+        for key, value in zip(('precision', 'recall', 'f1'), expected):
+            if value is None:
+                assert metrics[key] is None
+            else:
+                assert metrics[key] == pytest.approx(value)
+
+
+def test_two_approved_suggestions_remain_perfect_when_new_model_has_no_reviews():
+    from rest_framework.test import APIClient
+
+    SourceCodeConceptMapping.objects.bulk_create([
+        SourceCodeConceptMapping(
+            source_vocabulary_id='ICD10', source_code=f'staging-{index}',
+            suggestion_model_version=version, suggestion_outcome=outcome,
+            status='approved' if outcome else 'proposed',
+        )
+        for index, (version, outcome) in enumerate([
+            ('v0.2', 'accepted'), ('v0.2', 'accepted'),
+            ('v0.2', ''), ('v0.3', ''),
+        ])
+    ])
+    client = APIClient()
+    client.force_authenticate(Identity.objects.create_user(email='staging-metrics@example.test', is_staff=True))
+    main = client.get('/api/v1/code-mappings/accuracy/').data
+    for snapshot in (main['overall'], main['by_source_vocabulary']['ICD10']):
+        assert snapshot['model_version'] == 'v0.3'
+        latest_reviewed = snapshot['latest_reviewed']
+        assert latest_reviewed['model_version'] == 'v0.2'
+        assert latest_reviewed['reviewed'] == 2
+        assert (latest_reviewed['precision'], latest_reviewed['recall'], latest_reviewed['f1']) == (1, 1, 1)
+    history = client.get('/api/v1/code-mappings/accuracy/dashboard/').data['models']
+    reviewed = next(model for model in history if model['model_version'] == 'v0.2')
+    assert reviewed['approved'] == reviewed['reviewed'] == 2
+    assert (reviewed['precision'], reviewed['recall'], reviewed['f1']) == (1, 1, 1)
+    current = next(model for model in history if model['model_version'] == 'v0.3')
+    assert current['reviewed'] == 0
+    assert (current['precision'], current['recall'], current['f1']) == (None, None, None)

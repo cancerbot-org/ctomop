@@ -10028,11 +10028,11 @@ def _suggestion_accuracy_from_counts(counts):
     precision_denominator = accepted + overridden + rejected
     recall_denominator = accepted + overridden
     precision = accepted / precision_denominator if precision_denominator else None
-    recall = accepted / recall_denominator if recall_denominator else None
-    f1 = (
-        2 * precision * recall / (precision + recall)
-        if precision is not None and recall is not None and precision + recall else None
-    )
+    # Use zero for a reviewed model with no positive outcomes; reserve null
+    # for models still awaiting their first review.
+    recall = (accepted / recall_denominator if recall_denominator else 0.0) if precision_denominator else None
+    f1_denominator = 2 * accepted + 2 * overridden + rejected
+    f1 = 2 * accepted / f1_denominator if f1_denominator else None
     return {
         'accepted': accepted,
         'approved': accepted,
@@ -10091,7 +10091,16 @@ def code_mapping_accuracy(request):
         totals = Counter()
         for counts in versions.values():
             totals.update(counts)
+        reviewed_version = max(
+            (version for version, counts in versions.items()
+             if any(counts.get(outcome, 0) for outcome in ('accepted', 'overridden', 'rejected'))),
+            key=_suggestion_version_key, default=None,
+        )
         return {
+            'latest_reviewed': {
+                **_suggestion_accuracy_from_counts(versions[reviewed_version]),
+                'model_version': reviewed_version,
+            } if reviewed_version else None,
             **_suggestion_accuracy_from_counts(versions.get(latest, {})),
             'model_version': latest,
             'review_totals': _suggestion_review_totals(totals),
