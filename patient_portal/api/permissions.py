@@ -69,6 +69,29 @@ _WRITE_SCOPES = frozenset(('patient/*.write', 'user/*.write'))
 _VOCAB_READ_SCOPES = _READ_SCOPES | frozenset(('system/*.read',))
 
 
+def _grant_allows(method: str, scope: str,
+                  read_scopes: frozenset[str] = _READ_SCOPES) -> bool:
+    """Does this SMART grant cover the method? Write scopes do not imply read."""
+    token_scopes = frozenset(scope.split())
+    if method in _SAFE_METHODS:
+        return bool(token_scopes & read_scopes)
+    return bool(token_scopes & _WRITE_SCOPES)
+
+
+def service_token_allows(request,
+                         read_scopes: frozenset[str] = _READ_SCOPES) -> bool:
+    """The shared service token has staff rights unless a deployment narrows it.
+
+    Every permission class that a service token can reach must ask this, role
+    only ones included. The token resolves to a staff identity, so a class that
+    checks is_staff alone would let a narrowed token through.
+    """
+    scopes: str | None = getattr(settings, 'SERVICE_AUTH_SCOPES', None)
+    if scopes is None:
+        return True
+    return _grant_allows(request.method, scopes, read_scopes)
+
+
 class ScopedTokenPermission(BasePermission):
     """
     Enforces SMART on FHIR read/write scopes based on HTTP method.
@@ -108,10 +131,7 @@ class ScopedTokenPermission(BasePermission):
         token = request.auth
 
         if is_service_token(request):
-            scopes: str | None = getattr(settings, 'SERVICE_AUTH_SCOPES', None)
-            if scopes is None:
-                return True
-            return self.has_scopes(request.method, scopes)
+            return service_token_allows(request, self.read_scopes)
 
         # Partner-auth (Firebase, SAML) and session-auth: role-based enforcement.
         if token is None or isinstance(token, TokenClaims):
@@ -131,10 +151,7 @@ class ScopedTokenPermission(BasePermission):
         return self.has_scopes(request.method, token.scope)
 
     def has_scopes(self, method, scope):
-        token_scopes = frozenset(scope.split())
-        if method in _SAFE_METHODS:
-            return bool(token_scopes & self.read_scopes)
-        return bool(token_scopes & _WRITE_SCOPES)
+        return _grant_allows(method, scope, self.read_scopes)
 
 
 class VocabReadPermission(ScopedTokenPermission):
@@ -207,6 +224,8 @@ class IsStaffPermission(BasePermission):
     """Allow access only to staff users (is_staff=True)."""
 
     def has_permission(self, request, view):
+        if is_service_token(request):
+            return service_token_allows(request)
         return bool(
             request.user and
             request.user.is_authenticated and
@@ -315,6 +334,9 @@ class IsStaffOrOrgAdmin(BasePermission):
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
+
+        if is_service_token(request):
+            return service_token_allows(request)
 
         if getattr(request.user, 'is_staff', False):
             return True

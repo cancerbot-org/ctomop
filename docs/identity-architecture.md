@@ -615,6 +615,11 @@ and an explicitly empty value denies every request guarded by these
 permissions. Leave the variable unset for staff rights — a deployment that sets
 it to a read-only grant will see service writes return HTTP 403.
 
+The narrowing also covers the org administration endpoints, which gate on the
+staff role alone (`IsStaffPermission`, `IsStaffOrOrgAdmin`): they ask the same
+grant when the caller is the service token, so a scoped token cannot create or
+delete organizations, invitations, trusts or access grants.
+
 Staff rights here are view-level, and apply to every holder of the shared
 token. They do not solve caller-asserted identity attribution (#147). Use
 separate OAuth2 service clients for independently scoped and revocable grants.

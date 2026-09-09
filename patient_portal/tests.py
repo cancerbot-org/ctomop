@@ -10946,6 +10946,24 @@ class ServiceTokenOmopAccessTest(TestCase):
         self.assertTrue(identity.is_staff)
 
     @override_settings(SERVICE_AUTH_TOKEN='test-service-secret')
+    def test_bearer_org_admin_follows_the_grant(self):
+        """Org endpoints gate on the staff role alone, so a narrowed token must
+        be refused there too, not only on the scoped clinical endpoints."""
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION='Bearer test-service-secret')
+        with self.settings(SERVICE_AUTH_SCOPES=None):
+            resp = client.post(
+                '/api/orgs/', {'name': 'Svc Org', 'slug': 'svc-org'}, format='json')
+            self.assertEqual(resp.status_code, 201)
+        with self.settings(SERVICE_AUTH_SCOPES='patient/*.read'):
+            resp = client.post(
+                '/api/orgs/', {'name': 'Denied', 'slug': 'denied'}, format='json')
+            self.assertEqual(resp.status_code, 403)
+        with self.settings(SERVICE_AUTH_SCOPES=''):
+            self.assertEqual(client.get('/api/orgs/').status_code, 403)
+        self.assertFalse(Organization.objects.filter(slug='denied').exists())
+
+    @override_settings(SERVICE_AUTH_TOKEN='test-service-secret')
     def test_bearer_write_grant_can_be_removed(self):
         client = APIClient()
         client.credentials(HTTP_AUTHORIZATION='Bearer test-service-secret')

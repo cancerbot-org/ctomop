@@ -8,6 +8,8 @@ from django.utils import timezone
 
 from patient_portal.api.permissions import (
     SERVICE_TOKEN,
+    IsStaffOrOrgAdmin,
+    IsStaffPermission,
     LabSyncPermission,
     PatientCrudPermission,
     PatientDeletePermission,
@@ -47,6 +49,30 @@ def test_service_scopes(permission_class, method, scope, allowed_methods):
         allowed = False
     with override_settings(SERVICE_AUTH_SCOPES=scope):
         assert permission_class().has_permission(request, None) is allowed
+
+
+# Role only classes: the service identity is staff, so these must ask the
+# grant themselves or a narrowed token would still reach org administration.
+ROLE_PERMISSIONS = (IsStaffPermission, IsStaffOrOrgAdmin)
+
+
+@pytest.mark.parametrize('permission_class', ROLE_PERMISSIONS)
+@pytest.mark.parametrize('method', METHODS)
+@pytest.mark.parametrize('scope,allowed_methods', (
+    (None, METHODS),
+    ('', ()),
+    ('patient/*.read', ('GET', 'HEAD', 'OPTIONS')),
+    ('patient/*.write', ('POST', 'PUT', 'PATCH', 'DELETE')),
+))
+def test_role_only_permissions_honour_service_grant(
+        permission_class, method, scope, allowed_methods):
+    request = SimpleNamespace(
+        auth=SERVICE_TOKEN, method=method,
+        user=SimpleNamespace(is_authenticated=True, is_staff=True),
+    )
+    with override_settings(SERVICE_AUTH_SCOPES=scope):
+        allowed = permission_class().has_permission(request, None)
+    assert allowed is (method in allowed_methods)
 
 
 @pytest.mark.parametrize('permission_class', PERMISSIONS)
