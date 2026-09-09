@@ -50,6 +50,33 @@ QUEUED_MAX_CODES = 50
 INLINE_MAX_CODES = 3
 
 
+def selection_summary(params):
+    """Snapshot the policy used by _suggestable_queryset_ordered for this run."""
+    from omop_core.mapping.suggestions import SUGGESTION_MODEL_VERSION
+
+    return {
+        'order': (
+            'Codes without destinations first, regardless of provenance, ordered '
+            'by Seen count highest first. Then eligible replacements not yet tried '
+            'by this model version, followed by previously tried replacements, '
+            'each ordered by Seen count highest first. Ties prefer untried codes, '
+            'then source code ascending, then mapping row ID ascending.'
+        ),
+        'eligibility': (
+            'Proposed mappings only. Approved and rejected mappings are excluded. '
+            'Replacement mode also allows destinations set by previous suggestions; '
+            'imported destinations are not replaced.'
+        ),
+        'limit': params['limit'],
+        'source_vocabulary_id': params['source_vocabulary_id'],
+        'tables': params.get('tables') or [],
+        'strategies': params['strategies'],
+        'resuggest': params['resuggest'],
+        'dry_run': params['dry_run'],
+        'model_version': SUGGESTION_MODEL_VERSION,
+    }
+
+
 class SuggestDispatcher(Protocol):
     #: Ceiling on the codes one run may attempt under this dispatcher.
     max_codes: int
@@ -145,7 +172,16 @@ def execute_run(run_id: str, params: dict) -> None:
 
     SuggestRun.objects.filter(pk=run.pk).update(
         state=SuggestRun.RUNNING, model_version=SUGGESTION_MODEL_VERSION,
+        selection=selection_summary(params),
     )
+
+    events = list(run.activity or [])
+
+    def activity(event):
+        # All callbacks run on this thread. Persist immediately so other web
+        # processes can show the current code, and partial logs survive failure.
+        events.append({'at': timezone.now().isoformat(), **event})
+        SuggestRun.objects.filter(pk=run.pk).update(activity=events)
 
     # One call for the whole run. The rows carry their own clinical table, so
     # there is nothing to iterate per table -- and iterating applied `limit` to
@@ -180,8 +216,10 @@ def execute_run(run_id: str, params: dict) -> None:
             lexical_limit=params['lexical_limit'],
             resuggest=params['resuggest'],
             progress=progress,
+            activity=activity,
         )
     except Exception as exc:                      # noqa: BLE001 - record, never crash the worker
+        activity({'stage': 'failure', 'note': str(exc)[:2000]})
         SuggestRun.objects.filter(pk=run.pk).update(
             state=SuggestRun.FAILURE, error=str(exc)[:2000],
             finished_at=timezone.now(),
@@ -221,6 +259,7 @@ def execute_run(run_id: str, params: dict) -> None:
     except Exception:                             # noqa: BLE001 - a count must not fail a run
         remaining = 0
 
+    activity({'stage': 'completed', 'note': f'Finished processing {len(results)} code(s).'})
     SuggestRun.objects.filter(pk=run.pk).update(
         state=SuggestRun.SUCCESS,
         total=len(results),

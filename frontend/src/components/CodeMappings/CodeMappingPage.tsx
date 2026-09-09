@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Pencil, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import api from "@/api/axios";
 import MintConceptDialog from "./MintConceptDialog";
@@ -1447,6 +1447,12 @@ export default function CodeMappingPage() {
           >
             <div className="flex items-center justify-between gap-3">
               <span>{describeSuggestRun(suggestRun)}</span>
+              <Link
+                to={`/code-mappings/suggest-runs/${suggestRun.run_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 font-medium text-sky-700 underline hover:text-sky-900"
+              >View run log</Link>
               <span className="font-medium tabular-nums">
                 {suggestProgressCount(suggestRun)}/{suggestRun.total}
               </span>

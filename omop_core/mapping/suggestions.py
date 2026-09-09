@@ -417,30 +417,11 @@ def suggestable_queryset(omop_table=None, *, source_vocabulary_id=None,
     is equally a decision; re-proposing a rejected code put it back at the front
     of the queue on every run, where it spent a model call and created nothing.
 
-    Ordered **untried, then gaps before replacements, then by occurrence**.
-
-    *Untried is the primary key, always*, because anything above it starves the
-    queue.  A code the ranker declines keeps no destination, so it stays eligible
-    and, being high-occurrence, retakes the front of the very next run; on the
-    staging sample every code in the top slots was declined, so those slots would
-    never free up.  Putting "no destination" above it has the same failure in the
-    replacing case: a run would spend its whole budget re-trying declined gaps
-    and never reach a replacement.  Sorting on what the current model version has
-    not attempted means every run advances, and declined codes come round again
-    once the tab is drained.
-
-    "Attempted" is ``last_suggest_attempt``, not ``suggestion_model_version``: a
-    run that proposed nothing has still tried, and has to say so or it re-tries
-    the same codes for ever -- but it must not claim to have made a suggestion,
-    which is what the second field means and what the accuracy figures count.
-
-    Then, within untried and within tried alike, a code with no destination comes
-    before one being replaced: an empty destination is a gap, a replaceable one
-    is an improvement, and the gap is worth the model call first.  Without
-    *resuggest* nothing has a destination, so this key is constant.
-
-    Occurrence last, because it is the order a curator should meet codes in: the
-    code seen 400 times is worth more attention than the one seen once.
+    Codes without destinations come first regardless of provenance, ordered
+    by Seen count descending. Among eligible replacements, codes not tried by
+    the current model come first, then Seen count descending. Source code and
+    row ID make ties deterministic. A high-Seen gap remains ahead of replacements
+    even when this model has already attempted it.
 
     *omop_table* may be one table, several, or None for every one of them.  The
     caller passes the tables its tab maps to and gets a single ordered list back
@@ -482,12 +463,17 @@ def _suggestable_queryset_ordered(rows):
             default=Value(1),
             output_field=IntegerField(),
         ),
+        gap_seen=Case(
+            When(target_concept__isnull=True, then=F('occurrence_count')),
+            default=Value(0),
+            output_field=IntegerField(),
+        ),
         already_tried=Case(
             When(last_suggest_attempt=SUGGESTION_MODEL_VERSION, then=Value(1)),
             default=Value(0),
             output_field=IntegerField(),
         ),
-    ).order_by('already_tried', 'has_destination', '-occurrence_count',
+    ).order_by('has_destination', '-gap_seen', 'already_tried', '-occurrence_count',
                'source_code', 'id')
 
 
@@ -861,7 +847,7 @@ def _prepare(*, source_code, source_vocabulary_id, source_text, domain_id,
     return job
 
 
-def rank_jobs(jobs):
+def rank_jobs(jobs, on_ranked=None):
     """Fill in ``chosen``/``note`` for every job still needing the ranker.
 
     Concurrent because each call is 4-6s of waiting on a third party and there
@@ -874,6 +860,8 @@ def rank_jobs(jobs):
     for job in jobs:
         if job['chosen'] is None and not job['candidates']:
             job['note'] = 'No candidate concept found by any enabled strategy.'
+        if on_ranked is not None and (job['chosen'] is not None or not job['candidates']):
+            on_ranked(job)
 
     def rank(job):
         return rank_candidates(
@@ -885,6 +873,9 @@ def rank_jobs(jobs):
         job['chosen'], job['note'] = chosen, note
         if chosen is not None:
             job['strategy_used'] = chosen.get('retrieval') or STRATEGY_LEXICAL
+        if on_ranked is not None:
+            # Runs on the calling thread, never inside a ranking worker.
+            on_ranked(job)
 
     if len(pending) <= 1:
         for job in pending:
@@ -969,7 +960,7 @@ def _source_description(mapping, source_concept):
 def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
                      limit=None, dry_run=False, source_vocabulary_id=None,
                      strategies=None, lexical_limit=CANDIDATE_LIMIT,
-                     resuggest=False, progress=None):
+                     resuggest=False, progress=None, activity=None):
     """Propose destinations for the unanswered queue rows on one tab.
 
     The candidate set is :func:`suggestable_mappings` -- rows already on the
@@ -1022,11 +1013,28 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
         if progress is not None:
             progress(stage, done, len(mappings))
 
+    def source(mapping):
+        return {
+            'mapping_id': mapping.pk,
+            'source_code': mapping.source_code,
+            'source_vocabulary_id': mapping.source_vocabulary_id,
+            'source_description': mapping.source_code_description,
+            'omop_table': mapping.omop_table,
+            'occurrences': mapping.occurrence_count,
+        }
+
+    def emit(stage, **details):
+        if activity is not None:
+            activity({'stage': stage, **details})
+
+    emit('selected', sources=[source(mapping) for mapping in mappings])
+
     report('retrieving', 0)
 
     # Phase 1 -- everything that reads the database, serially.
     jobs = []
     for mapping in mappings:
+        emit('retrieving', **source(mapping))
         source_concept = mapping.source_concept or _find_source_concept(
             mapping.source_vocabulary_id, mapping.source_code,
         )
@@ -1047,10 +1055,19 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
         job['source_description'] = description
         job['umls_source_name'] = umls_source_name
         jobs.append(job)
+        emit('retrieved', **{**source(mapping), 'source_description': description},
+             candidates_considered=len(job['candidates']), umls_cui=job['umls_cui'],
+             vector_reranked=job['vector_reranked'])
         report('retrieving', len(jobs))
 
     # Phase 2 -- the ranking calls, concurrently, touching no database.
-    rank_jobs(jobs)
+    emit('ranking', note='Ranking retrieved candidates; multiple codes may be ranked concurrently.')
+
+    def ranked(job):
+        emit('ranked', **source(job['mapping']), suggested=job['chosen'],
+             note=job['note'], strategy_used=job['strategy_used'])
+
+    rank_jobs(jobs, on_ranked=ranked)
     report('writing', 0)
 
     # Phase 3 -- the writes, serially.
@@ -1101,6 +1118,7 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
             athena_duplicate = False
         if dry_run:
             results.append(entry)
+            emit('result', **entry, dry_run=True)
             report('writing', len(results))
             continue
 
@@ -1174,6 +1192,7 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
         mapping.save(update_fields=fields)
         entry['updated'] = True
         results.append(entry)
+        emit('result', **entry, dry_run=False)
         report('writing', len(results))
 
     return results

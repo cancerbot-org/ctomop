@@ -9845,13 +9845,8 @@ def code_mapping_suggest(request):
         min_occurrences=min_occurrences, limit=limit, resuggest=replace,
     ))
 
-    run = SuggestRun.objects.create(
-        source_vocabulary_id=source_vocab,
-        total=expected,
-        model_version=SUGGESTION_MODEL_VERSION,
-        created_by=request.user if request.user.is_authenticated else None,
-    )
-    dispatcher.dispatch(run, {
+    from omop_core.services.suggest_jobs import selection_summary
+    params = {
         'tables': list(tables),
         'min_occurrences': min_occurrences,
         'limit': limit,
@@ -9860,14 +9855,23 @@ def code_mapping_suggest(request):
         'strategies': strategies,
         'lexical_limit': lexical_limit,
         'resuggest': replace,
-    })
+    }
+    run = SuggestRun.objects.create(
+        source_vocabulary_id=source_vocab,
+        total=expected,
+        model_version=SUGGESTION_MODEL_VERSION,
+        selection=selection_summary(params),
+        created_by=request.user if request.user.is_authenticated else None,
+    )
+    dispatcher.dispatch(run, params)
     run.refresh_from_db()
     return Response(_serialize_suggest_run(run), status=status.HTTP_202_ACCEPTED)
 
 
-def _serialize_suggest_run(run):
+def _serialize_suggest_run(run, *, include_activity=False):
     """One Suggest run, as the page's progress strip reads it."""
     return {
+        **({'selection': run.selection or {}, 'activity': run.activity or []} if include_activity else {}),
         'run_id': str(run.id),
         'state': run.state,
         'source_vocabulary_id': run.source_vocabulary_id,
@@ -9895,7 +9899,9 @@ def code_mapping_suggest_run(request, run_id):
     run = SuggestRun.objects.filter(pk=run_id).first()
     if run is None:
         return Response({'detail': 'No such suggest run.'}, status=status.HTTP_404_NOT_FOUND)
-    return Response(_serialize_suggest_run(run))
+    return Response(_serialize_suggest_run(
+        run, include_activity=request.query_params.get('include_activity') == '1',
+    ))
 
 
 @api_view(['POST'])

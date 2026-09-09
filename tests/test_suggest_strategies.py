@@ -431,17 +431,13 @@ class TestSuggestableMappings:
                   last_suggest_attempt=SUGGESTION_MODEL_VERSION)
         assert len(suggestable_mappings('measurement')) == 1
 
-    def test_untried_codes_come_before_ones_this_version_declined(self):
-        """Occurrence alone starves the queue: a declined code keeps no
-        destination, so it stays eligible and, being high-occurrence, retakes
-        the front of the very next run. On the staging sample every code in the
-        top slots was declined, so they would never free up."""
+    def test_gaps_follow_seen_even_when_this_model_already_tried_them(self):
         queue_row('DECLINED BUT BUSY', occurrence_count=900,
                   origin_system=SUGGESTION_PROVENANCE,
                   last_suggest_attempt=SUGGESTION_MODEL_VERSION)
         queue_row('NEVER TRIED', occurrence_count=12)
         codes = [m.source_code for m in suggestable_mappings('measurement')]
-        assert codes == ['NEVER TRIED', 'DECLINED BUT BUSY']
+        assert codes == ['DECLINED BUT BUSY', 'NEVER TRIED']
 
     def test_a_declined_code_comes_round_again_once_the_tab_is_drained(self):
         queue_row('DECLINED', occurrence_count=900,
@@ -449,14 +445,14 @@ class TestSuggestableMappings:
                   last_suggest_attempt=SUGGESTION_MODEL_VERSION)
         assert [m.source_code for m in suggestable_mappings('measurement')] == ['DECLINED']
 
-    def test_an_older_model_version_sorts_as_untried(self):
+    def test_seen_outranks_model_version_for_gaps(self):
         queue_row('OLD GUESS', occurrence_count=12, origin_system='suggest v0.1',
                   last_suggest_attempt='v0.1')
         queue_row('THIS VERSION', occurrence_count=900,
                   origin_system=SUGGESTION_PROVENANCE,
                   last_suggest_attempt=SUGGESTION_MODEL_VERSION)
         codes = [m.source_code for m in suggestable_mappings('measurement')]
-        assert codes == ['OLD GUESS', 'THIS VERSION']
+        assert codes == ['THIS VERSION', 'OLD GUESS']
 
     def test_a_row_with_no_domain_is_not_guessed_at(self):
         """lexical filters on domain_id='' and finds nothing while UMLS skips
@@ -500,9 +496,7 @@ class TestSuggestableMappings:
         rows = suggestable_mappings('measurement', resuggest=True)
         assert [m.source_code for m in rows] == ['NO DESTINATION', 'ALREADY ANSWERED']
 
-    def test_untried_outranks_everything_including_a_gap(self, measurement_concept):
-        """Untried is the primary key or the queue starves: a run would spend
-        its whole budget re-trying declined gaps and never reach a replacement."""
+    def test_gaps_by_seen_then_untried_replacements(self, measurement_concept):
         queue_row('GAP TRIED', occurrence_count=900,
                   origin_system=SUGGESTION_PROVENANCE,
                   last_suggest_attempt=SUGGESTION_MODEL_VERSION)
@@ -516,7 +510,7 @@ class TestSuggestableMappings:
                   target_concept=measurement_concept)
         rows = suggestable_mappings('measurement', resuggest=True)
         assert [m.source_code for m in rows] == [
-            'GAP UNTRIED', 'ANSWERED UNTRIED', 'GAP TRIED', 'ANSWERED TRIED',
+            'GAP TRIED', 'GAP UNTRIED', 'ANSWERED UNTRIED', 'ANSWERED TRIED',
         ]
 
     @pytest.mark.parametrize('attempted', [False, True])
@@ -657,6 +651,83 @@ class TestSuggestRunLifecycle:
         assert resp.status_code == 202
         assert resp.data['run_id']
         assert resp.data['state'] == 'queued'
+
+    def test_queued_log_records_limit_and_order_before_worker_starts(self):
+        with use_suggest_dispatcher(FakeSuggestDispatcher()):
+            response = self._post(limit=50)
+        run_id = response.data['run_id']
+        log = self.client.get(f'/api/v1/code-mappings/suggest-runs/{run_id}/?include_activity=1')
+        assert log.data['selection']['limit'] == 50
+        assert 'without destinations first, regardless of provenance' in log.data['selection']['order']
+        assert 'Seen count highest first' in log.data['selection']['order']
+        assert log.data['activity'] == []
+        assert 'activity' not in response.data  # normal progress polls stay small
+
+    def test_log_snapshots_order_live_source_and_chosen_destination(self, monkeypatch, measurement_concept):
+        from omop_core.models import SuggestRun
+        busy = queue_row('BUSY', occurrence_count=900, origin_system='HT-One',
+                         last_suggest_attempt=SUGGESTION_MODEL_VERSION)
+        queue_row('QUIET', occurrence_count=1)
+        chosen = {
+            'concept_id': measurement_concept.pk,
+            'concept_name': measurement_concept.concept_name,
+            'concept_code': measurement_concept.concept_code,
+            'vocabulary_id': 'LOINC', 'retrieval': 'lexical',
+        }
+        monkeypatch.setattr('omop_core.mapping.suggestions.retrieval_pool',
+                            lambda **kwargs: ([chosen], None, False))
+
+        def rank(*args, **kwargs):
+            # Persisted before network ranking, readable from another request.
+            events = SuggestRun.objects.latest('created_at').activity
+            assert any(e.get('source_code') == 'BUSY' and e['stage'] == 'retrieving' for e in events)
+            return chosen, 'High confidence: matching analyte.'
+
+        monkeypatch.setattr('omop_core.mapping.suggestions.rank_candidates', rank)
+        with use_suggest_dispatcher(InlineSuggestDispatcher()):
+            response = self._post(limit=1)
+        assert response.data['state'] == 'success'
+        run_id = response.data['run_id']
+        path = f'/api/v1/code-mappings/suggest-runs/{run_id}/?include_activity=1'
+        log = self.client.get(path).data
+        assert [s['source_code'] for s in log['activity'][0]['sources']] == ['BUSY']
+        result = next(e for e in log['activity'] if e['stage'] == 'result')
+        assert result['suggested'] == chosen
+        assert result['updated'] is True
+        assert result['note'] == 'High confidence: matching analyte.'
+        busy.refresh_from_db()
+        busy.source_code = 'CHANGED LATER'
+        busy.target_concept = None
+        busy.save()
+        assert self.client.get(path).data['activity'] == log['activity']
+
+    def test_failed_log_preserves_current_source_and_error(self, monkeypatch):
+        queue_row('BROKEN')
+        def explode(**kwargs):
+            raise RuntimeError('retrieval unavailable')
+        monkeypatch.setattr('omop_core.mapping.suggestions.retrieval_pool', explode)
+        with use_suggest_dispatcher(InlineSuggestDispatcher()):
+            response = self._post()
+        log = self.client.get(
+            f"/api/v1/code-mappings/suggest-runs/{response.data['run_id']}/?include_activity=1",
+        ).data
+        assert log['state'] == 'failure'
+        assert log['activity'][-2]['source_code'] == 'BROKEN'
+        assert log['activity'][-1]['stage'] == 'failure'
+        assert log['activity'][-1]['note'] == 'retrieval unavailable'
+
+    def test_no_candidate_is_recorded_and_log_requires_admin(self):
+        queue_row('NO MATCH')
+        with use_suggest_dispatcher(InlineSuggestDispatcher()):
+            response = self._post(strategies=['umls'])
+        path = f"/api/v1/code-mappings/suggest-runs/{response.data['run_id']}/?include_activity=1"
+        log = self.client.get(path).data
+        result = next(e for e in log['activity'] if e['stage'] == 'result')
+        assert result['suggested'] is None
+        assert 'No candidate' in result['note']
+        self.user.is_staff = False
+        self.user.save()
+        assert self.client.get(path).status_code == 403
 
     def test_default_includes_single_occurrences_and_uncounted_rows(self):
         queue_row('BUSY', occurrence_count=900)
