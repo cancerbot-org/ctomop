@@ -1339,6 +1339,19 @@ describe("Uncoded review counters and refresh", () => {
 
   });
 
+  it("shows the latest reviewed model while newer suggestions await review", async () => {
+    const latestReviewed = { ...metrics, model_version: "v0.2", reviewed: 2, approved: 2, precision: 1, recall: 1, f1: 1 };
+    mockGet.mockImplementation((url: string) => Promise.resolve({ data: url.includes("accuracy") ? {
+      overall: metrics,
+      by_source_vocabulary: { "": { ...metrics, model_version: "v0.3", latest_reviewed: latestReviewed } },
+    } : url.includes("reference") ? reference : [proposedRow] }));
+    render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
+    const section = await screen.findByRole("region", { name: "Suggestion accuracy" });
+    expect(await within(section).findByText("Metrics: v0.2")).toBeInTheDocument();
+    expect(within(section).getByText("2 model reviews")).toBeInTheDocument();
+    expect(within(section).getAllByText("100.0%")).toHaveLength(3);
+  });
+
   it("updates confirmed reviews and counters without waiting for the table reload", async () => {
     let loads = 0;
     mockGet.mockImplementation((url: string) => {
