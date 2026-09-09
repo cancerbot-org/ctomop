@@ -6,6 +6,17 @@ This file tells LLMs (Claude, Copilot, etc.) how to work on this codebase consis
 
 ## Project Overview
 
+### Staging deployment
+
+Staging is Render service `promop-staging` in Oregon, at
+https://promop-staging.onrender.com, deployed from `dev`. It is not GCP.
+Use `STAGING_DATABASE_URL` from `.env` for staging database access; Render
+web and worker processes use `DATABASE_URL` for that same existing database.
+Never put the database connection string or credentials in Git or tool output.
+`render.yaml` declares both production and staging; staging has its own worker
+and broker. A Blueprint sync applies infrastructure settings; a code-only
+redeploy does not. See `docs/render-staging-celery.md`.
+
 **promop** is a Django + React application that:
 - Stores clinical oncology patient data in an OMOP CDM–aligned PostgreSQL schema
 - Exposes a DRF REST API consumed by a React TypeScript frontend
