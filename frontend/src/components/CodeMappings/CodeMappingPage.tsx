@@ -122,6 +122,7 @@ interface RepointResult {
 }
 
 interface SuggestionAccuracy {
+  review_totals?: { approved: number; rejected: number; overridden: number };
   model_version?: string | null;
   accepted: number;
   approved: number;
@@ -451,6 +452,7 @@ export default function CodeMappingPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [rows, setRows] = useState<CodeMappingRow[]>([]);
   const [reference, setReference] = useState<Reference>(emptyReference);
+  const referenceCache = useRef<Reference | null>(null);
   const [accuracy, setAccuracy] = useState<AccuracyResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -541,19 +543,24 @@ export default function CodeMappingPage() {
       params[`order_${index}`] = sort ? `${sort.descending ? "-" : ""}${sort.column}` : "-occurrence_count";
     });
     try {
-      const [rowResp, refResp, accuracyResp] = await Promise.all([
-        api.get<BrowseResponse | CodeMappingRow[]>("/v1/code-mappings/", { params }),
-        api.get<Reference>("/v1/code-mappings/reference/"),
-        api.get<AccuracyResponse>("/v1/code-mappings/accuracy/"),
+      const requests = await Promise.allSettled([
+        api.get<BrowseResponse | CodeMappingRow[]>("/v1/code-mappings/", { params }).then(({ data }) => {
+          if (sequence !== loadSequence.current) return;
+          setBrowse(Array.isArray(data) ? null : data);
+          setRows(Array.isArray(data) ? data : data.results);
+        }),
+        referenceCache.current ? Promise.resolve() : api.get<Reference>("/v1/code-mappings/reference/").then(({ data }) => {
+          if (sequence !== loadSequence.current) return;
+          referenceCache.current = { ...emptyReference, ...(data || {}) };
+          setReference(referenceCache.current);
+          setSuggestionLimit((current) => current === "" ? current : Math.min(current, data?.suggest_max_per_run || 100));
+        }),
+        api.get<AccuracyResponse>("/v1/code-mappings/accuracy/").then(({ data }) => {
+          // Review counters can arrive before the slower table refresh.
+          if (sequence === loadSequence.current) setAccuracy(data);
+        }),
       ]);
-      if (sequence !== loadSequence.current) return;
-      // An older backend may still return the legacy array during rollout.
-      const result = rowResp.data;
-      setBrowse(Array.isArray(result) ? null : result);
-      setRows(Array.isArray(result) ? result : result.results);
-      setReference({ ...emptyReference, ...(refResp.data || {}) });
-      setSuggestionLimit((current) => current === "" ? current : Math.min(current, refResp.data?.suggest_max_per_run || 100));
-      setAccuracy(accuracyResp.data);
+      if (requests.some((request) => request.status === "rejected")) throw new Error("Refresh failed");
     } catch {
       if (sequence === loadSequence.current) setError("Failed to load code mappings.");
     } finally {
@@ -627,9 +634,13 @@ export default function CodeMappingPage() {
   // A vocabulary with no suggestions of its own still needs to show the
   // current model's live score; otherwise the dashboard has data while the
   // main curation page misleadingly shows dashes.
-  const selectedAccuracy = overallTab
+  const scopedAccuracy = overallTab
     ? accuracy?.overall
-    : accuracy?.by_source_vocabulary?.[selectedVocabulary] ?? accuracy?.overall;
+    : accuracy?.by_source_vocabulary?.[selectedVocabulary];
+  const selectedAccuracy = scopedAccuracy ?? accuracy?.overall;
+  // An empty-string key is the Uncoded bucket. Never borrow another tab's
+  // reviews when this tab has none. The fallback supports older API responses.
+  const reviewTotals = scopedAccuracy?.review_totals ?? scopedAccuracy;
 
   const suggestModelVersion = accuracy?.suggest_model_version ?? "";
 
@@ -960,6 +971,14 @@ export default function CodeMappingPage() {
     && selectedRow !== null
     && String(selectedRow.destination_concept_id) !== form.destination_concept_id;
 
+  const applySavedMapping = (saved: CodeMappingRow) => {
+    if (!saved?.mapping_id || !saved.status) return;
+    // Reflect a successful server write immediately, never a speculative
+    // approval. Background reload reconciles ordering, totals and other users.
+    setRows((current) => current.map((row) => row.mapping_id === saved.mapping_id ? saved : row)
+      .filter((row) => !browse || showRejected || row.status !== "rejected"));
+  };
+
   const submitForm = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
@@ -980,7 +999,8 @@ export default function CodeMappingPage() {
         ? await api.patch(`/v1/code-mappings/${selectedRow.mapping_id}/`, payload)
         : await api.post("/v1/code-mappings/", payload);
       const repoint: RepointResult | null = resp.data?.repoint ?? null;
-      await refreshCurrent.current();
+      applySavedMapping(resp.data);
+      void refreshCurrent.current();
       // Hold the dialog open on a re-point so the curator sees what moved;
       // a silent close would leave them guessing whether it worked.
       if (repoint && repoint.rows_updated) {
@@ -1174,7 +1194,8 @@ export default function CodeMappingPage() {
         notes: row.notes,
       });
       const repoint: RepointResult | null = resp.data?.repoint ?? null;
-      await refreshCurrent.current();
+      applySavedMapping(resp.data);
+      void refreshCurrent.current();
       if (repoint && repoint.rows_updated) {
         setBanner(
           `${row.source_code}: updated ${repoint.rows_updated} row(s) across `
@@ -1488,10 +1509,14 @@ export default function CodeMappingPage() {
             Replace Current Suggestions
           </label>
           <section aria-label="Suggestion accuracy" className="ml-auto flex max-w-full shrink-0 flex-wrap divide-x rounded-md border border-slate-200 bg-slate-50 text-right text-xs">
+            <div className="px-3 py-2 text-left text-slate-500">
+              <div>Review counts: all models</div>
+              <div>Metrics: {selectedAccuracy?.model_version ? `suggest ${selectedAccuracy.model_version}` : "no model reviews"}</div>
+            </div>
             {([
-              ['Approved', selectedAccuracy?.approved],
-              ['Rejected', selectedAccuracy?.rejected],
-              ['Other destination', selectedAccuracy?.overridden],
+              ['Approved', reviewTotals?.approved],
+              ['Rejected', reviewTotals?.rejected],
+              ['Other destination', reviewTotals?.overridden],
             ] as const).map(([label, value]) => (
               <div key={label} className="px-3 py-2">
                 <div className="font-medium text-slate-500">{label}</div>

@@ -1300,3 +1300,52 @@ describe("server mapping pages", () => {
     await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/v1/code-mappings/", { params: expect.objectContaining({ page_0: 1, order_0: "occurrence_count" }) }));
   });
 });
+
+describe("Uncoded review counters and refresh", () => {
+  const metrics = { approved: 0, accepted: 0, rejected: 0, overridden: 0, reviewed: 0, precision: null, recall: null, f1: null, model_version: "v0.2" };
+  beforeEach(() => { mockGet.mockReset(); mockPatch.mockReset(); });
+
+  it("shows Uncoded reviews across models instead of the newest model's zeroes", async () => {
+    mockGet.mockImplementation((url: string) => Promise.resolve({ data: url.includes("accuracy") ? {
+      overall: { ...metrics, review_totals: { approved: 99, rejected: 99, overridden: 99 } },
+      by_source_vocabulary: { "": { ...metrics, review_totals: { approved: 6, rejected: 2, overridden: 3 } } },
+    } : url.includes("reference") ? reference : [proposedRow] }));
+    render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
+    const section = await screen.findByRole("region", { name: "Suggestion accuracy" });
+    expect(within(section).getByText("Approved").parentElement).toHaveTextContent("6");
+    expect(within(section).getByText("Rejected").parentElement).toHaveTextContent("2");
+    expect(within(section).getByText("Other destination").parentElement).toHaveTextContent("3");
+    expect(within(section).getByText("Metrics: suggest v0.2")).toBeInTheDocument();
+  });
+
+  it("updates confirmed reviews and counters without waiting for the table reload", async () => {
+    let loads = 0;
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/v1/code-mappings/") {
+        loads += 1;
+        return loads === 1 ? Promise.resolve({ data: [proposedRow] }) : new Promise(() => {});
+      }
+      if (url.includes("reference")) return Promise.resolve({ data: reference });
+      return Promise.resolve({ data: { overall: metrics, by_source_vocabulary: {
+        "": { ...metrics, review_totals: { approved: loads > 1 ? 1 : 0, rejected: 0, overridden: 0 } },
+      } } });
+    });
+    mockPatch.mockResolvedValue({ data: { ...proposedRow, status: "approved" } });
+    render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve M-PROTEIN, SERUM" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Approve M-PROTEIN, SERUM" })).not.toBeInTheDocument());
+    const section = screen.getByRole("region", { name: "Suggestion accuracy" });
+    await waitFor(() => expect(within(section).getByText("Approved").parentElement).toHaveTextContent("1"));
+    expect(mockGet.mock.calls.filter(([url]) => url === "/v1/code-mappings/reference/")).toHaveLength(1);
+  });
+
+  it("does not display other vocabularies' reviews for an Uncoded tab without suggestions", async () => {
+    mockGet.mockImplementation((url: string) => Promise.resolve({ data: url.includes("accuracy") ? {
+      overall: { ...metrics, approved: 99, review_totals: { approved: 99, rejected: 0, overridden: 0 } },
+      by_source_vocabulary: {},
+    } : url.includes("reference") ? reference : [proposedRow] }));
+    render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
+    const section = await screen.findByRole("region", { name: "Suggestion accuracy" });
+    expect(within(section).getByText("Approved").parentElement).toHaveTextContent("0");
+  });
+});
