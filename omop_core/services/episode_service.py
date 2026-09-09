@@ -29,6 +29,12 @@ from omop_oncology.models import Episode, EpisodeEvent
 
 logger = logging.getLogger('audit')
 
+# Sentinel distinguishing "caller did not supply a value" from "caller
+# explicitly passed None (= clear the field)."  Default arguments use this
+# so that ``end_date=None`` means "clear", while omitting the argument
+# entirely means "leave as stored."
+_UNSET = object()
+
 
 class TherapyLineEpisodeResult:
     """Outcome of upsert_therapy_line_episode.
@@ -68,8 +74,8 @@ def upsert_therapy_line_episode(
     line_number,
     regimen_concept=None,
     regimen_source_concept=None,
-    start_date=None,
-    end_date=None,
+    start_date=_UNSET,
+    end_date=_UNSET,
     drug_exposure_ids=(),
     outcome=None,
     intent=None,
@@ -88,7 +94,9 @@ def upsert_therapy_line_episode(
             episode_object_concept; falls back to concept 0.
         regimen_source_concept: Concept for episode_source_concept (typically the
             same HemOnc concept when it came from the source), else None.
-        start_date / end_date: date objects (already parsed) or None.
+        start_date / end_date: date objects or ``_UNSET`` (= leave as stored).
+            An explicit None clears end_date; the required start_date is
+            retained when None is supplied.
         drug_exposure_ids: iterable of drug_exposure_id to link via EpisodeEvent.
         outcome: optional outcome string → LOT-{n}-outcome Observation.
         source_value: episode_source_value to store. Defaults to 'LOT-{n}'.
@@ -118,6 +126,10 @@ def upsert_therapy_line_episode(
 
     episode_source_value = (source_value or f'LOT-{line_number}')[:50]
 
+    # Resolve sentinels for the create path: _UNSET → None (no date known yet).
+    effective_start = None if start_date is _UNSET else start_date
+    effective_end = None if end_date is _UNSET else end_date
+
     episode = Episode.objects.filter(person=person, episode_number=line_number).first()
     created = episode is None
     if episode is None:
@@ -127,15 +139,16 @@ def upsert_therapy_line_episode(
             episode_concept=tx_regimen_concept,
             episode_object_concept=object_concept,
             episode_type_concept=ehr_type_concept,
-            episode_start_date=start_date or today,
-            episode_end_date=end_date,
+            episode_start_date=effective_start or today,
+            episode_end_date=effective_end,
             episode_number=line_number,
             episode_source_value=episode_source_value,
             episode_source_concept=regimen_source_concept,
         )
         episode.save()
     else:
-        # Fill in fields that may have been unknown at first write.
+        # Update fields the caller explicitly supplied (including None = clear).
+        # _UNSET means "not supplied" and leaves the stored value untouched.
         dirty = []
         if episode.episode_source_value != episode_source_value:
             episode.episode_source_value = episode_source_value
@@ -146,11 +159,11 @@ def upsert_therapy_line_episode(
         if regimen_source_concept and not episode.episode_source_concept_id:
             episode.episode_source_concept = regimen_source_concept
             dirty.append('episode_source_concept')
-        if start_date is not None and episode.episode_start_date != start_date:
-            episode.episode_start_date = start_date
+        if effective_start is not None and episode.episode_start_date != effective_start:
+            episode.episode_start_date = effective_start
             dirty.append('episode_start_date')
-        if end_date is not None and episode.episode_end_date != end_date:
-            episode.episode_end_date = end_date
+        if end_date is not _UNSET and episode.episode_end_date != effective_end:
+            episode.episode_end_date = effective_end
             dirty.append('episode_end_date')
         if dirty:
             episode.save(update_fields=dirty)
@@ -181,11 +194,11 @@ def upsert_therapy_line_episode(
 
     if outcome:
         _upsert_outcome_observation(person, line_number, outcome, ehr_type_concept, no_match_concept,
-                                    obs_date=end_date or start_date or today)
+                                    obs_date=effective_end or effective_start or today)
     elif replace_events:
         _delete_outcome_observation(person, line_number)
 
-    obs_date = end_date or start_date or today
+    obs_date = effective_end or effective_start or today
     if intent:
         _upsert_line_observation(person, line_number, 'intent', intent,
                                  ehr_type_concept, no_match_concept, obs_date=obs_date)

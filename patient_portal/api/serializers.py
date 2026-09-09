@@ -1383,7 +1383,7 @@ class TherapyLineWriteSerializer(serializers.Serializer):
         required=False, allow_blank=True, allow_null=True, max_length=50,
     )
     discontinuation_reason = serializers.CharField(
-        required=False, allow_blank=True, allow_null=True, max_length=100,
+        required=False, allow_blank=True, allow_null=True, max_length=60,
     )
     source_value = serializers.CharField(
         required=False, allow_blank=True, allow_null=True, max_length=50,

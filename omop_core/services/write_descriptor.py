@@ -399,6 +399,7 @@ def _curated_writes():
         name: _lookup_titles(name)
         for name in {r.value_vocabulary for r in rows if r.value_vocabulary}
     }
+    unit_ids = _resolve_concept_ids({row.unit for row in rows if row.unit}, 'UCUM')
     for row in rows:
         target = mapping_target_for(row.omop_table)
         concept_id = row.concept_id
@@ -429,7 +430,7 @@ def _curated_writes():
                 ),
             }
             continue
-        type_concept_id = row.type_concept_id or CONCEPT_LAB_TYPE
+        type_concept_id = row.type_concept_id or CONCEPT_EHR_TYPE
         entry = {
             'kind': KIND_DIRECT,
             'writable': True,
@@ -447,6 +448,7 @@ def _curated_writes():
         if row.unit:
             entry['unit'] = row.unit
             entry['projection']['unit'] = row.unit
+            entry['projection']['unit_concept_id'] = unit_ids.get(row.unit)
         if row.value_vocabulary:
             options = titles.get(row.value_vocabulary) or ()
             if options:
@@ -470,6 +472,9 @@ def _lookup_titles(model_name):
     return list(model.objects.order_by('title').values_list('title', flat=True))
 
 
+# Process-lifetime cache.  Safe because inputs are static (model metadata +
+# constant dicts, no database queries).  If a database-dependent rule is ever
+# added, this must be replaced with per-request computation.
 _CACHED_SERIALIZER_READ_ONLY: frozenset | None = None
 
 
