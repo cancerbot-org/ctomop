@@ -273,10 +273,15 @@ class ServiceTokenAuthentication(BaseAuthentication):
 
         identity, created = Identity.objects.get_or_create(
             issuer='urn:service', sub='hk-labs-sync',
+            defaults={'is_staff': True},
         )
         if created:
             identity.set_unusable_password()
             identity.save(update_fields=['password'])
+        elif not identity.is_staff:
+            # A trusted backend service acts as staff. Repair older rows.
+            identity.is_staff = True
+            identity.save(update_fields=['is_staff'])
 
         return (identity, SERVICE_TOKEN)
 

@@ -50,6 +50,19 @@ def test_service_scopes(permission_class, method, scope, allowed_methods):
 
 
 @pytest.mark.parametrize('permission_class', PERMISSIONS)
+@pytest.mark.parametrize('method', METHODS)
+def test_service_token_without_scopes_has_staff_rights(permission_class, method):
+    # No SERVICE_AUTH_SCOPES set: the token is a backend service acting as
+    # staff, so every method is allowed.
+    request = SimpleNamespace(
+        auth=SERVICE_TOKEN, method=method,
+        user=SimpleNamespace(is_authenticated=True, is_staff=True),
+    )
+    with override_settings(SERVICE_AUTH_SCOPES=None):
+        assert permission_class().has_permission(request, None) is True
+
+
+@pytest.mark.parametrize('permission_class', PERMISSIONS)
 @pytest.mark.parametrize('scope,method,expired,allowed', (
     ('patient/*.read', 'DELETE', False, False),
     ('patient/*.write', 'DELETE', False, True),

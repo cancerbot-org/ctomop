@@ -78,10 +78,16 @@ class ScopedTokenPermission(BasePermission):
 
     Role model for non-OAuth2 auth paths:
 
-      service-token         → SERVICE_AUTH_SCOPES (read-only by default)
+      service-token         → staff rights, unless SERVICE_AUTH_SCOPES
+                              narrows it (see below)
       is_staff              → full access
       other authenticated   → safe methods + PATCH only
                               (read + self-edit; POST/DELETE denied)
+
+    A backend service holds the shared token and writes for many patients, so
+    it acts as staff and not as a patient scoped SMART consumer. A deployment
+    that wants less can set SERVICE_AUTH_SCOPES to a SMART grant, which is then
+    enforced by method, or to an empty string to deny everything.
 
     IMPORTANT — object-level ownership:
     This class grants or denies access at the view level only. It does NOT
@@ -102,7 +108,10 @@ class ScopedTokenPermission(BasePermission):
         token = request.auth
 
         if is_service_token(request):
-            return self.has_scopes(request.method, settings.SERVICE_AUTH_SCOPES)
+            scopes: str | None = getattr(settings, 'SERVICE_AUTH_SCOPES', None)
+            if scopes is None:
+                return True
+            return self.has_scopes(request.method, scopes)
 
         # Partner-auth (Firebase, SAML) and session-auth: role-based enforcement.
         if token is None or isinstance(token, TokenClaims):

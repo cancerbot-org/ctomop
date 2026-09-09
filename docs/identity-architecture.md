@@ -599,21 +599,24 @@ Patient requests deletion (via host app UI or admin action)
 
 ### Shared Service Token Scopes
 
-`SERVICE_AUTH_TOKEN` authenticates the legacy shared bearer credential.
-`SERVICE_AUTH_SCOPES` is a space-separated SMART scope grant enforced by
-`ScopedTokenPermission` and its subclasses. It defaults to `patient/*.read`:
-GET, HEAD and OPTIONS are allowed, while POST, PUT, PATCH and DELETE require
-`patient/*.write` or `user/*.write`. An explicitly empty grant denies all
-requests guarded by these permissions. Write scopes do not imply read scopes.
-`system/*.read` permits vocabulary reads only, not patient-data reads.
+`SERVICE_AUTH_TOKEN` authenticates the legacy shared bearer credential. It
+resolves to the machine identity `urn:service` / `hk-labs-sync`, which carries
+**staff** rights — the SODAP role (staff, org_admin, doctor, analyst, patient)
+that fits a backend service. A service holding it writes for many patients, so
+it is not a patient-scoped SMART consumer, and `ScopedTokenPermission` and its
+subclasses grant it every method (#1144).
 
-Before deploying this change, configure service integrations that need writes
-(including lab/FHIR sync and bulk clinical updates) with the necessary grant,
-for example `SERVICE_AUTH_SCOPES="patient/*.read patient/*.write"`, and restart
-the application. Otherwise their writes return HTTP 403.
+`SERVICE_AUTH_SCOPES` is optional and narrows that token instead. When it is
+set to a space-separated SMART grant, the same permission classes enforce it by
+method: GET, HEAD and OPTIONS need `patient/*.read` or `user/*.read`, while
+POST, PUT, PATCH and DELETE need `patient/*.write` or `user/*.write`. Write
+scopes do not imply read scopes, `system/*.read` permits vocabulary reads only,
+and an explicitly empty value denies every request guarded by these
+permissions. Leave the variable unset for staff rights — a deployment that sets
+it to a read-only grant will see service writes return HTTP 403.
 
-This grant applies to every holder of the shared token. It does not restrict
-row-level access or solve caller-asserted identity attribution (#147). Use
+Staff rights here are view-level, and apply to every holder of the shared
+token. They do not solve caller-asserted identity attribution (#147). Use
 separate OAuth2 service clients for independently scoped and revocable grants.
 
 ### Request Identity

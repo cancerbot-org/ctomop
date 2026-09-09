@@ -61,7 +61,10 @@ class Command(BaseCommand):
                 ))
                 return
         else:
-            owner = Identity.objects.filter(is_staff=True).first()
+            # The service token identity is staff too, but a machine account
+            # must not own a human facing app.
+            owner = Identity.objects.filter(is_staff=True).exclude(
+                issuer='urn:service').first()
             if not owner:
                 self.stderr.write(self.style.WARNING(
                     'No staff user found. Create one first with: manage.py createsuperuser (or set is_staff=True on an existing user)'

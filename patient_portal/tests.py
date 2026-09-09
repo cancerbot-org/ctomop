@@ -6099,11 +6099,19 @@ class ScopedTokenPermissionTest(TestCase):
         req.user = user
         return req
 
-    def test_service_token_denies_delete_by_default(self):
+    def test_service_token_denies_delete_when_scoped_read_only(self):
         req = self._req("DELETE", "service-token", self._user())
         self.assertFalse(self.permission.has_permission(req, None))
 
-    def test_service_token_denies_post_by_default(self):
+    @override_settings(SERVICE_AUTH_SCOPES=None)
+    def test_service_token_writes_by_default(self):
+        # Unset SERVICE_AUTH_SCOPES: staff rights, so every method.
+        for method in ("GET", "POST", "PATCH", "DELETE"):
+            with self.subTest(method=method):
+                req = self._req(method, "service-token", self._user())
+                self.assertTrue(self.permission.has_permission(req, None))
+
+    def test_service_token_denies_post_when_scoped_read_only(self):
         req = self._req("POST", "service-token", self._user())
         self.assertFalse(self.permission.has_permission(req, None))
 
@@ -10920,6 +10928,22 @@ class ServiceTokenOmopAccessTest(TestCase):
                 response = getattr(client, method)(url, {}, format='json')
                 self.assertEqual(response.status_code, 403)
         self.assertTrue(Measurement.objects.filter(pk=self.m_a.pk).exists())
+
+    @override_settings(SERVICE_AUTH_TOKEN='test-service-secret',
+                       SERVICE_AUTH_SCOPES=None)
+    def test_bearer_without_scopes_writes_as_staff(self):
+        """With no SERVICE_AUTH_SCOPES the shared token acts as staff: the real
+        Bearer path writes, and the identity it resolves to is staff."""
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION='Bearer test-service-secret')
+        url = f'/api/measurements/{self.m_a.pk}/'
+        response = client.patch(url, {'value_as_number': 8.5}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.m_a.refresh_from_db()
+        self.assertEqual(float(self.m_a.value_as_number), 8.5)
+
+        identity = Identity.objects.get(issuer='urn:service', sub='hk-labs-sync')
+        self.assertTrue(identity.is_staff)
 
     @override_settings(SERVICE_AUTH_TOKEN='test-service-secret')
     def test_bearer_write_grant_can_be_removed(self):
