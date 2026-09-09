@@ -814,6 +814,15 @@ def refresh_patient_record(person: Person) -> PatientRecord:
         except PatientRecord.DoesNotExist:
             patient_info = PatientRecord(person=person)
 
+        # Snapshot user-edited values that may not yet have OMOP backing.
+        # After derivation, these are restored when derivation produced nothing
+        # for the field (meaning no OMOP fact backs it yet).
+        user_edited = set(patient_info.user_edited_fields or [])
+        preserved = {}
+        for field in user_edited:
+            if hasattr(patient_info, field):
+                preserved[field] = getattr(patient_info, field)
+
         # Clear all OMOP-derived fields before re-deriving so deletions are reflected.
         _clear_derived_fields(patient_info)
 
@@ -854,6 +863,18 @@ def refresh_patient_record(person: Person) -> PatientRecord:
         patient_info.custom_fields = _get_custom_patient_field_data(snapshot)
 
         _compute_derived_fields(patient_info)
+
+        # Restore user-edited values when derivation produced nothing for that
+        # field (no OMOP fact backs it yet). Once an OMOP fact exists,
+        # derivation wins and the field is removed from user_edited_fields.
+        still_orphaned = []
+        for field in user_edited:
+            derived_value = getattr(patient_info, field, None)
+            if _is_empty(derived_value) and field in preserved and not _is_empty(preserved[field]):
+                setattr(patient_info, field, preserved[field])
+                still_orphaned.append(field)
+            # else: OMOP fact exists — derivation wins, drop from tracking
+        patient_info.user_edited_fields = sorted(still_orphaned) or []
 
         patient_info.derivation_version = DERIVATION_VERSION
         patient_info.derived_at = timezone.now()

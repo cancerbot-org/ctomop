@@ -120,6 +120,8 @@ describe('TherapyLineDialog', () => {
       start_date: '2025-03-01',
       end_date: null,
       outcome: null,
+      intent: null,
+      discontinuation_reason: null,
       regimen_concept_id: null,
       drugs: [{ concept_id: 19026972, source_value: 'lenalidomide' }],
     });
@@ -388,6 +390,8 @@ describe('TherapyLineDialog', () => {
       start_date: '2025-01-15',
       end_date: '2025-06-15',
       outcome: 'Partial Response',
+      intent: null,
+      discontinuation_reason: null,
       regimen_concept_id: null,
       drugs: [{ concept_id: 1518254, source_value: 'dexamethasone' }],
     });

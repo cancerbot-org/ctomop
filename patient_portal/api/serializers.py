@@ -18,6 +18,7 @@ from django.utils.timezone import localdate
 from django.utils import timezone
 from omop_core.services.access import get_admin_access_paths, has_org_admin_access
 from omop_core.services.patient_record_service import PATIENT_RECORD_OMOP_MAPPED_FIELDS
+from omop_core.services.write_descriptor import get_serializer_read_only_fields
 
 #: Columns that Measurement and Observation validate as one value.
 _VALUE_FIELDS = frozenset({'value_as_number', 'value_as_string'})
@@ -375,9 +376,17 @@ class PatientRecordSerializer(serializers.ModelSerializer):
             'death_date',
             # Derivation versioning — set only by refresh_patient_record, never by client.
             'derivation_version', 'derived_at',
-            # Internal migration bookkeeping; clients must not set it.
+            # Tracks fields with direct user edits not yet backed by OMOP facts;
+            # managed by the PATCH handler, not by the client.
             'user_edited_fields', 'custom_fields',
-        ) + tuple(sorted(PATIENT_RECORD_OMOP_MAPPED_FIELDS))
+        )
+
+    def get_fields(self):
+        fields = super().get_fields()
+        for name in get_serializer_read_only_fields():
+            if name in fields:
+                fields[name].read_only = True
+        return fields
 
     def get_patient_name(self, obj):
         if obj.person:
@@ -1369,6 +1378,12 @@ class TherapyLineWriteSerializer(serializers.Serializer):
     regimen_concept_id = serializers.IntegerField(required=False, allow_null=True)
     outcome = serializers.CharField(
         required=False, allow_blank=True, allow_null=True,
+    )
+    intent = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, max_length=50,
+    )
+    discontinuation_reason = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, max_length=100,
     )
     source_value = serializers.CharField(
         required=False, allow_blank=True, allow_null=True, max_length=50,

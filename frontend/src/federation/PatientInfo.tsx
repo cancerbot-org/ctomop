@@ -5,7 +5,7 @@ import { PatientInfoProvider } from "./PatientInfoProvider";
 import { usePatientInfoMe, usePatchPatientInfo } from "./patientInfoHooks";
 import type { PatientInfoProps } from "./patientInfoTypes";
 import { fetchWritableFields, LIFECYCLE, type FieldDescriptors } from "@/hooks/useWritableFields";
-import { writeFieldValues } from "@/api/clinicalFacts";
+import { writeProfileFields, type ProfileEdit } from "@/api/clinicalFacts";
 import GeneralTab from "@/components/PatientInfo/tabs/GeneralTab";
 import DiseaseTab from "@/components/PatientInfo/tabs/DiseaseTab";
 import TreatmentTab from "@/components/PatientInfo/tabs/TreatmentTab";
@@ -160,42 +160,38 @@ function PatientInfoInner({ readOnly, onPatientUpdated }: Pick<PatientInfoProps,
       const baseline = serverInfoRef.current;
       const personId = baseline.person_id ?? data?.patient_info?.person_id;
 
-      const clinicalEdits = personId
-        ? Object.keys(info).filter(
-            (f) => descriptors[f]?.writable && info[f] !== baseline[f],
-          )
-        : [];
-      // As a set: the Person fields travel in one request, because some are
-      // only valid together (latitude and longitude are a pair).
-      if (clinicalEdits.length) {
-        await writeFieldValues(
-          personId as number,
-          clinicalEdits.map((field) => ({
-            field, descriptor: descriptors[field], value: info[field],
-          })),
-        );
-        for (const field of clinicalEdits) {
+      // Profile fields (target === 'person') go to the persons endpoint.
+      // Everything else goes to PatientRecord PATCH — the backend handles
+      // OMOP projection for mapped fields.
+      const profileEdits: ProfileEdit[] = [];
+      const patchFields: Record<string, unknown> = {};
+
+      if (personId) {
+        for (const [f, v] of Object.entries(info)) {
+          if (f === "patient_name" || LIFECYCLE.has(f) || v === baseline[f]) continue;
+          const desc = descriptors[f];
+          if (desc?.writable && desc.target === 'person') {
+            profileEdits.push({ field: f, descriptor: desc, value: v });
+          } else if (desc?.writable && desc.target === 'patient_record') {
+            patchFields[f] = v;
+          } else if (!(f in descriptors)) {
+            patchFields[f] = v;
+          }
+        }
+      }
+
+      if (profileEdits.length) {
+        await writeProfileFields(personId as number, profileEdits);
+        for (const { field } of profileEdits) {
           serverInfoRef.current[field] = info[field];
         }
       }
 
-      // patient_name is handled by the server against Person, so it stays. Every
-      // descriptor-known field is OMOP-mapped and never belongs here, whatever
-      // its kind; lifecycle columns go stale on any write; and an unchanged value
-      // has nothing to say.
-      const projectionInfo = Object.fromEntries(
-        Object.entries(info).filter(
-          ([f, v]) =>
-            f !== "patient_name"
-            && !(f in descriptors)
-            && !LIFECYCLE.has(f)
-            && v !== baseline[f],
-        ),
-      );
       const renamed = typeof info.patient_name === "string";
+      const combined = { ...patchFields };
       const payload = renamed
-        ? { ...projectionInfo, patient_name: info.patient_name }
-        : projectionInfo;
+        ? { ...combined, patient_name: info.patient_name }
+        : combined;
 
       // Nothing left to say is not a reason to say it: the OMOP writes above have
       // already done the work, and an empty PATCH can only fail.
@@ -206,7 +202,7 @@ function PatientInfoInner({ readOnly, onPatientUpdated }: Pick<PatientInfoProps,
       }
 
       const result = await patchMutation.mutateAsync(payload);
-      for (const f of Object.keys(projectionInfo)) {
+      for (const f of Object.keys(combined)) {
         serverInfoRef.current[f] = info[f];
       }
       setSaveStatus("saved");

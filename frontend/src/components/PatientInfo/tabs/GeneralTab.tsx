@@ -74,7 +74,7 @@ export default function GeneralTab({
     extra: { options?: string[]; vocabSource?: ReturnType<typeof useVocabulary>['source'] } = {},
   ) => {
     const descriptor = descriptors[name];
-    const dated = descriptor?.writable && descriptor.target === 'measurement';
+    const dated = descriptor?.writable && descriptor.projection?.omop_table === 'measurement';
     return (
       <ClinicalField
         label={label}

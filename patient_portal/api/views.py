@@ -832,14 +832,17 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         })
 
     def partial_update(self, request, pk=None):
-        """Patch the PatientRecord compatibility surface.
+        """Patch the PatientRecord.
 
-        A mapped clinical PatientRecord field is output from an OMOP fact. It
-        cannot safely supply the fact's concept, time, unit, or provenance, so
-        it returns 405 rather than recreating the retired PatientRecord-to-OMOP
-        write-through path. Write the appropriate OMOP resource (or ingest
-        FHIR) and let refresh_patient_record rebuild this read model. See
-        docs/omop_to_patientrecord.md for the field-to-source mapping.
+        Writable fields (KIND_DIRECT and KIND_EDITABLE) are accepted and
+        persisted. Read-only fields — computed, authored, alias, profile,
+        and unit columns — are silently ignored per DRF convention (the
+        serializer marks them read_only, so they are dropped from validated
+        data and the response returns 200 with the value unchanged).
+
+        This replaced the earlier 405 rejection of read-only fields. Clients
+        that relied on 405 to detect accidental writes should instead check
+        the writable-fields descriptor before sending.
         """
         try:
             person = Person.objects.get(person_id=pk)
@@ -877,36 +880,8 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         if mutations == PatientRecordSerializer(patient_info).data.get('genetic_mutations'):
             mutations = None
 
-        echoed = _echoed_unchanged_fields(patient_info, patch_data)
-        mapped_fields = sorted((set(patch_data) & PATIENT_RECORD_OMOP_MAPPED_FIELDS) - echoed)
-        if mapped_fields:
-            return Response(
-                {
-                    'detail': (
-                        'OMOP-mapped PatientRecord fields are read-only. Write a complete '
-                        'clinical fact to the appropriate OMOP resource, then rederive the record.'
-                    ),
-                    'fields': mapped_fields,
-                },
-                status=status.HTTP_405_METHOD_NOT_ALLOWED,
-            )
-
         serializer = PatientRecordSerializer(patient_info, data=patch_data, partial=True)
         serializer.is_valid(raise_exception=True)
-
-        # DRF intentionally discards serializer read-only fields. Surface those
-        # attempts instead of returning success for a no-op, so ownership
-        # boundaries are visible to API consumers — but only when the value is
-        # actually being moved, not when the client echoes back what it read.
-        writable_fields = {
-            name for name, field in serializer.fields.items() if not field.read_only
-        }
-        unsupported_fields = sorted(set(patch_data) - writable_fields - echoed)
-        if unsupported_fields:
-            return Response(
-                {'detail': 'Only projection-owned PatientRecord fields are writable.', 'fields': unsupported_fields},
-                status=status.HTTP_405_METHOD_NOT_ALLOWED,
-            )
 
         def previous_value(obj, field):
             fk_id = f'{field}_id'
@@ -917,15 +892,87 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
             for field in patch_data
             if hasattr(patient_info, field)
         }
+        # Track which OMOP-mapped fields the user is editing directly.
+        # These may not have OMOP backing yet; derivation will preserve them
+        # until a FieldConceptMapping projects them into an OMOP table.
+        direct_fields = set(patch_data) & PATIENT_RECORD_OMOP_MAPPED_FIELDS
         with transaction.atomic():
             _apply_patient_name(person, patient_name)
             if mutations is not None:
                 _write_genetic_mutations(person, mutations)
                 patient_info.refresh_from_db()
             serializer.save()
+            if direct_fields:
+                # Re-read after serializer.save() in case a post_save signal
+                # modified user_edited_fields on the same row.
+                patient_info.refresh_from_db(fields=['user_edited_fields'])
+                edited = set(patient_info.user_edited_fields or [])
+                edited |= direct_fields
+                patient_info.user_edited_fields = sorted(edited)
+                patient_info.save(update_fields=['user_edited_fields'])
             _write_record_revisions(patient_info, previous_values, request)
 
+        # Project mapped fields into OMOP tables.  This runs outside the
+        # transaction so a projection failure does not roll back the
+        # PatientRecord write — the value is safely stored and projection
+        # can be retried when the mapping is re-approved.
+        if direct_fields:
+            self._project_mapped_fields(person, patient_info, direct_fields, patch_data)
+
         return Response({**serializer.data, 'previous_values': previous_values})
+
+    @staticmethod
+    def _project_mapped_fields(person, patient_info, direct_fields, patch_data):
+        """Project user-edited values into OMOP for fields with approved mappings.
+
+        Runs after the PatientRecord PATCH lands. For each patched field that
+        has an approved FieldConceptMapping, upserts the corresponding OMOP
+        clinical fact so derivation picks it up.  Fields without a mapping are
+        left in user_edited_fields for later projection when a mapping is
+        approved.
+        """
+        from omop_core.models import FieldConceptMapping
+        from omop_core.services.omop_projection import project_single_value
+        from omop_core.services.write_descriptor import mapping_target_for
+
+        mappings = {
+            m.field_name: m
+            for m in FieldConceptMapping.objects.filter(
+                field_name__in=list(direct_fields),
+                status='approved',
+            ).exclude(omop_table='').select_related('concept')
+            if m.concept_id and mapping_target_for(m.omop_table)
+        }
+        if not mappings:
+            return
+
+        projected_any = False
+        for field_name, mapping in mappings.items():
+            value = patch_data.get(field_name)
+            if value is None:
+                value = getattr(patient_info, field_name, None)
+            source_value = mapping.source_value or (
+                mapping.concept.concept_code if mapping.concept else None
+            )
+            if not source_value:
+                continue
+            projection = {
+                'omop_table': mapping_target_for(mapping.omop_table),
+                'concept_id': mapping.concept_id,
+                'type_concept_id': mapping.type_concept_id or 32817,
+                'source_value': source_value,
+            }
+            if project_single_value(person, field_name, value, projection):
+                projected_any = True
+
+        if projected_any:
+            try:
+                refresh_patient_record(person)
+            except Exception:
+                logger.warning(
+                    'Projection refresh failed for person %s', person.person_id,
+                    exc_info=True,
+                )
 
     @action(detail=True, methods=['get'], permission_classes=[ScopedTokenPermission, PatientSelfScopePermission])
     def provenance(self, request, pk=None):
@@ -10908,6 +10955,8 @@ class TherapyLineViewSet(viewsets.ViewSet):
                         end_date=data.get('end_date'),
                         regimen_concept_id=data.get('regimen_concept_id'),
                         outcome=data.get('outcome') or None,
+                        intent=data.get('intent') or None,
+                        discontinuation_reason=data.get('discontinuation_reason') or None,
                         source_value=data.get('source_value') or None,
                     )
         except ValueError as exc:
@@ -11011,6 +11060,8 @@ class TherapyLineViewSet(viewsets.ViewSet):
                         end_date=data.get('end_date'),
                         regimen_concept_id=data.get('regimen_concept_id'),
                         outcome=data.get('outcome') or None,
+                        intent=data.get('intent') or None,
+                        discontinuation_reason=data.get('discontinuation_reason') or None,
                         source_value=data.get('source_value') or None,
                         replace=True,
                     )

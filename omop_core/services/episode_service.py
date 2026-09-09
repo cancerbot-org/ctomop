@@ -72,6 +72,8 @@ def upsert_therapy_line_episode(
     end_date=None,
     drug_exposure_ids=(),
     outcome=None,
+    intent=None,
+    discontinuation_reason=None,
     source_value=None,
     today=None,
     replace_events=False,
@@ -147,7 +149,7 @@ def upsert_therapy_line_episode(
         if start_date is not None and episode.episode_start_date != start_date:
             episode.episode_start_date = start_date
             dirty.append('episode_start_date')
-        if episode.episode_end_date != end_date:
+        if end_date is not None and episode.episode_end_date != end_date:
             episode.episode_end_date = end_date
             dirty.append('episode_end_date')
         if dirty:
@@ -182,6 +184,19 @@ def upsert_therapy_line_episode(
                                     obs_date=end_date or start_date or today)
     elif replace_events:
         _delete_outcome_observation(person, line_number)
+
+    obs_date = end_date or start_date or today
+    if intent:
+        _upsert_line_observation(person, line_number, 'intent', intent,
+                                 ehr_type_concept, no_match_concept, obs_date=obs_date)
+    elif replace_events:
+        _delete_line_observation(person, line_number, 'intent')
+
+    if discontinuation_reason:
+        _upsert_line_observation(person, line_number, 'discontinuation', discontinuation_reason,
+                                 ehr_type_concept, no_match_concept, obs_date=obs_date)
+    elif replace_events:
+        _delete_line_observation(person, line_number, 'discontinuation')
 
     return TherapyLineEpisodeResult(episode, created, event_ids)
 
@@ -238,6 +253,50 @@ def _delete_outcome_observation(person, line_number):
     ).delete()
 
 
+def _upsert_line_observation(person, line_number, suffix, value, type_concept, no_match_concept, obs_date):
+    """Upsert a LOT-{n}-{suffix} Observation (intent, discontinuation, etc.)."""
+    src_value = f'LOT-{line_number}-{suffix}'
+    obs_concept = no_match_concept
+    if obs_concept is None or type_concept is None:
+        return
+    text = value[:60]
+
+    existing = Observation.objects.filter(
+        person=person, observation_source_value=src_value,
+    ).first()
+    if existing:
+        dirty = []
+        if existing.value_as_string != text:
+            existing.value_as_string = text
+            dirty.append('value_as_string')
+        if obs_date and existing.observation_date != obs_date:
+            existing.observation_date = obs_date
+            dirty.append('observation_date')
+        if dirty:
+            existing._skip_patient_record_refresh = True
+            existing.save(update_fields=dirty)
+        return
+
+    obs = Observation(
+        observation_id=next_pk(Observation, 'observation_id'),
+        person=person,
+        observation_concept=obs_concept,
+        observation_date=obs_date,
+        observation_type_concept=type_concept,
+        value_as_string=text,
+        observation_source_value=src_value,
+    )
+    obs._skip_patient_record_refresh = True
+    obs.save()
+
+
+def _delete_line_observation(person, line_number, suffix):
+    Observation.objects.filter(
+        person=person,
+        observation_source_value=f'LOT-{line_number}-{suffix}',
+    ).delete()
+
+
 def author_therapy_line(
     person,
     *,
@@ -247,6 +306,8 @@ def author_therapy_line(
     end_date=None,
     regimen_concept_id=None,
     outcome=None,
+    intent=None,
+    discontinuation_reason=None,
     source_value=None,
     replace=False,
 ):
@@ -270,6 +331,11 @@ def author_therapy_line(
     the same identity the bulk write path and FHIR ingest use, so re-sending a
     line converges instead of stacking duplicates.
 
+    Signal suppression is internalised: every DrugExposure save and Observation
+    delete fires post_save/post_delete, each of which would trigger a full
+    PatientRecord refresh. The suppression defers that to the single
+    refresh_patient_record call the caller makes after this returns.
+
     Args:
         person: OMOP Person.
         line_number: LOT number (1, 2, 3…).
@@ -286,6 +352,39 @@ def author_therapy_line(
     Returns a TherapyLineEpisodeResult with two extra attributes attached:
     ``drug_exposure_ids`` and ``drugs_created``.
     """
+    from omop_core.models import DrugExposure
+    from omop_core.signals import suppress_patient_record_refresh
+
+    with suppress_patient_record_refresh():
+        return _author_therapy_line_inner(
+            person,
+            line_number=line_number,
+            drugs=drugs,
+            start_date=start_date,
+            end_date=end_date,
+            regimen_concept_id=regimen_concept_id,
+            outcome=outcome,
+            intent=intent,
+            discontinuation_reason=discontinuation_reason,
+            source_value=source_value,
+            replace=replace,
+        )
+
+
+def _author_therapy_line_inner(
+    person,
+    *,
+    line_number,
+    drugs=(),
+    start_date=None,
+    end_date=None,
+    regimen_concept_id=None,
+    outcome=None,
+    intent=None,
+    discontinuation_reason=None,
+    source_value=None,
+    replace=False,
+):
     from omop_core.models import DrugExposure
 
     ehr_type = _concept(CONCEPT_EHR_TYPE)
@@ -338,6 +437,8 @@ def author_therapy_line(
         end_date=end_date,
         drug_exposure_ids=exposure_ids,
         outcome=outcome,
+        intent=intent,
+        discontinuation_reason=discontinuation_reason,
         source_value=source_value,
         replace_events=replace,
     )

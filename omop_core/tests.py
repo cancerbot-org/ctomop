@@ -5358,10 +5358,12 @@ class SeededSctFieldMappingsTest(TestCase):
             with self.subTest(field=field):
                 entry = descriptor[field]
                 self.assertTrue(entry['writable'], f'{field} is not writable')
-                self.assertEqual(entry['target'], 'observation')
+                self.assertEqual(entry['target'], 'patient_record')
+                self.assertIn('projection', entry)
+                self.assertEqual(entry['projection']['omop_table'], 'observation')
                 # Derivation matches on this exact value; a mismatch would store
                 # a row that never comes back.
-                self.assertEqual(entry['source_value'], source_value)
+                self.assertEqual(entry['projection']['source_value'], source_value)
 
     def test_the_list_fields_offer_their_bounded_vocabulary(self):
         from omop_core.services.write_descriptor import build_writable_field_descriptor
@@ -5414,9 +5416,11 @@ class SeededEmploymentStatusMappingTest(TestCase):
         entry = build_writable_field_descriptor()['employment_status']
 
         self.assertTrue(entry['writable'])
-        self.assertEqual(entry['target'], 'observation')
+        self.assertEqual(entry['target'], 'patient_record')
+        self.assertIn('projection', entry)
+        self.assertEqual(entry['projection']['omop_table'], 'observation')
         # _get_social_data matches on this concept code.
-        self.assertEqual(entry['source_value'], '224362002')
+        self.assertEqual(entry['projection']['source_value'], '224362002')
 
     def test_writing_the_prescribed_fact_derives_back(self):
         """The round trip, not just the recipe.
@@ -5430,18 +5434,19 @@ class SeededEmploymentStatusMappingTest(TestCase):
         from omop_core.services.write_descriptor import build_writable_field_descriptor
 
         entry = build_writable_field_descriptor()['employment_status']
+        projection = entry['projection']
         person = Person.objects.create(person_id=880011, year_of_birth=1970)
         PatientRecord.objects.get_or_create(person=person)
 
         Observation.objects.create(
             observation_id=next_pk(Observation, 'observation_id'),
             person=person,
-            observation_concept=Concept.objects.get(concept_id=entry['concept_id']),
+            observation_concept=Concept.objects.get(concept_id=projection['concept_id']),
             observation_date=date(2025, 4, 1),
             observation_type_concept=Concept.objects.get(
-                concept_id=entry['type_concept_id'],
+                concept_id=projection['type_concept_id'],
             ),
-            observation_source_value=entry['source_value'],
+            observation_source_value=projection['source_value'],
             value_as_string='Employed full-time',
         )
 

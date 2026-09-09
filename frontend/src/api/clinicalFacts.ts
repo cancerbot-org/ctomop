@@ -82,7 +82,7 @@ const CLINICAL_TARGETS = {
 
 type ClinicalTarget = keyof typeof CLINICAL_TARGETS;
 
-function clinicalTarget(target: FieldDescriptor['target']): ClinicalTarget | null {
+function clinicalTarget(target: string | undefined): ClinicalTarget | null {
   return target && target in CLINICAL_TARGETS
     ? target as ClinicalTarget
     : null;
@@ -276,6 +276,13 @@ export async function writeFieldValue(
     await writeProfileField(personId, field, descriptor, value);
     return;
   }
+  if (descriptor?.target === 'patient_record') {
+    // Direct writes are handled by the PATCH in doSave, not here.
+    // This path should not be reached, but guard against it.
+    throw new Error(
+      `${field} writes directly to PatientRecord via PATCH — use doSave, not writeFieldValue`,
+    );
+  }
   await writeClinicalFact(personId, field, descriptor, value, date ?? today());
 }
 
@@ -293,7 +300,11 @@ export async function writeFieldValues(
   date?: string,
 ): Promise<void> {
   const profile = edits.filter((e) => e.descriptor?.target === 'person');
-  const clinical = edits.filter((e) => e.descriptor?.target !== 'person');
+  // Direct writes (target === 'patient_record') are handled by the PATCH in
+  // doSave, not here. Skip them so they don't attempt a clinical-fact POST.
+  const clinical = edits.filter(
+    (e) => e.descriptor?.target !== 'person' && e.descriptor?.target !== 'patient_record',
+  );
 
   for (const { field, descriptor, value } of clinical) {
     await writeClinicalFact(personId, field, descriptor, value, date ?? today());

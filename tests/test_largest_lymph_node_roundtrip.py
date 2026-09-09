@@ -28,8 +28,9 @@ def test_largest_lymph_node_descriptor_to_measurement_to_patient_record():
         concept_name='Patient reported',
     )
     descriptor = build_writable_field_descriptor()['largest_lymph_node_size']
+    projection = descriptor['projection']
 
-    assert descriptor['concept_id'] == concept.concept_id
+    assert projection['concept_id'] == concept.concept_id
 
     client = APIClient()
     user = Identity.objects.create_user(
@@ -38,12 +39,12 @@ def test_largest_lymph_node_descriptor_to_measurement_to_patient_record():
     client.force_authenticate(user=user)
     response = client.post('/api/v1/measurements/', {
         'person': record.person_id,
-        'measurement_concept': descriptor['concept_id'],
+        'measurement_concept': projection['concept_id'],
         'measurement_date': '2026-09-07',
         'measurement_type_concept': type_concept.concept_id,
-        'measurement_source_value': descriptor['source_value'],
+        'measurement_source_value': projection['source_value'],
         'value_as_number': 2.7,
-        'unit_source_value': descriptor['unit'],
+        'unit_source_value': projection.get('unit', 'cm'),
     }, format='json')
 
     assert response.status_code == 201, response.data

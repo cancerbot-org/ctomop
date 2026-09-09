@@ -35,6 +35,21 @@ def refresh_patient_record_task(person_id: int) -> dict[str, Any]:
     }
 
 
+@shared_task(name='omop_core.project_field_to_omop')
+def project_field_to_omop_task(mapping_pk: int) -> dict[str, Any]:
+    """Project PatientRecord values into OMOP for one approved field mapping.
+
+    Dispatched by the FieldConceptMapping post_save signal when a Celery
+    broker is configured. Commonly populated fields (e.g. disease) touch
+    every PatientRecord, so running inline would time out the curator's
+    request.
+    """
+    from omop_core.signals import _project_field_sync
+
+    _project_field_sync(mapping_pk)
+    return {'mapping_pk': mapping_pk}
+
+
 @shared_task(name='omop_core.suggest_mappings')
 def suggest_mappings_task(run_id: str, params: dict[str, Any]) -> dict[str, Any]:
     """Run one queued Code Mapping Suggest job.
