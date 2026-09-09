@@ -1260,6 +1260,20 @@ describe("mapping dialog request isolation", () => {
     expect(within(screen.getByRole("dialog")).queryByText("No suitable concept: Z94.81")).not.toBeInTheDocument();
   });
 
+  it("shows the suggestion method only in the dialog and clears it for another code", async () => {
+    renderPage([first, second]);
+    fireEvent.click(await screen.findByText("Z94.81"));
+    mockPost.mockResolvedValueOnce({ data: { suggested: loincHit, strategy_used: "lexical" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Suggest" }));
+    const message = await screen.findByText("Suggested via lexical.");
+    expect(screen.getByRole("dialog")).toContainElement(message);
+    expect(screen.getAllByText("Suggested via lexical.")).toHaveLength(1);
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Suggested via lexical.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Z12.11"));
+    expect(screen.queryByText("Suggested via lexical.")).not.toBeInTheDocument();
+  });
+
   it.each([false, true])("ignores a late suggestion for a closed dialog (destination=%s)", async (found) => {
     renderPage([first, second]);
     fireEvent.click(await screen.findByText("Z94.81"));
@@ -1347,5 +1361,22 @@ describe("Uncoded review counters and refresh", () => {
     render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
     const section = await screen.findByRole("region", { name: "Suggestion accuracy" });
     expect(within(section).getByText("Approved").parentElement).toHaveTextContent("0");
+  });
+});
+
+
+describe("saved batch log discovery", () => {
+  it("recovers the completed run link after leaving and reopening the mapping page", async () => {
+    mockGet.mockImplementation((url: string) => Promise.resolve({ data:
+      url.endsWith("suggest-runs/latest/") ? { run_id: "saved-run" }
+        : url.includes("reference") ? reference : url.includes("accuracy") ? {} : [proposedRow],
+    }));
+    const page = render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
+    expect(await screen.findByRole("link", { name: "View latest batch run log" }))
+      .toHaveAttribute("href", "/code-mappings/suggest-runs/saved-run");
+    page.unmount();
+    render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
+    expect(await screen.findByRole("link", { name: "View latest batch run log" }))
+      .toHaveAttribute("href", "/code-mappings/suggest-runs/saved-run");
   });
 });
