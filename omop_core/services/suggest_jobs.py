@@ -33,7 +33,7 @@ from omop_core.models import SuggestRun
 
 # What a run may attempt when it is genuinely queued: bounded by
 # CELERY_TASK_TIME_LIMIT (900s default) against ~3.5s per code, with wide margin.
-QUEUED_MAX_CODES = 50
+QUEUED_MAX_CODES = 100
 
 # What it may attempt when there is no broker and the "queue" is the request
 # thread. Deliberately far smaller: `render.yaml` leaves CELERY_BROKER_URL

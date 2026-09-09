@@ -54,10 +54,10 @@ Django uses the broker for its shared cache.
   `omop_core.suggest_mappings`. From the Render shell,
   `celery -A ctomop inspect ping` must get a worker response.
 - Authenticated `/api/v1/code-mappings/reference/` must return
-  `suggest_max_per_run: 50`.
+  `suggest_max_per_run: 100`.
 - Run Suggest on a curator-approved queue. The request must return 202 promptly,
   the worker must receive the job, and its progress must reach success. Seeing
-  50 in the UI proves broker configuration, not worker health.
+  100 in the UI proves broker configuration, not worker health.
 - Check web and worker memory during the run. Do not run the test suite against
   staging.
 
@@ -68,6 +68,6 @@ jobs before stopping the worker; retain Redis until queued work is accounted
 for so a later sync cannot discard pending work.
 
 Local tests use isolated PostgreSQL, Redis, and a real Celery worker to verify
-50-code Suggest runs and patient derivation without external model API calls.
+100-code Suggest runs and patient derivation without external model API calls.
 
 Render reference: https://render.com/docs/blueprint-spec

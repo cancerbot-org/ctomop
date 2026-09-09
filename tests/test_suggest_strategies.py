@@ -750,7 +750,7 @@ class TestSuggestRunLifecycle:
         assert resp.data['total'] == 3
         assert fake.calls[0][1]['min_occurrences'] == 1
 
-    @pytest.mark.parametrize('maximum', [3, 50])
+    @pytest.mark.parametrize('maximum', [3, 100])
     def test_reference_exposes_the_active_batch_ceiling(self, maximum):
         fake = FakeSuggestDispatcher()
         fake.max_codes = maximum
@@ -1250,3 +1250,32 @@ def test_suggest_persists_all_bridge_cuis_without_varchar_overflow(
     assert mapping.target_concept_id == target.pk
     assert mapping.umls_cui == ','.join(cuis)
     assert len(mapping.umls_cui) > 20
+
+
+@pytest.mark.parametrize('source', ['ICD10', 'ICD10CM', 'ICD10PCS', 'urn:oid:2.16.840.1.113883.6.90'])
+@pytest.mark.parametrize('destination_domain', ['Observation', 'Procedure', 'Drug', 'Device'])
+def test_icd_retrieves_other_standard_domains_without_umls(source, destination_domain):
+    from omop_core.mapping.suggestions import retrieval_pool
+    concept = ConceptFactory(concept_name='Unique candidate description', standard_concept='S',
+                             domain=DomainFactory(domain_id=destination_domain))
+    candidates, cui, definitive = retrieval_pool(
+        source_code='TEST', source_vocabulary_id=source,
+        source_text='Unique candidate description', domain_id='Condition',
+        strategies=[STRATEGY_UMLS, STRATEGY_LEXICAL],
+    )
+    assert [c['concept_id'] for c in candidates] == [concept.pk]
+    assert candidates[0]['domain_id'] == destination_domain
+    assert cui is None
+    assert not definitive
+
+
+def test_lexical_filters_ineligible_synonyms_before_limit():
+    from omop_core.mapping.suggestions import lexical_candidates
+    from omop_core.models import ConceptSynonym
+    ConceptFactory(concept_id=4180186)
+    for i in range(12):
+        concept = ConceptFactory(standard_concept=None, concept_name=f'ineligible {i}')
+        ConceptSynonym.objects.create(concept=concept, concept_synonym_name='Distinctive synonym target', language_concept_id=4180186)
+    good = ConceptFactory(standard_concept='S', concept_name='Different preferred name')
+    ConceptSynonym.objects.create(concept=good, concept_synonym_name='Distinctive synonym target', language_concept_id=4180186)
+    assert [c['concept_id'] for c in lexical_candidates('Distinctive synonym target', None)] == [good.pk]

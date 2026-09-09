@@ -98,7 +98,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MIN_OCCURRENCES = 10
 
 # Increment this whenever a material suggestion-algorithm change is released.
-SUGGESTION_MODEL_VERSION = 'v0.2'
+SUGGESTION_MODEL_VERSION = 'v0.3'
 SUGGESTION_PROVENANCE = f'suggest {SUGGESTION_MODEL_VERSION}'
 
 # How many trigram survivors lexical retrieval hands the reranker. Ten: enough
@@ -267,6 +267,7 @@ def umls_candidates(source_code, source_vocabulary_id, domain_id=None):
                 'concept_code': c.concept_code,
                 'vocabulary_id': c.vocabulary_id,
                 'concept_class_id': c.concept_class_id,
+                'domain_id': c.domain_id,
                 'umls_score': 1.0,  # curated equivalency — max confidence
                 'retrieval': STRATEGY_UMLS,
             })
@@ -552,7 +553,7 @@ def unmapped_source_values(omop_table, min_occurrences=DEFAULT_MIN_OCCURRENCES,
 def lexical_candidates(source_value, domain_id, limit=CANDIDATE_LIMIT):
     """Concepts whose name or synonyms look like this source value.
 
-    Scoped to the domain, so a lab name cannot retrieve a drug. Standard
+    Scoped to the domain when supplied; ICD-10 searches all domains. Standard
     concepts only -- a curator re-pointing at a non-standard one is a decision
     they can still make by hand, but it is never what we should suggest.
     """
@@ -578,7 +579,8 @@ def lexical_candidates(source_value, domain_id, limit=CANDIDATE_LIMIT):
     # governs regardless of the session setting.
     by_name = (
         Concept.objects
-        .filter(standard_concept='S', domain_id=domain_id, invalid_reason__isnull=True)
+        .filter(standard_concept='S', invalid_reason__isnull=True,
+                **({'domain_id': domain_id} if domain_id else {}))
         .annotate(name_upper=Upper('concept_name'))
         .filter(name_upper__trigram_similar=query)
         .annotate(score=TrigramSimilarity(Upper('concept_name'), query))
@@ -590,6 +592,8 @@ def lexical_candidates(source_value, domain_id, limit=CANDIDATE_LIMIT):
     # keeping whichever route scored higher.
     synonym_hits = (
         ConceptSynonym.objects
+        .filter(concept__standard_concept='S', concept__invalid_reason__isnull=True,
+                **({'concept__domain_id': domain_id} if domain_id else {}))
         .annotate(name_upper=Upper('concept_synonym_name'))
         .filter(name_upper__trigram_similar=query)
         .annotate(score=TrigramSimilarity(Upper('concept_synonym_name'), query))
@@ -606,7 +610,8 @@ def lexical_candidates(source_value, domain_id, limit=CANDIDATE_LIMIT):
     if synonym_scores:
         for concept in Concept.objects.filter(
             concept_id__in=list(synonym_scores),
-            standard_concept='S', domain_id=domain_id, invalid_reason__isnull=True,
+            standard_concept='S', invalid_reason__isnull=True,
+            **({'domain_id': domain_id} if domain_id else {}),
         ):
             score = float(synonym_scores[concept.concept_id])
             if concept.concept_id not in merged or score > merged[concept.concept_id][1]:
@@ -620,6 +625,7 @@ def lexical_candidates(source_value, domain_id, limit=CANDIDATE_LIMIT):
             'concept_code': c.concept_code,
             'vocabulary_id': c.vocabulary_id,
             'concept_class_id': c.concept_class_id,
+            'domain_id': c.domain_id,
             'lexical_score': round(score, 3),
             'retrieval': STRATEGY_LEXICAL,
         }
@@ -632,7 +638,7 @@ _RANKING_SCHEMA = {
     'properties': {
         'concept_id': {
             'type': ['integer', 'null'],
-            'description': 'The best candidate, or null if none of them is right.',
+            'description': 'The best exact or clinically compatible broader candidate; null only if none is compatible.',
         },
         'confidence': {'type': 'string', 'enum': ['high', 'medium', 'low']},
         'reason': {'type': 'string', 'description': 'One sentence, for the curator.'},
@@ -641,21 +647,31 @@ _RANKING_SCHEMA = {
     'additionalProperties': False,
 }
 
-_RANKING_SYSTEM = """You map clinical source codes onto OMOP concepts.
+_RANKING_SYSTEM = """Suggest the best clinically compatible OMOP concept for curator review.
 
-You are given one source value as it appeared in real clinical data, and a
-shortlist of candidate OMOP concepts retrieved by string similarity. Pick the
-candidate that means the same clinical thing, or null if none does.
+You receive a source code/description and active standard candidate concepts
+retrieved through UMLS and/or lexical search, possibly reordered by vectors.
+A UMLS match is not required. Candidates can span OMOP domains: an ICD-10 source
+is not necessarily a Condition. Use the source meaning and candidate domain.
 
-String similarity is not meaning. The highest-scoring candidate is often wrong
-in a specific way: a ratio is not the analyte it is computed from, a panel is
-not one of its components, a urine measurement is not a serum one, and a
-qualitative finding is not a quantitative result. Prefer the candidate whose
-specimen, quantity and method match the source value; where the source value is
-silent on method, prefer the more general concept over a method-specific one.
+Prefer an exact match. If none exists, propose the best clinically compatible
+broader concept, with medium or low confidence and an explicit explanation of
+what information is lost (such as laterality or specificity). These are
+unapproved suggestions: a curator must approve a mapping before it is used to
+resolve patient data. Do not reject a useful broader match just for lacking
+exact equivalence or a UMLS bridge.
 
-Answer null rather than guessing. A wrong mapping is written into patient
-records; an unmapped code stays in a queue where a human will see it."""
+A merely similar word is not a useful approximation. Preserve essential context:
+past history versus current disease; status/presence versus complication;
+screening/encounter versus diagnosis; allergy propensity versus active reaction;
+drug poisoning/adverse effect versus the drug itself; panel versus component;
+specimen and measured quantity. Do not assert a condition, procedure or drug
+administration that the source does not assert. Explain any required domain
+change or qualifiers that a single candidate cannot represent.
+
+Choose only from the supplied candidates. Return null only when the shortlist
+contains no clinically compatible exact or broader concept. Never invent an ID.
+"""
 
 
 def rank_candidates(source_value, candidates, source_description=''):
@@ -692,7 +708,7 @@ def rank_candidates(source_value, candidates, source_description=''):
 
     listing = '\n'.join(
         f'{c["concept_id"]}\t{c["vocabulary_id"]}:{c["concept_code"]}\t'
-        f'{c["concept_name"]}\t(class {c["concept_class_id"]})'
+        f'{c["concept_name"]}\t(domain {c.get("domain_id", "unknown")}; class {c["concept_class_id"]})'
         for c in candidates
     )
     described = f'\nSource description: {source_description}' if source_description else ''
@@ -769,14 +785,17 @@ def retrieval_pool(*, source_code, source_vocabulary_id, source_text, domain_id,
     """
     candidates, umls_cui = [], None
 
-    # Without a domain there is nothing to scope retrieval to, and the two tiers
-    # fail differently: lexical filters on domain_id='' and returns nothing,
-    # while umls_candidates skips the filter entirely -- so a single
-    # cross-domain sibling would come back "definitive" and be written straight
-    # onto the row with no model call, landing a Drug concept on a measurement.
-    # A queue row always carries a domain in practice; refusing is the safe
-    # answer when one does not.
-    if not domain_id:
+    # ICD-10 source systems do not determine the destination OMOP domain.
+    # Other inputs (such as labs) retain their domain constraint.
+    normalized_vocabulary = (source_vocabulary_id or '').removeprefix('urn:oid:')
+    all_domains = normalized_vocabulary in {
+        'ICD10', 'ICD10CM', 'ICD10PCS', 'ICD10GM', 'ICD10CA',
+        '2.16.840.1.113883.6.90', '2.16.840.1.113883.6.3',
+        '2.16.840.1.113883.6.4',
+    }
+    if all_domains:
+        domain_id = None
+    if not domain_id and not all_domains:
         logger.warning(
             'No domain for %s:%s; skipping retrieval rather than guessing.',
             source_vocabulary_id or '(none)', source_code,
