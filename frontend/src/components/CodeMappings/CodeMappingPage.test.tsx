@@ -1329,7 +1329,14 @@ describe("Uncoded review counters and refresh", () => {
     expect(within(section).getByText("Approved").parentElement).toHaveTextContent("6");
     expect(within(section).getByText("Rejected").parentElement).toHaveTextContent("2");
     expect(within(section).getByText("Other destination").parentElement).toHaveTextContent("3");
-    expect(within(section).getByText("Metrics: suggest v0.2")).toBeInTheDocument();
+    expect(within(section).getByText("Metrics: v0.2")).toBeInTheDocument();
+    expect(screen.queryByText("Review counts: all models")).not.toBeInTheDocument();
+    const controls = screen.getByRole("group", { name: "Suggest controls" });
+    const vectors = within(controls).getByRole("checkbox", { name: "Vectors" });
+    const replace = within(controls).getByRole("checkbox", { name: "Replace Current Suggestions" });
+    expect(vectors.closest("span")?.nextElementSibling).toBe(replace.closest("label"));
+    expect(section.firstElementChild).toHaveTextContent("Metrics: v0.2");
+
   });
 
   it("updates confirmed reviews and counters without waiting for the table reload", async () => {
