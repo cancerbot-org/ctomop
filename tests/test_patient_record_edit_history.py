@@ -454,3 +454,29 @@ def test_custom_mapping_survives_later_external_refresh_without_pending_override
     )
     record.refresh_from_db()
     assert record.supportive_therapies == 'New imported supportive care'
+
+
+def test_curated_snapshot_reader_uses_one_query_without_editor_metadata(editor):
+    from types import SimpleNamespace
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    from omop_core.services.omop_projection import curated_values_from_snapshot
+    from tests.factories import ObservationFactory
+
+    record, _ = editor
+    concept = ConceptFactory(concept_code='supportive-note')
+    FieldConceptMapping.objects.create(
+        field_name='supportive_therapies', concept=concept, omop_table='observation',
+        source_value='', value_kind='string', status='approved',
+    )
+    with suppress_patient_record_refresh():
+        row = ObservationFactory(
+            person=record.person, observation_concept=concept,
+            observation_source_value='supportive-note', value_as_string='Supportive care',
+            value_as_number=None,
+        )
+    snapshot = SimpleNamespace(measurements=[], observations=[row])
+    with CaptureQueriesContext(connection) as queries:
+        values = curated_values_from_snapshot(snapshot)
+    assert values == {'supportive_therapies': 'Supportive care'}
+    assert len(queries) == 1

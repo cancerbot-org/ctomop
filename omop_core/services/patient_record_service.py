@@ -924,7 +924,7 @@ def recompute_patient_record_fields(patient_info: PatientRecord, *, changed_fiel
     }.items():
         if inputs.intersection(changed_fields):
             setattr(patient_info, result, None)
-    _compute_derived_fields(patient_info)
+    _compute_derived_fields(patient_info, apply_formulas=False)
     _clear_overflowing_decimal_fields(patient_info)
     patient_info.save()
     # Model.save retains legacy calculations (notably BMI). Active formulas
@@ -3762,7 +3762,7 @@ def _parse_date_value(v):
     return None
 
 
-def _compute_derived_fields(patient_info: PatientRecord) -> None:
+def _compute_derived_fields(patient_info: PatientRecord, *, apply_formulas=True) -> None:
     """Compute fields that depend on other PatientRecord fields being set."""
     if patient_info.active_infection_status is not None:
         patient_info.no_active_infection_status = not patient_info.active_infection_status
@@ -3881,7 +3881,8 @@ def _compute_derived_fields(patient_info: PatientRecord) -> None:
     if _lt_candidates:
         patient_info.last_treatment = max(_lt_candidates)
 
-    _apply_active_field_formulas(patient_info)
+    if apply_formulas:
+        _apply_active_field_formulas(patient_info)
 
 
 def _formula_values(patient_info: PatientRecord) -> dict[str, object]:

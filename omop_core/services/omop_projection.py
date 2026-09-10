@@ -6,7 +6,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from omop_core.models import (
-    ConditionOccurrence, DrugExposure, Measurement, Observation,
+    ConditionOccurrence, DrugExposure, FieldConceptMapping, Measurement, Observation,
     PatientRecord, Person, ProcedureOccurrence,
 )
 from omop_core.services.pk import next_pk
@@ -70,7 +70,20 @@ def curated_values_from_snapshot(snapshot):
     the field has no built-in extractor (for example supportive therapy dates).
     All facts come from the snapshot already loaded by that external refresh.
     """
-    from omop_core.services.write_descriptor import build_writable_field_descriptor
+    from omop_core.services.patient_record_service import PATIENT_RECORD_OMOP_MAPPED_FIELDS
+    from omop_core.services.write_descriptor import (
+        _LIFECYCLE_FIELDS, _WRITE_RECIPE_INCOMPLETE,
+        get_serializer_read_only_fields, mapping_target_for,
+    )
+
+    readable_fields = {
+        field.name: field for field in PatientRecord._meta.concrete_fields
+        if field.name in PATIENT_RECORD_OMOP_MAPPED_FIELDS
+        and field.name not in get_serializer_read_only_fields()
+        and field.name not in _LIFECYCLE_FIELDS
+        and field.name not in _WRITE_RECIPE_INCOMPLETE
+        and field.get_internal_type() != 'JSONField'
+    }
 
     indexed = {}
     for target, rows in (('measurement', snapshot.measurements), ('observation', snapshot.observations)):
@@ -80,21 +93,28 @@ def curated_values_from_snapshot(snapshot):
             by_key.setdefault((getattr(row, concept_field), getattr(row, source_field)), row)
         indexed[target] = by_key
     values = {}
-    for name, entry in build_writable_field_descriptor().items():
-        if not entry.get('curated'):
+    # One joined mapping lookup is sufficient. The editor descriptor also
+    # loads choices, units, and unrelated vocabulary recipes that readers do
+    # not need and that would exceed the full-refresh query budget.
+    mappings = FieldConceptMapping.objects.filter(
+        status='approved', field_name__in=readable_fields,
+    ).exclude(value_kind='json').values(
+        'field_name', 'omop_table', 'concept_id', 'concept__concept_code', 'source_value',
+    )
+    for mapping in mappings:
+        name = mapping['field_name']
+        target = mapping_target_for(mapping['omop_table'])
+        if target not in indexed:
             continue
-        projection = projection_for_descriptor(entry)
-        if (not projection or projection['omop_table'] not in indexed
-                or projection.get('value_kind') == 'json'):
-            continue
-        row = indexed[projection['omop_table']].get((projection['concept_id'], projection['source_value']))
+        source_value = mapping['source_value'] or mapping['concept__concept_code']
+        row = indexed[target].get((mapping['concept_id'], source_value))
         if row is None:
             continue
         value = row.value_as_number if row.value_as_number is not None else row.value_as_string
         if value is None:
             continue
         try:
-            values[name] = PatientRecord._meta.get_field(name).to_python(value)
+            values[name] = readable_fields[name].to_python(value)
         except (ValidationError, ValueError, TypeError):
             continue
     return values
