@@ -316,7 +316,15 @@ class GenderField(serializers.CharField):
 
     def to_internal_value(self, data):
         title = str(data).title()
-        return self.DISPLAY_TO_CODE.get(title, data)
+        if title in self.DISPLAY_TO_CODE:
+            return self.DISPLAY_TO_CODE[title]
+        # Also accept DB codes directly (M, F, empty string).
+        if data in self.CODE_TO_DISPLAY or data == '':
+            return data
+        raise serializers.ValidationError(
+            f"Invalid gender value '{data}'. "
+            f"Expected one of: {', '.join(self.DISPLAY_TO_CODE.keys())}."
+        )
 
 
 def _derived_wearable_fields():

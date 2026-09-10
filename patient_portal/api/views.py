@@ -651,9 +651,12 @@ def _project_profile_fields(person, direct_fields, patch_data):
             person_changed.append(field)
 
     # ---- date_of_birth → year/month/day on Person ----
+    # Fill-if-empty: once a DOB is recorded it cannot be changed through
+    # the UI, only through a service-token ingest that knows the source.
     if 'date_of_birth' in profile_fields:
+        existing_dob = person.year_of_birth is not None
         dob = patch_data['date_of_birth']
-        if dob is not None:
+        if dob is not None and not existing_dob:
             if isinstance(dob, str):
                 dob = parse_date(dob)
             if dob is not None:
@@ -663,16 +666,6 @@ def _project_profile_fields(person, direct_fields, patch_data):
                     if getattr(person, attr) != val:
                         setattr(person, attr, val)
                         person_changed.append(attr)
-            else:
-                for attr in ('year_of_birth', 'month_of_birth', 'day_of_birth'):
-                    if getattr(person, attr) is not None:
-                        setattr(person, attr, None)
-                        person_changed.append(attr)
-        else:
-            for attr in ('year_of_birth', 'month_of_birth', 'day_of_birth'):
-                if getattr(person, attr) is not None:
-                    setattr(person, attr, None)
-                    person_changed.append(attr)
 
     # ---- Demographics (gender, race, ethnicity) ----
     for field in profile_fields & set(_PROFILE_DEMOGRAPHIC_FIELDS):
