@@ -212,7 +212,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ## Citation
 
-The concept-mapping **Semantic retrieval** strategy adapts
+The concept-mapping **Semantic retrieval** strategy and search-expansion fallback adapt
 [Lettuce](https://github.com/Health-Informatics-UoN/lettuce)'s approach, developed
 by University of Nottingham Health Informatics under the MIT License. See
 [third-party acknowledgments and license notices](THIRD_PARTY_NOTICES.md) and

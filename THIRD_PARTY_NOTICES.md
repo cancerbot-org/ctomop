@@ -8,10 +8,14 @@ developed by University of Nottingham Health Informatics.
 
 Reference revision: `7e8796ace2cbd86490bb077b3300da003c334e50`, specifically
 `lettuce/omop/omop_queries.py` (`query_vector`) and
-`lettuce/components/embeddings.py`. The adaptation is implemented in
+`lettuce/components/embeddings.py`, `lettuce/components/prompt_templates.py`,
+and `lettuce/routers/search_routes.py`. The retrieval adaptation is implemented in
 `omop_core/mapping/suggestions.py` (`semantic_candidates`) using Django and
-PROMOP's existing embeddings. It does not require a Lettuce server or use
-Lettuce's LLM name-generation pipeline.
+PROMOP's existing embeddings. `omop_core/mapping/search_expansion.py` also draws
+on Lettuce's formal-name generation followed by vocabulary search. PROMOP bounds
+this to one retry and requires final selection against original source evidence.
+It does not require a Lettuce server or accept a generated name solely because
+it exactly matches a vocabulary name.
 
 Copyright (c) 2024 University of Nottingham Health Informatics.
 

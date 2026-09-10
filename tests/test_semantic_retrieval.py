@@ -199,7 +199,7 @@ def test_default_pipeline_sends_full_pool_to_llm_without_vector_reranking(monkey
     monkeypatch.setattr(suggest, 'rank_candidates', ranker)
     result = suggest.suggest_one_mapping('LOCAL-123', 'Local', 'condition')
     reranker.assert_not_called()
-    assert ranker.call_args.args[1] == [lexical_hit, semantic_hit]
+    assert [c['concept_id'] for c in ranker.call_args.args[1]] == [1, 2]
     assert result['strategy_used'] == 'semantic'
 
 
