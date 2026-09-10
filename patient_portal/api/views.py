@@ -4899,9 +4899,6 @@ _PERSON_INT_PLACEHOLDER  = {None, 0}
 _PERSON_PATCHABLE_FIELDS = {
     'given_name':            ('str',  _PERSON_STR_PLACEHOLDERS),
     'family_name':           ('str',  _PERSON_STR_PLACEHOLDERS),
-    'year_of_birth':         ('int',  _PERSON_YEAR_PLACEHOLDER),
-    'month_of_birth':        ('int',  _PERSON_INT_PLACEHOLDER),
-    'day_of_birth':          ('int',  _PERSON_INT_PLACEHOLDER),
     'gender_source_value':   ('str',  _PERSON_STR_PLACEHOLDERS),
     'race_source_value':     ('str',  _PERSON_STR_PLACEHOLDERS),
     'ethnicity_source_value':('str',  _PERSON_STR_PLACEHOLDERS),
@@ -4943,6 +4940,9 @@ _PERSON_REPLACEABLE_FIELDS = {
     'email': 'email',
     'phone_number': 'str',
     'facility_name': 'str',
+    'year_of_birth': 'int',
+    'month_of_birth': 'int',
+    'day_of_birth': 'int',
     'validated': 'bool',
     'validated_by': 'str',
     'validation_date': 'date',
@@ -5294,6 +5294,14 @@ class PersonViewSet(viewsets.GenericViewSet):
                 else:
                     return Response(
                         {'detail': f"'{field}' must be a boolean."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            elif kind == 'int' and incoming is not None:
+                try:
+                    incoming = int(incoming)
+                except (TypeError, ValueError):
+                    return Response(
+                        {'detail': f"'{field}' must be an integer."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
             elif kind == 'date' and incoming is not None:

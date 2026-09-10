@@ -20,7 +20,6 @@ import BloodTab from "@/components/PatientInfo/tabs/BloodTab";
 import LabsTab from "@/components/PatientInfo/tabs/LabsTab";
 import BehaviorTab from "@/components/PatientInfo/tabs/BehaviorTab";
 import WearableTab from "@/components/PatientInfo/tabs/WearableTab";
-import { CustomPatientFields } from "@/components/PatientInfo/CustomPatientFields";
 import PatientOmopTab from "./PatientOmopTab";
 
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
@@ -579,23 +578,10 @@ export default function PatientDetail({
     }
   }, [personId]);
 
-  const handleCustomEditableValue = useCallback(async (
-    field: { field_name: string }, value: unknown,
-  ) => {
-    if (!personId) return;
-    // All edits go through PatientRecord PATCH now. The backend handles
-    // OMOP projection for fields with approved mappings.
-    await api.patch(`/patient-info/${personId}/`, { [field.field_name]: value });
-    const response = await api.get(`/patient-info/${personId}/`);
-    const refreshed = response.data.patient_info;
-    setPatientInfo(refreshed);
-    setEditedInfo(refreshed);
-    patientInfoRef.current = { ...refreshed };
-  }, [personId]);
-
-  const getDiseaseType = (): "breast" | "lymphoma" | "myeloma" | "cll" | "other" => {
+  const getDiseaseType = (): "breast" | "lymphoma" | "myeloma" | "cll" | "mcl" | "other" => {
     const d = (typeof editedInfo?.disease === "string" ? editedInfo.disease : "").toLowerCase();
     if (d.includes("breast")) return "breast";
+    if (d.includes("mantle")) return "mcl";
     if (d.includes("lymphoma")) return "lymphoma";
     if (d.includes("myeloma")) return "myeloma";
     if (d.includes("cll") || d.includes("chronic lymphocytic")) return "cll";
@@ -603,7 +589,7 @@ export default function PatientDetail({
   };
 
   const getDiseaseTabLabel = () =>
-    ({ breast: "Breast Cancer", lymphoma: "Follicular Lymphoma", myeloma: "Multiple Myeloma", cll: "CLL", other: "Disease Specific" })[getDiseaseType()];
+    ({ breast: "Breast Cancer", lymphoma: "Follicular Lymphoma", myeloma: "Multiple Myeloma", cll: "CLL", mcl: "Mantle Cell Lymphoma", other: "Disease Specific" })[getDiseaseType()];
 
   if (loading) return <PatientDetailSkeleton />;
 
@@ -643,11 +629,6 @@ export default function PatientDetail({
   const wearablesIdx = behaviorIdx + 1;
   const surveysIdx = patientMode ? wearablesIdx + 1 : -1;
   const omopIdx = canViewOmop ? tabLabels.length - 1 : -1;
-  const activeCustomTab = ({
-    0: 'general', 1: 'disease', 2: 'treatment', 3: 'blood', 4: 'labs',
-    [behaviorIdx]: 'behavior', [wearablesIdx]: 'wearable',
-  } as Record<number, string>)[activeTab];
-  const canManageCustomFields = !!(user?.is_staff || user?.is_org_admin);
 
   const tabDescriptions: Record<number, string> = {
     0: "Keep patient details up to date for accurate personalisation.",
@@ -846,14 +827,6 @@ export default function PatientDetail({
                 {activeTab === wearablesIdx && <WearableTab formData={editedInfo} onChange={handleFieldChange} onRefresh={reloadPatientInfo} />}
                 {surveysIdx >= 0 && activeTab === surveysIdx && <PatientSurveys user={user ?? null} />}
                 {omopIdx >= 0 && activeTab === omopIdx && personId && <PatientOmopTab personId={personId} />}
-                {activeCustomTab && (
-                  <CustomPatientFields
-                    tab={activeCustomTab}
-                    formData={editedInfo}
-                    canManage={canManageCustomFields}
-                    onEditableValueChange={handleCustomEditableValue}
-                  />
-                )}
               </div>
             </div>
           </>

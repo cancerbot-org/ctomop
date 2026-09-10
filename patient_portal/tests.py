@@ -26403,3 +26403,346 @@ class RetireLegacySurveysGuardTest(TestCase):
             self._run_guard()
 
         self.assertIn('still in `patient_survey_response`', str(caught.exception))
+
+
+# ---------------------------------------------------------------------------
+# Patient self-edit tests (issue: patient-record-first-writes)
+# ---------------------------------------------------------------------------
+
+class PatientSelfEditProfileTest(TestCase):
+    """Verify that a non-staff patient can PATCH their own profile fields
+    via /api/v1/persons/{person_id}/ (the target='person' route).
+
+    Profile fields include: given_name, family_name, email, phone_number,
+    gender, race, ethnicity, date_of_birth (via year/month/day), city, region.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.person = Person.objects.create(
+            person_id=99001,
+            given_name=None,
+            family_name=None,
+            year_of_birth=None,
+            month_of_birth=None,
+            day_of_birth=None,
+            gender_source_value=None,
+            race_source_value=None,
+            ethnicity_source_value=None,
+        )
+        PatientRecord.objects.get_or_create(person=cls.person)
+        cls.identity = Identity.objects.create_user(
+            email='patient_self_edit@test.com', password='pw',
+        )
+        PatientUser.objects.create(identity=cls.identity, person=cls.person)
+
+    def _client(self):
+        c = APIClient()
+        c.force_authenticate(user=self.identity)
+        return c
+
+    def _url(self):
+        return f'/api/v1/persons/{self.person.person_id}/'
+
+    def test_patient_can_set_given_name(self):
+        resp = self._client().patch(self._url(), {'given_name': 'Alice'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.given_name, 'Alice')
+
+    def test_patient_can_set_family_name(self):
+        resp = self._client().patch(self._url(), {'family_name': 'Smith'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.family_name, 'Smith')
+
+    def test_patient_can_set_email(self):
+        resp = self._client().patch(self._url(), {'email': 'alice@example.com'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.email, 'alice@example.com')
+
+    def test_patient_can_set_phone_number(self):
+        resp = self._client().patch(self._url(), {'phone_number': '555-1234'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.phone_number, '555-1234')
+
+    def test_patient_can_set_date_of_birth(self):
+        resp = self._client().patch(self._url(), {
+            'year_of_birth': 1985, 'month_of_birth': 3, 'day_of_birth': 15,
+        }, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.year_of_birth, 1985)
+        self.assertEqual(self.person.month_of_birth, 3)
+        self.assertEqual(self.person.day_of_birth, 15)
+
+    def test_patient_can_set_gender(self):
+        resp = self._client().patch(self._url(), {'gender': 'Female'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.gender_source_value, 'Female')
+
+    def test_patient_can_set_race(self):
+        resp = self._client().patch(self._url(), {'race': 'Asian'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.race_source_value, 'Asian')
+
+    def test_patient_can_set_ethnicity(self):
+        resp = self._client().patch(self._url(), {'ethnicity': 'Not Hispanic'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.ethnicity_source_value, 'Not Hispanic')
+
+    def test_patient_can_set_city(self):
+        resp = self._client().patch(self._url(), {'city': 'Portland'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        # City is stored on the Location row, not directly on Person.
+        # Just verify the endpoint accepted it.
+
+    def test_patient_can_set_region(self):
+        resp = self._client().patch(self._url(), {'region': 'OR'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+
+    def test_patient_cannot_edit_another_persons_profile(self):
+        other_person = Person.objects.create(person_id=99002)
+        PatientRecord.objects.get_or_create(person=other_person)
+        resp = self._client().patch(
+            f'/api/v1/persons/{other_person.person_id}/',
+            {'given_name': 'Hacker'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class PatientSelfEditClinicalFieldsTest(TestCase):
+    """Verify that a non-staff patient can PATCH KIND_DIRECT clinical fields
+    on their own PatientRecord via /api/patient-info/{person_id}/.
+
+    This covers supportive therapy fields and planned_therapies, which are
+    the writable clinical fields exposed in the Treatment tab.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.person = Person.objects.create(person_id=99101)
+        cls.patient_record = PatientRecord.objects.create(person=cls.person)
+        cls.identity = Identity.objects.create_user(
+            email='patient_clinical_edit@test.com', password='pw',
+        )
+        PatientUser.objects.create(identity=cls.identity, person=cls.person)
+
+    def _client(self):
+        c = APIClient()
+        c.force_authenticate(user=self.identity)
+        return c
+
+    def _url(self):
+        return f'/api/patient-info/{self.person.person_id}/'
+
+    def test_patient_can_set_planned_therapies(self):
+        resp = self._client().patch(
+            self._url(),
+            {'planned_therapies': 'FOLFOX'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.patient_record.refresh_from_db()
+        self.assertEqual(self.patient_record.planned_therapies, 'FOLFOX')
+
+    def test_patient_can_set_supportive_therapies(self):
+        resp = self._client().patch(
+            self._url(),
+            {'supportive_therapies': 'G-CSF'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.patient_record.refresh_from_db()
+        self.assertEqual(self.patient_record.supportive_therapies, 'G-CSF')
+
+    def test_patient_can_set_supportive_therapy_start_date(self):
+        resp = self._client().patch(
+            self._url(),
+            {'supportive_therapy_start_date': '2025-01-15'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.patient_record.refresh_from_db()
+        self.assertEqual(
+            str(self.patient_record.supportive_therapy_start_date), '2025-01-15',
+        )
+
+    def test_patient_can_set_supportive_therapy_end_date(self):
+        resp = self._client().patch(
+            self._url(),
+            {'supportive_therapy_end_date': '2025-06-30'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.patient_record.refresh_from_db()
+        self.assertEqual(
+            str(self.patient_record.supportive_therapy_end_date), '2025-06-30',
+        )
+
+    def test_patient_can_set_supportive_therapy_intent(self):
+        resp = self._client().patch(
+            self._url(),
+            {'supportive_therapy_intent': 'Prophylactic'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.patient_record.refresh_from_db()
+        self.assertEqual(self.patient_record.supportive_therapy_intent, 'Prophylactic')
+
+    def test_patient_can_set_disease(self):
+        """disease is KIND_DIRECT and must be editable by the patient."""
+        resp = self._client().patch(
+            self._url(),
+            {'disease': 'Multiple Myeloma'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.patient_record.refresh_from_db()
+        self.assertEqual(self.patient_record.disease, 'Multiple Myeloma')
+
+    def test_patient_cannot_patch_another_patient_clinical(self):
+        other_person = Person.objects.create(person_id=99102)
+        PatientRecord.objects.create(person=other_person)
+        resp = self._client().patch(
+            f'/api/patient-info/{other_person.person_id}/',
+            {'disease': 'Hacked'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_computed_field_silently_ignored(self):
+        """KIND_COMPUTED fields (e.g. bmi) must be silently ignored, not 405."""
+        self.patient_record.bmi = None
+        self.patient_record.save(update_fields=['bmi'])
+        resp = self._client().patch(
+            self._url(),
+            {'bmi': '99.9'},
+            format='json',
+        )
+        # Should be 200, but the bmi value should NOT have been written
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.patient_record.refresh_from_db()
+        self.assertIsNone(self.patient_record.bmi)
+
+
+class PatientSelfEditTherapyLinesTest(TestCase):
+    """Verify that a non-staff patient can author therapy lines via
+    POST/PATCH /api/v1/therapy-lines/.
+
+    This tests the full therapy authoring path as a patient user, not staff.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from omop_core.services.mappings import (
+            CONCEPT_EHR_TYPE, CONCEPT_TREATMENT_REGIMEN, CONCEPT_DRUG_EXPOSURE_FIELD,
+        )
+
+        _make_vocab_fixtures()
+        vocab = Vocabulary.objects.get(vocabulary_id='TEST')
+        drug_domain = Domain.objects.get(domain_id='Drug')
+        type_domain = Domain.objects.get(domain_id='Type Concept')
+
+        ingredient_cc, _ = ConceptClass.objects.get_or_create(
+            concept_class_id='Ingredient',
+            defaults={'concept_class_name': 'Ingredient',
+                      'concept_class_concept_id': 0},
+        )
+
+        def _concept(cid, name, domain, code):
+            return Concept.objects.get_or_create(
+                concept_id=cid,
+                defaults={
+                    'concept_name': name, 'domain': domain, 'vocabulary': vocab,
+                    'concept_class': ingredient_cc, 'concept_code': code,
+                    'valid_start_date': date(1970, 1, 1),
+                    'valid_end_date': date(2099, 12, 31),
+                },
+            )[0]
+
+        _concept(CONCEPT_TREATMENT_REGIMEN, 'Treatment Regimen', type_domain, '32531')
+        _concept(CONCEPT_EHR_TYPE, 'EHR', type_domain, '32817')
+        _concept(CONCEPT_DRUG_EXPOSURE_FIELD, 'drug_exposure.drug_exposure_id',
+                 type_domain, '1147094')
+        cls.len_concept = _concept(1301025, 'lenalidomide', drug_domain, '6360')
+        cls.dex_concept = _concept(1518254, 'dexamethasone', drug_domain, '3264')
+
+        cls.person = Person.objects.create(person_id=99201, year_of_birth=1960)
+        PatientRecord.objects.get_or_create(person=cls.person)
+        cls.identity = Identity.objects.create_user(
+            email='patient_therapy_author@test.com', password='pw',
+        )
+        PatientUser.objects.create(identity=cls.identity, person=cls.person)
+
+    def _client(self):
+        c = APIClient()
+        c.force_authenticate(user=self.identity)
+        return c
+
+    def _post(self, **overrides):
+        body = {
+            'person': self.person.person_id,
+            'line_number': 1,
+            'start_date': '2025-01-15',
+            'end_date': '2025-06-15',
+            'drugs': [
+                {'concept_id': self.len_concept.concept_id, 'source_value': 'lenalidomide'},
+                {'concept_id': self.dex_concept.concept_id, 'source_value': 'dexamethasone'},
+            ],
+        }
+        body.update(overrides)
+        return self._client().post('/api/v1/therapy-lines/', body, format='json')
+
+    def test_patient_can_create_therapy_line(self):
+        resp = self._post()
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertIn('episode_id', resp.data)
+
+    def test_patient_can_create_therapy_line_with_intent(self):
+        resp = self._post(line_number=2, intent='Curative')
+        self.assertEqual(resp.status_code, 201, resp.data)
+
+    def test_patient_can_create_therapy_line_with_discontinuation_reason(self):
+        resp = self._post(line_number=3, discontinuation_reason='Toxicity')
+        self.assertEqual(resp.status_code, 201, resp.data)
+
+    def test_patient_can_patch_therapy_line(self):
+        # Create first
+        create_resp = self._post(line_number=4)
+        self.assertEqual(create_resp.status_code, 201, create_resp.data)
+        episode_id = create_resp.data['episode_id']
+
+        # Patch the end_date — must also supply drugs (the serializer requires
+        # at least one drug or regimen_concept_id on every write).
+        patch_resp = self._client().patch(
+            f'/api/v1/therapy-lines/{episode_id}/',
+            {
+                'end_date': '2025-07-01',
+                'drugs': [
+                    {'concept_id': self.len_concept.concept_id, 'source_value': 'lenalidomide'},
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(patch_resp.status_code, 200, patch_resp.data)
+
+    def test_patient_cannot_author_for_another_person(self):
+        other_person = Person.objects.create(person_id=99202, year_of_birth=1970)
+        PatientRecord.objects.get_or_create(person=other_person)
+        resp = self._client().post('/api/v1/therapy-lines/', {
+            'person': other_person.person_id,
+            'line_number': 1,
+            'start_date': '2025-01-01',
+            'drugs': [
+                {'concept_id': self.len_concept.concept_id, 'source_value': 'lenalidomide'},
+            ],
+        }, format='json')
+        # Should be 403 — patient does not have write access to another person
+        self.assertIn(resp.status_code, [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND])

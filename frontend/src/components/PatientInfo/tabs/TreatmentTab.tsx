@@ -10,7 +10,7 @@ import TherapyLineDialog from '../TherapyLineDialog';
 interface Props {
   formData: Record<string, unknown>;
   onChange: (field: string, value: unknown) => void;
-  diseaseType: 'breast' | 'lymphoma' | 'myeloma' | 'cll' | 'other';
+  diseaseType: 'breast' | 'lymphoma' | 'myeloma' | 'cll' | 'mcl' | 'other';
   /** Receives the re-derived record after a line is authored. Without it the tab
    *  still writes correctly but shows stale values until the next refetch. */
   onRecordRefreshed?: (patientInfo: Record<string, unknown>) => void;
