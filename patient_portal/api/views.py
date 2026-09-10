@@ -930,7 +930,7 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
             with transaction.atomic():
                 descriptors = build_writable_field_descriptor()
         except Exception:
-            logger.warning('Could not resolve OMOP projections', exc_info=True)
+            logger.warning('Could not resolve OMOP projections')
             return
         for field in direct_fields:
             projection = projection_for_descriptor(descriptors.get(field))
@@ -940,7 +940,7 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
             with transaction.atomic():
                 refresh_patient_record(person)
         except Exception:
-            logger.warning('Projection refresh failed for person %s', person.pk, exc_info=True)
+            logger.warning('OMOP projection refresh failed; edit remains pending')
 
     @action(detail=True, methods=['get'], permission_classes=[ScopedTokenPermission, PatientSelfScopePermission])
     def provenance(self, request, pk=None):

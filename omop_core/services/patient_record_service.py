@@ -803,6 +803,22 @@ def _get_custom_patient_field_data(snapshot: OmopSnapshot) -> dict[str, object]:
     return values
 
 
+def _derived_value_matches(field_name, derived_value, saved_value):
+    """Compare at the PatientRecord column's precision, including float extractors."""
+    if _is_empty(derived_value) or _is_empty(saved_value):
+        return _is_empty(derived_value) and _is_empty(saved_value)
+    field = PatientRecord._meta.get_field(field_name)
+    if isinstance(field, models.DecimalField):
+        quantum = Decimal(1).scaleb(-field.decimal_places)
+        try:
+            return Decimal(str(derived_value)).quantize(quantum, rounding=ROUND_HALF_UP) == (
+                Decimal(str(saved_value)).quantize(quantum, rounding=ROUND_HALF_UP)
+            )
+        except (InvalidOperation, ValueError):
+            return False
+    return derived_value == saved_value
+
+
 def refresh_patient_record(person: Person) -> PatientRecord:
     """Derive and upsert PatientRecord from OMOP tables for a given person.
 
@@ -872,11 +888,19 @@ def refresh_patient_record(person: Person) -> PatientRecord:
         still_orphaned = []
         for field, value in preserved.items():
             derived_value = getattr(patient_info, field, None)
-            matches = derived_value == value or (_is_empty(derived_value) and _is_empty(value))
+            matches = _derived_value_matches(field, derived_value, value)
+            # Keep the already-stored representation even on a match so saving
+            # a float extractor result cannot introduce another rounding step.
+            setattr(patient_info, field, value)
             if not matches:
-                setattr(patient_info, field, value)
                 still_orphaned.append(field)
         patient_info.user_edited_fields = sorted(still_orphaned)
+
+        # Extractors copied aliases before pending edits were restored. Mirror
+        # the final canonical values, including explicit clears, for all readers.
+        for canonical, aliases in _LAB_FIELD_ALIASES.items():
+            for alias in aliases:
+                setattr(patient_info, alias, getattr(patient_info, canonical))
 
         _compute_derived_fields(patient_info)
 

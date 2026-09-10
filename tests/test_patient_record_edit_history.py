@@ -1,6 +1,7 @@
 """PatientRecord editor round trips preserve history and reuse today's facts."""
 from datetime import timedelta
 from decimal import Decimal
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -242,3 +243,93 @@ def test_date_mapping_approval_can_backfill_pending_dates(editor):
     row = Observation.objects.get(person=record.person, observation_concept=concept)
     assert row.observation_date == timezone.localdate()
     assert row.value_as_string == record.supportive_therapy_start_date.isoformat()
+
+
+@pytest.mark.parametrize('value', ['12.3', '12.5'])
+def test_fractional_edit_releases_pending_override_for_future_labs(editor, value):
+    record, _ = editor
+    concept = hemoglobin()
+    patch_field(editor, 'hemoglobin_g_dl', value)
+    assert record.hemoglobin_g_dl == Decimal(value)
+    assert 'hemoglobin_g_dl' not in record.user_edited_fields
+    with suppress_patient_record_refresh():
+        MeasurementFactory(
+            person=record.person, measurement_concept=concept,
+            measurement_source_value='718-7', value_as_number=14,
+            measurement_date=timezone.localdate() + timedelta(days=1),
+        )
+    assert refresh_patient_record(record.person).hemoglobin_g_dl == 14
+
+
+@pytest.mark.parametrize('derived, matches', [('12.34999', True), ('12.35', False)])
+def test_pending_decimal_compares_at_patient_record_precision(editor, derived, matches):
+    record, _ = editor
+    concept = hemoglobin()
+    record.hemoglobin_g_dl = Decimal('12.3')
+    record.user_edited_fields = ['hemoglobin_g_dl']
+    record.save()
+    with suppress_patient_record_refresh():
+        MeasurementFactory(
+            person=record.person, measurement_concept=concept,
+            measurement_source_value='718-7', value_as_number=Decimal(derived),
+            measurement_date=timezone.localdate(),
+        )
+    refreshed = refresh_patient_record(record.person)
+    assert ('hemoglobin_g_dl' not in refreshed.user_edited_fields) == matches
+    refreshed.refresh_from_db()
+    assert refreshed.hemoglobin_g_dl == Decimal('12.3')
+
+
+@pytest.mark.parametrize('projection_fails', [False, True])
+def test_pending_edit_and_clear_keep_lab_aliases_consistent(editor, projection_fails):
+    record, _ = editor
+    if projection_fails:
+        concept = ConceptFactory(
+            concept_code='17861-6', vocabulary=VocabularyFactory(vocabulary_id='LOINC'),
+        )
+        with suppress_patient_record_refresh():
+            MeasurementFactory(
+                person=record.person, measurement_concept=concept,
+                measurement_source_value='17861-6', value_as_number=8,
+                measurement_date=timezone.localdate() - timedelta(days=1),
+            )
+        refresh_patient_record(record.person)
+    with patch('omop_core.services.omop_projection.next_pk', side_effect=RuntimeError('projection unavailable')):
+        for value in ('9.5', None):
+            response = patch_field(editor, 'serum_calcium_mg_dl', value)
+            expected = Decimal(value) if value is not None else None
+            assert record.serum_calcium_mg_dl == expected
+            assert record.calcium_mg_dl == expected
+            assert response.data['calcium_mg_dl'] == response.data['serum_calcium_mg_dl']
+            refreshed = refresh_patient_record(record.person)
+            assert refreshed.calcium_mg_dl == expected
+
+
+@pytest.mark.parametrize('failure_stage', ['write', 'backfill_refresh', 'patch_refresh'])
+def test_projection_failures_do_not_log_patient_data(editor, caplog, monkeypatch, failure_stage):
+    record, _ = editor
+    concept = hemoglobin()
+    api_logger = logging.getLogger('patient_portal.api.views')
+    monkeypatch.setattr(api_logger, 'handlers', [*api_logger.handlers, caplog.handler])
+    sensitive = 'private-patient-value-for-log-regression'
+    if failure_stage == 'backfill_refresh':
+        record.hemoglobin_g_dl = Decimal('12.3')
+        record.user_edited_fields = ['hemoglobin_g_dl']
+        record.save()
+        with patch('omop_core.services.patient_record_service.refresh_patient_record',
+                   side_effect=RuntimeError(sensitive)):
+            FieldConceptMapping.objects.create(
+                field_name='hemoglobin_g_dl', concept=concept, omop_table='measurement',
+                source_value='718-7', unit='g/dL', value_kind='number', status='approved',
+            )
+    else:
+        target = ('omop_core.services.omop_projection.next_pk' if failure_stage == 'write'
+                  else 'patient_portal.api.views.refresh_patient_record')
+        with patch(target, side_effect=RuntimeError(sensitive)):
+            patch_field(editor, 'hemoglobin_g_dl', '12.3')
+    logs = [entry for entry in caplog.records if 'OMOP' in entry.getMessage()]
+    assert logs
+    assert sensitive not in caplog.text
+    for entry in logs:
+        assert not entry.args
+        assert entry.exc_info is None

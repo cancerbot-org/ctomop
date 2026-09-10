@@ -92,7 +92,9 @@ def project_field_to_omop(mapping) -> int:
                     refresh_patient_record(record.person)
                     count += 1
         except Exception:
-            logger.exception('Projection failed for record %s field %s', record_id, mapping.field_name)
+            # Database exceptions can contain patient values; keep diagnostics
+            # free of identifiers, values, and exception text/tracebacks.
+            logger.warning('OMOP mapping backfill failed for a record; edit remains pending')
     return count
 
 
@@ -155,7 +157,7 @@ def project_single_value(person, field_name, value, projection):
             instance.save()
         return True
     except Exception:
-        logger.exception('Projection failed for person %s field %s', person.pk, field_name)
+        logger.warning('OMOP value projection failed; edit remains pending')
         return False
 
 

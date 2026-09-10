@@ -179,11 +179,8 @@ def _project_field_sync(mapping_pk):
         mapping = FCM.objects.filter(pk=mapping_pk).first()
         if mapping:
             project_field_to_omop(mapping)
-    except Exception as exc:
-        logger.warning(
-            "OMOP projection failed for field mapping pk=%s: %s",
-            mapping_pk, exc,
-        )
+    except Exception:
+        logger.warning('OMOP mapping projection failed')
 
 
 @receiver(post_save, sender=FieldConceptMapping)
@@ -217,9 +214,6 @@ def _dispatch_projection(mapping_pk):
     try:
         from omop_core.tasks import project_field_to_omop_task
         project_field_to_omop_task.delay(mapping_pk)
-    except Exception as exc:
-        logger.warning(
-            "Failed to dispatch projection task for mapping pk=%s, running inline: %s",
-            mapping_pk, exc,
-        )
+    except Exception:
+        logger.warning('Failed to dispatch OMOP projection task; running inline')
         _project_field_sync(mapping_pk)
