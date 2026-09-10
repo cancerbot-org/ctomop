@@ -4,16 +4,18 @@ from types import SimpleNamespace
 
 import pytest
 from django.test import override_settings
+from django.urls import resolve
 from django.utils import timezone
 
 from patient_portal.api.permissions import (
     EtlPatientCrudPermission,
     EtlWritePermission,
+    PatientSelfScopePermission,
+    ScopedTokenPermission,
     SERVICE_TOKEN,
     LabSyncPermission,
     PatientCrudPermission,
     PatientDeletePermission,
-    ScopedTokenPermission,
     VocabReadPermission,
 )
 from patient_portal.api.providers.base import TokenClaims
@@ -88,6 +90,14 @@ def test_oauth_token_cannot_use_legacy_etl_capability(permission_class):
         user=SimpleNamespace(is_authenticated=True, is_staff=False),
     )
     assert permission_class().has_permission(request, None) is False
+
+
+def test_patient_record_refresh_action_uses_etl_write_permission():
+    match = resolve('/api/v1/patient-records/123/refresh/')
+    assert match.func.actions['post'] == 'refresh'
+    permission_classes = match.func.initkwargs['permission_classes']
+    assert permission_classes == [EtlWritePermission, PatientSelfScopePermission]
+    assert ScopedTokenPermission not in permission_classes
 
 
 @pytest.mark.parametrize('permission_class', PERMISSIONS)
