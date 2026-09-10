@@ -16,6 +16,7 @@ interface Props {
   editedName: string;
   onNameChange: (name: string) => void;
   onZipcodeChange: (zip: string) => void;
+  patientMode?: boolean;
 }
 
 /**
@@ -38,6 +39,7 @@ interface Props {
  */
 export default function GeneralTab({
   formData, onChange, editedName, onNameChange, onZipcodeChange,
+  patientMode = false,
 }: Props) {
   // Ask about *this* patient: whether a field may be edited depends on who is
   // asking and whose record it is, not only on whether the field is mapped.
@@ -149,13 +151,15 @@ export default function GeneralTab({
         </div>
       </Section>
 
-      <Section title="Clinician Validation" description="Whether a clinician has checked this record.">
-        <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
-          {field('Validated', 'validated', 'boolean')}
-          {field('Validated By', 'validated_by', 'text')}
-          {field('Validation Date', 'validation_date', 'date')}
-        </div>
-      </Section>
+      {!patientMode && (
+        <Section title="Clinician Validation" description="Whether a clinician has checked this record.">
+          <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+            {field('Validated', 'validated', 'boolean')}
+            {field('Validated By', 'validated_by', 'text')}
+            {field('Validation Date', 'validation_date', 'date')}
+          </div>
+        </Section>
+      )}
 
       <Section title="Race &amp; Ethnicity" description="Self-reported race and ethnicity (OMB standard categories).">
         <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">

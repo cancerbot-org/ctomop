@@ -26819,3 +26819,124 @@ class PatientSelfEditTherapyLinesTest(TestCase):
         }, format='json')
         # Should be 403 — patient does not have write access to another person
         self.assertIn(resp.status_code, [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND])
+
+
+class RecordAttestationTest(TestCase):
+    """Tests for admin-field gating and patient record attestation (#1165)."""
+
+    def setUp(self):
+        _make_vocab_fixtures()
+        self.client = APIClient()
+        self.org = _make_org('Attest Org', 'attest-org')
+
+        # Staff user (clinician)
+        self.staff_user = Identity.objects.create_user(
+            email='clinician@attest.com', password='testpass',
+        )
+        self.staff_user.is_staff = True
+        self.staff_user.save()
+
+        # Patient user
+        self.patient_identity = Identity.objects.create_user(
+            email='patient@attest.com', password='testpass',
+        )
+        self.person = Person.objects.create(person_id=77701)
+        self.record = PatientRecord.objects.create(
+            person=self.person, organization=self.org,
+        )
+        GroupAccess.objects.create(
+            identity=self.patient_identity, org=self.org, role='patient',
+        )
+        PatientUser.objects.create(
+            identity=self.patient_identity, person=self.person, is_active=True,
+        )
+
+    # --- 1. Staff can directly set validated via PATCH ---
+    def test_staff_can_set_validated(self):
+        self.client.force_authenticate(user=self.staff_user)
+        resp = self.client.patch(
+            f'/api/patient-info/{self.person.person_id}/',
+            {'validated': True, 'validated_by': 'Dr. Smith', 'validation_date': '2026-09-10'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.record.refresh_from_db()
+        self.assertTrue(self.record.validated)
+        self.assertEqual(self.record.validated_by, 'Dr. Smith')
+
+    # --- 2. Patient PATCH to /me/ silently drops validated ---
+    def test_patient_patch_me_drops_validated(self):
+        self.client.force_authenticate(user=self.patient_identity)
+        resp = self.client.patch(
+            '/api/patient-info/me/',
+            {'validated': True, 'validated_by': 'Sneaky Patient'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.record.refresh_from_db()
+        # validated should NOT have been set — silently dropped
+        self.assertIsNone(self.record.validated)
+        self.assertIsNone(self.record.validated_by)
+
+    # --- 3. Patient POST /me/confirm/ sets all three validation fields ---
+    def test_patient_confirm_sets_validation(self):
+        self.client.force_authenticate(user=self.patient_identity)
+        resp = self.client.post('/api/patient-info/me/confirm/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('validated', resp.data)
+        self.assertTrue(resp.data['validated'])
+        self.assertEqual(resp.data['validated_by'], 'patient@attest.com')
+
+        self.record.refresh_from_db()
+        self.assertTrue(self.record.validated)
+        self.assertEqual(self.record.validated_by, 'patient@attest.com')
+        self.assertIsNotNone(self.record.validation_date)
+
+    # --- 4. Confirm projects to Person ---
+    def test_confirm_projects_to_person(self):
+        self.client.force_authenticate(user=self.patient_identity)
+        self.client.post('/api/patient-info/me/confirm/')
+        self.person.refresh_from_db()
+        self.assertTrue(self.person.validated)
+        self.assertEqual(self.person.validated_by, 'patient@attest.com')
+        self.assertIsNotNone(self.person.validation_date)
+
+    # --- 5. Patient can set suppress_demographics_for_others via /me/ ---
+    def test_patient_can_set_suppress_demographics(self):
+        self.client.force_authenticate(user=self.patient_identity)
+        resp = self.client.patch(
+            '/api/patient-info/me/',
+            {'suppress_demographics_for_others': True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.record.refresh_from_db()
+        self.assertTrue(self.record.suppress_demographics_for_others)
+
+    # --- 6. Staff/doctor/org_admin can set suppress_demographics_for_others ---
+    def test_staff_can_set_suppress_demographics(self):
+        self.client.force_authenticate(user=self.staff_user)
+        resp = self.client.patch(
+            f'/api/patient-info/{self.person.person_id}/',
+            {'suppress_demographics_for_others': True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.record.refresh_from_db()
+        self.assertTrue(self.record.suppress_demographics_for_others)
+
+    # --- 7. Re-confirm updates the date ---
+    def test_reconfirm_updates_date(self):
+        from datetime import date as date_type
+        # First confirm
+        self.record.validated = True
+        self.record.validated_by = 'patient@attest.com'
+        self.record.validation_date = date_type(2026, 1, 1)
+        self.record.save()
+
+        self.client.force_authenticate(user=self.patient_identity)
+        resp = self.client.post('/api/patient-info/me/confirm/')
+        self.assertEqual(resp.status_code, 200)
+        self.record.refresh_from_db()
+        # Date should be updated to today
+        self.assertNotEqual(self.record.validation_date, date_type(2026, 1, 1))

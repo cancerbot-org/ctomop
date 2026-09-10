@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Check, AlertCircle, ChevronDown, Download } from "lucide-react";
+import { ArrowLeft, Check, AlertCircle, ChevronDown, Download, ShieldCheck } from "lucide-react";
 import api from "@/api/axios";
 import { fetchWritableFields, LIFECYCLE, type FieldDescriptors } from "@/hooks/useWritableFields";
 // Profile fields now write through PatientRecord PATCH alongside clinical fields.
@@ -15,14 +15,75 @@ import AdvanceDirectives from "./AdvanceDirectives";
 import PatientMessages from "./PatientMessages";
 import GeneralTab from "@/components/PatientInfo/tabs/GeneralTab";
 import DiseaseTab from "@/components/PatientInfo/tabs/DiseaseTab";
+import GenomicsTab from "@/components/PatientInfo/tabs/GenomicsTab";
 import TreatmentTab from "@/components/PatientInfo/tabs/TreatmentTab";
 import BloodTab from "@/components/PatientInfo/tabs/BloodTab";
 import LabsTab from "@/components/PatientInfo/tabs/LabsTab";
 import BehaviorTab from "@/components/PatientInfo/tabs/BehaviorTab";
 import WearableTab from "@/components/PatientInfo/tabs/WearableTab";
 import PatientOmopTab from "./PatientOmopTab";
+import { confirmRecord } from "@/api/clinicalFacts";
 
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
+
+function RecordConfirmation({
+  validated,
+  validationDate,
+  onConfirm,
+}: {
+  validated: boolean;
+  validationDate: string | null;
+  onConfirm: () => Promise<void>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  const handleConfirm = async () => {
+    setConfirming(true);
+    try {
+      await onConfirm();
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  if (validated) {
+    return (
+      <div className="mb-6 flex items-center gap-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
+        <ShieldCheck className="h-5 w-5 text-green-600" />
+        <span className="text-sm text-green-800">
+          Record confirmed{validationDate ? ` on ${validationDate}` : ''}
+        </span>
+        <button
+          onClick={handleConfirm}
+          disabled={confirming}
+          className="ml-auto text-sm text-green-700 underline hover:text-green-900 disabled:opacity-50"
+        >
+          Re-confirm
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-5 py-4">
+      <div className="flex items-start gap-3">
+        <ShieldCheck className="mt-0.5 h-5 w-5 text-blue-600" />
+        <div className="flex-1">
+          <p className="text-sm font-medium text-blue-900">
+            Confirm that your health record is accurate and up to date
+          </p>
+          <button
+            onClick={handleConfirm}
+            disabled={confirming}
+            className="mt-3 inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {confirming ? 'Confirming...' : 'Confirm Record'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ErrorToast({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   useEffect(() => {
@@ -497,27 +558,7 @@ export default function PatientDetail({
     }
   }, [personId]);
 
-  const handleMutationAdd = useCallback(() => {
-    const raw = pendingDataRef.current?.info?.genetic_mutations ?? editedInfoRef.current?.genetic_mutations ?? [];
-    const m = [...(raw as { gene: string; mutation: string; origin: string; interpretation: string }[])];
-    m.push({ gene: "", mutation: "", origin: "", interpretation: "" });
-    handleFieldChange("genetic_mutations", m);
-  }, [handleFieldChange]);
 
-  const handleMutationRemove = useCallback((i: number) => {
-    const raw = pendingDataRef.current?.info?.genetic_mutations ?? editedInfoRef.current?.genetic_mutations ?? [];
-    const m = [...(raw as { gene: string; mutation: string; origin: string; interpretation: string }[])];
-    m.splice(i, 1);
-    handleFieldChange("genetic_mutations", m);
-  }, [handleFieldChange]);
-
-  const handleMutationChange = useCallback((i: number, field: string, value: string) => {
-    const raw = pendingDataRef.current?.info?.genetic_mutations ?? editedInfoRef.current?.genetic_mutations ?? [];
-    const m = [...(raw as { gene: string; mutation: string; origin: string; interpretation: string }[])];
-    m[i] = { ...m[i], [field]: value };
-    if (field === "gene") m[i].mutation = "";
-    handleFieldChange("genetic_mutations", m);
-  }, [handleFieldChange]);
 
   const handleZipcodeChange = useCallback(async (zipcode: string) => {
     handleFieldChange("postal_code", zipcode);
@@ -600,7 +641,7 @@ export default function PatientDetail({
   // Build tab list dynamically — patient mode adds Allergies (after Labs) and Surveys (last).
   // Immunizations are shown inside the Treatment tab, not as a separate tab.
   const canViewOmop = !patientMode && !!(user?.is_staff || user?.is_org_admin);
-  const coreTabs = ["General", getDiseaseTabLabel(), "Treatment", "Blood", "Labs"];
+  const coreTabs = ["General", getDiseaseTabLabel(), "Treatment", "Blood", "Labs", "Genomics"];
   const afterLabsTabs = patientMode ? ["Allergies"] : [];
   const trailingTabs = ["Behavior", "Wearables"];
   const surveyTabs = patientMode ? ["Surveys"] : [];
@@ -616,10 +657,11 @@ export default function PatientDetail({
 
   const tabDescriptions: Record<number, string> = {
     0: "Keep patient details up to date for accurate personalisation.",
-    1: "Disease-specific clinical information and genetic details.",
+    1: "Disease-specific clinical information.",
     2: "Therapy history, treatment lines, and planned therapies.",
     3: "Blood counts and differential.",
     4: "Chemistry, liver function, coagulation, cardiac and tumour markers.",
+    5: "Genes, variants, origins, interpretations, and test details.",
     ...(allergiesIdx >= 0 ? { [allergiesIdx]: "Known allergies and intolerances from your health records." } : {}),
     [behaviorIdx]: "Lifestyle, socioeconomic, and behavioural health factors.",
     [wearablesIdx]: "30 day summaries derived from synced OMOP data.",
@@ -763,21 +805,48 @@ export default function PatientDetail({
 
               <div key={activeTab} className="animate-tab-in px-8 pb-10">
                 {activeTab === 0 && (
-                  <GeneralTab
-                    formData={editedInfo}
-                    onChange={handleFieldChange}
-                    editedName={editedName}
-                    onNameChange={handleNameChange}
-                    onZipcodeChange={handleZipcodeChange}
-                  />
+                  <>
+                    {patientMode && (
+                      <RecordConfirmation
+                        validated={!!editedInfo.validated}
+                        validationDate={editedInfo.validation_date as string | null}
+                        onConfirm={async () => {
+                          try {
+                            const result = await confirmRecord();
+                            setEditedInfo((prev) => ({
+                              ...prev,
+                              validated: result.validated,
+                              validated_by: result.validated_by,
+                              validation_date: result.validation_date,
+                            }));
+                            setPatientInfo((prev) =>
+                              prev ? {
+                                ...prev,
+                                validated: result.validated,
+                                validated_by: result.validated_by,
+                                validation_date: result.validation_date,
+                              } : prev,
+                            );
+                          } catch {
+                            setSaveErrorMsg('Failed to confirm record. Please try again.');
+                          }
+                        }}
+                      />
+                    )}
+                    <GeneralTab
+                      formData={editedInfo}
+                      onChange={handleFieldChange}
+                      editedName={editedName}
+                      onNameChange={handleNameChange}
+                      onZipcodeChange={handleZipcodeChange}
+                      patientMode={patientMode}
+                    />
+                  </>
                 )}
                 {activeTab === 1 && (
                   <DiseaseTab
                     formData={editedInfo}
                     onChange={handleFieldChange}
-                    onMutationAdd={handleMutationAdd}
-                    onMutationRemove={handleMutationRemove}
-                    onMutationChange={handleMutationChange}
                     diseaseType={getDiseaseType()}
                   />
                 )}
@@ -806,6 +875,7 @@ export default function PatientDetail({
                 )}
                 {activeTab === 3 && <BloodTab formData={editedInfo} onChange={handleFieldChange} />}
                 {activeTab === 4 && <LabsTab formData={editedInfo} onChange={handleFieldChange} />}
+                {activeTab === 5 && <GenomicsTab formData={editedInfo} />}
                 {allergiesIdx >= 0 && activeTab === allergiesIdx && <AllergyList user={user ?? null} />}
                 {activeTab === behaviorIdx && <BehaviorTab formData={editedInfo} onChange={handleFieldChange} onRefresh={reloadPatientInfo} />}
                 {activeTab === wearablesIdx && <WearableTab formData={editedInfo} onChange={handleFieldChange} onRefresh={reloadPatientInfo} />}
