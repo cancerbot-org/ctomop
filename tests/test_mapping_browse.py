@@ -1,5 +1,5 @@
 import pytest
-from rest_framework.test import APIRequestFactory, force_authenticate
+from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 
 from omop_core.models import SourceCodeConceptMapping
 from patient_portal.api.views import code_mapping_list
@@ -141,3 +141,31 @@ def test_plain_list_pages_before_serialization_and_filters_in_database(status_fi
         assert all(r['status'] == 'approved' for r in first.data + second.data)
     assert get(page='bad').status_code == 404
     assert get(page=999).status_code == 404
+
+
+@pytest.mark.parametrize('origin', ['https://curation.example', 'https://blocked.example'])
+def test_plain_list_exposes_pagination_headers_only_to_allowed_origins(settings, origin):
+    settings.CORS_ALLOW_ALL_ORIGINS = False
+    settings.CORS_ALLOWED_ORIGINS = ['https://curation.example']
+    SourceCodeConceptMapping.objects.bulk_create([
+        SourceCodeConceptMapping(source_vocabulary_id='ICD10', source_code=f'C{i:03}')
+        for i in range(105)
+    ])
+    client = APIClient()
+    client.force_authenticate(user=Identity.objects.create_user(email='cors-pages@example.test', is_staff=True))
+
+    response = client.get('/api/v1/code-mappings/', {'source': 'ICD10'}, HTTP_ORIGIN=origin, secure=True)
+
+    assert response.status_code == 200
+    assert len(response.data) == 100
+    assert response['X-Total-Count'] == '105'
+    assert response['X-Page'] == '1'
+    assert response['X-Page-Size'] == '100'
+    assert 'page=2' in response['Link']
+    if origin == 'https://curation.example':
+        assert response['Access-Control-Allow-Origin'] == origin
+        exposed = {name.strip().lower() for name in response['Access-Control-Expose-Headers'].split(',')}
+        assert {'link', 'x-total-count', 'x-page', 'x-page-size'} <= exposed
+    else:
+        assert 'Access-Control-Allow-Origin' not in response
+        assert 'Access-Control-Expose-Headers' not in response

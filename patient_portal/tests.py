@@ -23735,7 +23735,7 @@ class CodeMappingCuratorWorkflowTest(TestCase):
 
     def test_the_creating_curator_is_reported(self):
         self._create()
-        resp = self.client.get('/api/v1/code-mappings/')
+        resp = self.client.get('/api/v1/code-mappings/', {'source': '', 'search': 'POTASSIUM'})
         row = next(r for r in resp.data if r['source_code'] == 'POTASSIUM')
         self.assertEqual(row['created_by'], 'queue_curator@t.com')
         self.assertEqual(row['origin'], 'curator')
@@ -23747,7 +23747,7 @@ class CodeMappingCuratorWorkflowTest(TestCase):
             domain_id='Measurement', status='proposed',
             origin='import', origin_system='fhir-sync',
         )
-        resp = self.client.get('/api/v1/code-mappings/')
+        resp = self.client.get('/api/v1/code-mappings/', {'source': '', 'search': 'SODIUM'})
         row = next(r for r in resp.data if r['source_code'] == 'SODIUM')
         self.assertEqual(row['created_by'], '')
 
@@ -23951,14 +23951,14 @@ class CodeMappingReviewerStampTest(TestCase):
         self.assertEqual(approve.data['reviewer'], 'signoff_curator@t.com')
         self.assertIsNotNone(approve.data['reviewed_at'])
 
-        resp = self.client.get('/api/v1/code-mappings/')
+        resp = self.client.get('/api/v1/code-mappings/', {'source': '', 'search': 'SODIUM'})
         row = next(r for r in resp.data if r['source_code'] == 'SODIUM')
         self.assertEqual(row['reviewer'], 'signoff_curator@t.com')
         self.assertIsNotNone(row['reviewed_at'])
 
     def test_an_unapproved_row_serializes_an_empty_sign_off(self):
         self._create()
-        resp = self.client.get('/api/v1/code-mappings/')
+        resp = self.client.get('/api/v1/code-mappings/', {'source': '', 'search': 'SODIUM'})
         row = next(r for r in resp.data if r['source_code'] == 'SODIUM')
         self.assertEqual(row['reviewer'], '')
         self.assertIsNone(row['reviewed_at'])
@@ -24781,7 +24781,7 @@ class CodeMappingSourceVocabTabsTest(TestCase):
             origin_system='fhir-upload',
         )
         self.client.force_authenticate(user=self.staff)
-        resp = self.client.get('/api/v1/code-mappings/')
+        resp = self.client.get('/api/v1/code-mappings/', {'source': 'ICD10CM', 'search': 'E11.9'})
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         row = next((r for r in resp.data if r['mapping_id'] == mapping.pk), None)
         self.assertIsNotNone(row)
@@ -24804,7 +24804,7 @@ class CodeMappingSourceVocabTabsTest(TestCase):
             source='Athena',
         )
         self.client.force_authenticate(user=self.staff)
-        resp = self.client.get('/api/v1/code-mappings/')
+        resp = self.client.get('/api/v1/code-mappings/', {'source': 'ICD10CM', 'search': 'E11.65'})
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         row = next((r for r in resp.data if r['mapping_id'] == mapping.pk), None)
         self.assertIsNotNone(row)

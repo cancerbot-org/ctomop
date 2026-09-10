@@ -324,6 +324,12 @@ else:
         if origin.strip()
     ]
 CORS_ALLOW_CREDENTIALS = True
+CORS_EXPOSE_HEADERS = (
+    'Link',
+    'X-Total-Count',
+    'X-Page',
+    'X-Page-Size',
+)
 CORS_ALLOW_HEADERS = (
     *default_headers,
     'x-provenance-source',

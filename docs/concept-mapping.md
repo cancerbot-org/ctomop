@@ -421,3 +421,5 @@ header (`rel="next"` / `rel="prev"`) to traverse results. `X-Total-Count`,
 `X-Page`, and `X-Page-Size` report the filtered count and page metadata.
 Source, search, and status filters apply before pagination. The page size is
 fixed; `page_size` cannot request an unbounded response.
+The four pagination headers are exposed to configured CORS origins so browser
+clients can read navigation and totals across origins.
