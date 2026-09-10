@@ -833,6 +833,8 @@ def refresh_patient_record(person: Person) -> PatientRecord:
             patient_info = PatientRecord.objects.select_for_update().get(person=person)
         except PatientRecord.DoesNotExist:
             patient_info = PatientRecord(person=person)
+        # Reuse the supplied Person when save computes age; avoid another lookup.
+        patient_info.person = person
 
         # Snapshot user-edited values that may not yet have OMOP backing.
         # After derivation, these are restored when derivation produced nothing
@@ -894,7 +896,12 @@ def refresh_patient_record(person: Person) -> PatientRecord:
             setattr(patient_info, field, value)
             if not matches:
                 still_orphaned.append(field)
-        patient_info.user_edited_fields = sorted(still_orphaned)
+        # Individual courses supersede legacy aggregate supportive-field edits.
+        from omop_core.services.supportive_therapy_service import supportive_course_summary
+        course_values = supportive_course_summary(person)
+        for field, value in course_values.items():
+            setattr(patient_info, field, value)
+        patient_info.user_edited_fields = sorted(set(still_orphaned) - course_values.keys())
 
         # Extractors copied aliases before pending edits were restored. Mirror
         # the final canonical values, including explicit clears, for all readers.
@@ -3877,6 +3884,10 @@ def _apply_active_field_formulas(patient_info: PatientRecord) -> set[str]:
     from omop_core.models import CustomPatientField, FieldFormula
     from omop_core.services.formula_evaluator import evaluate_formula
 
+    overrides = patient_info.therapy_overrides or {}
+    for field in ('relapse_count', 'treatment_refractory_status'):
+        if field in overrides:
+            setattr(patient_info, field, overrides[field])
     values = _formula_values(patient_info)
     custom_fields = dict(patient_info.custom_fields or {})
     custom_field_names = set(CustomPatientField.objects.filter(
@@ -3884,6 +3895,8 @@ def _apply_active_field_formulas(patient_info: PatientRecord) -> set[str]:
     ).values_list('field_name', flat=True))
     changed_fields = set()
     for field_formula in FieldFormula.objects.filter(is_active=True).order_by('field_name'):
+        if field_formula.field_name in overrides:
+            continue
         try:
             value = evaluate_formula(field_formula.formula, values)
         except ValueError:

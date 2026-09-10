@@ -898,7 +898,10 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
             direct_fields = {
                 field for field in serializer.validated_data
                 if field in PATIENT_RECORD_OMOP_MAPPED_FIELDS
-                and serializer.validated_data[field] != previous_values.get(field)
+                and (serializer.validated_data[field] != previous_values.get(field)
+                     or (field in {'relapse_count', 'treatment_refractory_status'}
+                         and field not in (patient_info.therapy_overrides or {})
+                         and serializer.validated_data[field] is not None))
             }
             _apply_patient_name(person, patient_name)
             if mutations is not None:
@@ -7990,7 +7993,8 @@ def therapy_regimen_list(request):
     if disease_code or round_code:
         dtr_qs = DiseaseTherapyRegimen.objects.all()
         if disease_code:
-            dtr_qs = dtr_qs.filter(disease__code=disease_code)
+            from omop_core.services.treatment_catalog import disease_filter
+            dtr_qs = dtr_qs.filter(disease_filter(disease_code))
         if round_code:
             dtr_qs = dtr_qs.filter(round__code=round_code)
         regimen_ids = dtr_qs.values_list('regimen_id', flat=True)
@@ -7999,7 +8003,10 @@ def therapy_regimen_list(request):
     if search:
         qs = qs.filter(title__icontains=search)
 
-    items = list(qs.values('code', 'title', 'concept_id')[:50])
+    values = qs.values('code', 'title', 'concept_id')
+    # A disease/round picker needs the complete available list. Search remains
+    # bounded, but alphabetical truncation must not hide valid supportive care.
+    items = list(values if round_code and not search else values[:50])
     return Response(items)
 
 
