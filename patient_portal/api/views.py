@@ -1065,7 +1065,13 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
+        # Patient privacy preference — only editable by the patient via /me/.
+        if not is_service_token(request):
+            request.data.pop('suppress_demographics_for_others', None)
+
         return self._patch_record(request, person, patient_info)
+
+    _STAFF_ONLY_FIELDS = frozenset({'validated', 'validated_by', 'validation_date'})
 
     def _patch_record(self, request, person, patient_info):
         """Shared save path after the provider or self-service access check."""
@@ -1075,6 +1081,12 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         # the provider UI PATCHes, and leaving the key in the body would 405 the
         # request below as a non-projection-owned field.
         patient_name, patch_data = _pop_patient_name(request.data)
+
+        # Validation fields are staff-only; patients use /me/confirm/ instead.
+        # Silent drop (not 400) because auto-save sends the full GET representation.
+        if not getattr(request.user, 'is_staff', False) and not is_service_token(request):
+            for f in self._STAFF_ONLY_FIELDS:
+                patch_data.pop(f, None)
         # language_skills are PersonLanguageSkill rows, not PatientRecord columns.
         # Pop them before the serializer sees an unknown key.
         language_skills = patch_data.pop('language_skills', None) if 'language_skills' in patch_data else None
@@ -1430,12 +1442,8 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
 
         return person, patient_info, None
 
-    @action(detail=False, methods=['get', 'patch', 'delete'], permission_classes=[PatientDeletePermission, PatientSelfScopePermission])
-    def me(self, request):
-        """Read, edit, or delete the current user's PatientRecord."""
-        if request.method == 'DELETE':
-            return self._delete_patient_account(request)
-
+    def _resolve_patient_self(self, request):
+        """Resolve the current user's Person + PatientRecord, or return an error Response."""
         from patient_portal.models import PatientUser
         from patient_portal.services import resolve_or_create_person
 
@@ -1461,8 +1469,19 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
             )
             person = resolve_or_create_person(request.user, allow_create=not is_clinical)
             if person is None:
-                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+                return None, None, Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
         patient_info, _ = PatientRecord.objects.get_or_create(person=person)
+        return person, patient_info, None
+
+    @action(detail=False, methods=['get', 'patch', 'delete'], permission_classes=[PatientDeletePermission, PatientSelfScopePermission])
+    def me(self, request):
+        """Read, edit, or delete the current user's PatientRecord."""
+        if request.method == 'DELETE':
+            return self._delete_patient_account(request)
+
+        person, patient_info, err = self._resolve_patient_self(request)
+        if err is not None:
+            return err
 
         if request.method == 'GET':
             user_serializer = UserSerializer(request.user)
@@ -1478,6 +1497,35 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         return Response({
             'patient_info': {k: v for k, v in response.data.items() if k != 'previous_values'},
             'patient_name': f"{person.given_name or ''} {person.family_name or ''}".strip(),
+        })
+
+    @action(detail=False, methods=['post'], url_path='me/confirm',
+            permission_classes=[PatientSelfScopePermission])
+    def confirm_record(self, request):
+        """POST /api/patient-info/me/confirm/ — patient attests record accuracy."""
+        person, patient_info, err = self._resolve_patient_self(request)
+        if err is not None:
+            return err
+
+        now = timezone.now().date()
+        user = request.user
+        attester = getattr(user, 'email', '') or str(user)
+
+        with transaction.atomic():
+            patient_info.validated = True
+            patient_info.validated_by = attester
+            patient_info.validation_date = now
+            patient_info.save(update_fields=['validated', 'validated_by', 'validation_date'])
+
+            person.validated = True
+            person.validated_by = attester
+            person.validation_date = now
+            person.save(update_fields=['validated', 'validated_by', 'validation_date'])
+
+        return Response({
+            'validated': True,
+            'validated_by': attester,
+            'validation_date': str(now),
         })
 
     def _delete_patient_account(self, request):

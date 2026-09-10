@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Check, AlertCircle, ChevronDown, Download } from "lucide-react";
+import { ArrowLeft, Check, AlertCircle, ChevronDown, Download, ShieldCheck } from "lucide-react";
 import api from "@/api/axios";
 import { fetchWritableFields, LIFECYCLE, type FieldDescriptors } from "@/hooks/useWritableFields";
 // Profile fields now write through PatientRecord PATCH alongside clinical fields.
@@ -21,8 +21,68 @@ import LabsTab from "@/components/PatientInfo/tabs/LabsTab";
 import BehaviorTab from "@/components/PatientInfo/tabs/BehaviorTab";
 import WearableTab from "@/components/PatientInfo/tabs/WearableTab";
 import PatientOmopTab from "./PatientOmopTab";
+import { confirmRecord } from "@/api/clinicalFacts";
 
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
+
+function RecordConfirmation({
+  validated,
+  validationDate,
+  onConfirm,
+}: {
+  validated: boolean;
+  validationDate: string | null;
+  onConfirm: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  const handleConfirm = async () => {
+    setConfirming(true);
+    try {
+      await onConfirm();
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  if (validated) {
+    return (
+      <div className="mb-6 flex items-center gap-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
+        <ShieldCheck className="h-5 w-5 text-green-600" />
+        <span className="text-sm text-green-800">
+          Record confirmed{validationDate ? ` on ${validationDate}` : ''}
+        </span>
+        <button
+          onClick={handleConfirm}
+          disabled={confirming}
+          className="ml-auto text-sm text-green-700 underline hover:text-green-900 disabled:opacity-50"
+        >
+          Re-confirm
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-5 py-4">
+      <div className="flex items-start gap-3">
+        <ShieldCheck className="mt-0.5 h-5 w-5 text-blue-600" />
+        <div className="flex-1">
+          <p className="text-sm font-medium text-blue-900">
+            Confirm that your health record is accurate and up to date
+          </p>
+          <button
+            onClick={handleConfirm}
+            disabled={confirming}
+            className="mt-3 inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {confirming ? 'Confirming...' : 'Confirm Record'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ErrorToast({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   useEffect(() => {
@@ -763,13 +823,39 @@ export default function PatientDetail({
 
               <div key={activeTab} className="animate-tab-in px-8 pb-10">
                 {activeTab === 0 && (
-                  <GeneralTab
-                    formData={editedInfo}
-                    onChange={handleFieldChange}
-                    editedName={editedName}
-                    onNameChange={handleNameChange}
-                    onZipcodeChange={handleZipcodeChange}
-                  />
+                  <>
+                    {patientMode && (
+                      <RecordConfirmation
+                        validated={!!editedInfo.validated}
+                        validationDate={editedInfo.validation_date as string | null}
+                        onConfirm={async () => {
+                          const result = await confirmRecord();
+                          setEditedInfo((prev) => ({
+                            ...prev,
+                            validated: result.validated,
+                            validated_by: result.validated_by,
+                            validation_date: result.validation_date,
+                          }));
+                          setPatientInfo((prev) =>
+                            prev ? {
+                              ...prev,
+                              validated: result.validated,
+                              validated_by: result.validated_by,
+                              validation_date: result.validation_date,
+                            } : prev,
+                          );
+                        }}
+                      />
+                    )}
+                    <GeneralTab
+                      formData={editedInfo}
+                      onChange={handleFieldChange}
+                      editedName={editedName}
+                      onNameChange={handleNameChange}
+                      onZipcodeChange={handleZipcodeChange}
+                      patientMode={patientMode}
+                    />
+                  </>
                 )}
                 {activeTab === 1 && (
                   <DiseaseTab
