@@ -632,7 +632,7 @@ SUGGESTED_FIELD_CODES: dict[str, tuple[str, str]] = {
     # document-level analysis summary and cannot represent selectable results.
     'genetic_mutations':             ('36908-2',   'LOINC'),
     'molecular_markers':             ('55232-3',   'LOINC'),   # Genetic analysis summary panel
-    'cytogenic_markers':             ('D002869',   'MeSH'),    # Chromosome Aberrations (#803)
+    'cytogenetic_markers':           ('69548-6',   'LOINC'),   # Cytogenomic microarray result
     'protein_expressions':           ('85337-4',   'LOINC'),   # Gene expression panel
 
     # Demographics / profile
