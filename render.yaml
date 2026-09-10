@@ -41,7 +41,10 @@ services:
       - key: ATHENA_VOCABULARY_GDRIVE_URL
         sync: false
 
-      # Required because DEBUG is False above.
+      # Render supplies RENDER_EXTERNAL_HOSTNAME automatically; Django allows
+      # that hostname. Set ALLOWED_HOSTS here for any additional custom domains.
+      # sync: false prompts only on creation. For an existing service, configure
+      # these values in the dashboard; Blueprint updates do not populate them.
       - key: ALLOWED_HOSTS
         sync: false
       - key: CORS_ALLOWED_ORIGINS

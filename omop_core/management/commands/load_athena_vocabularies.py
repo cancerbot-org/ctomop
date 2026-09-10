@@ -1,15 +1,15 @@
 import csv
 import hashlib
+import io
 import json
 import os
 import re
-import shutil
 import sys
 import tempfile
 import time
 import zipfile
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 csv.field_size_limit(sys.maxsize)
 
@@ -140,36 +140,46 @@ def _download_gcs_blob(bucket, filename, log):
     return open(dest, encoding='utf-8', newline='')
 
 
-def _extract_vocabulary_archive(archive, extract_dir, log):
-    archive = Path(archive)
-    if not archive.exists():
-        raise CommandError(f'Vocabulary archive not found: {archive}')
+class _VocabularyArchive:
+    """Reopen CSV streams from a ZIP without writing uncompressed data to disk."""
 
-    shutil.rmtree(extract_dir, ignore_errors=True)
-    extract_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, archive, log):
+        self.path = Path(archive)
+        if not self.path.is_file():
+            raise CommandError(f'Vocabulary archive not found: {archive}')
+        try:
+            with zipfile.ZipFile(self.path) as zf:
+                names = [member.filename for member in zf.infolist() if not member.is_dir()]
+        except zipfile.BadZipFile as exc:
+            raise CommandError(f'Invalid vocabulary ZIP archive: {archive}') from exc
+        for name in names:
+            path = PurePosixPath(name)
+            if path.is_absolute() or '..' in path.parts:
+                raise CommandError(f'Unsafe path in vocabulary archive: {name}')
+        candidates = sorted(name for name in names if PurePosixPath(name).name == 'CONCEPT.csv')
+        if not candidates:
+            raise CommandError('Vocabulary archive did not contain CONCEPT.csv.')
+        # Preserve the exact member spelling (e.g. ./export/CONCEPT.csv): ZIP
+        # lookups do not normalise paths the way filesystem extraction does.
+        self.prefix = candidates[0][:-len('CONCEPT.csv')]
+        if len(candidates) > 1:
+            log(f'  Found multiple CONCEPT.csv files; using {candidates[0]}.')
+        log(f'  Streaming CSVs from {self.path.name}; no extraction needed.')
 
-    log(f'  Extracting {archive.name}...')
-    extract_root = extract_dir.resolve()
-    with zipfile.ZipFile(archive) as zf:
-        for member in zf.infolist():
-            target = (extract_dir / member.filename).resolve()
+    def open(self, filename):
+        # ZipExtFile retains its own reference to the underlying file until the
+        # returned text stream closes. Each call can independently reread a CSV
+        # (the replacement preflight reads CONCEPT.csv before its actual load).
+        with zipfile.ZipFile(self.path) as zf:
             try:
-                target.relative_to(extract_root)
-            except ValueError:
-                raise CommandError(f'Unsafe path in vocabulary archive: {member.filename}')
-        zf.extractall(extract_dir)
-
-    required = 'CONCEPT.csv'
-    candidates = [p.parent for p in extract_dir.rglob(required)]
-    if not candidates:
-        raise CommandError(f'Extracted vocabulary archive did not contain {required}.')
-    if len(candidates) > 1:
-        log(f'  Found multiple {required} files; using {candidates[0]}.')
-    return str(candidates[0])
+                stream = zf.open(self.prefix + filename)
+            except KeyError as exc:
+                raise CommandError(f'Required file not found in vocabulary archive: {filename}') from exc
+            return io.TextIOWrapper(stream, encoding='utf-8', newline='')
 
 
-def _download_gdrive_vocabulary(url, log):
-    """Download a Google Drive folder/file containing an Athena vocabulary zip."""
+def _download_gdrive_vocabulary(url, download_dir, log):
+    """Download only the selected ZIP, leaving unrelated folder files on Drive."""
     try:
         import gdown
     except ImportError as exc:
@@ -178,35 +188,39 @@ def _download_gdrive_vocabulary(url, log):
             'from requirements.txt, then rerun with --gdrive.'
         ) from exc
 
-    download_dir = Path('/tmp/vocab/gdrive')
-    extract_dir = Path('/tmp/vocab/gdrive-extracted')
-    shutil.rmtree(download_dir, ignore_errors=True)
-    shutil.rmtree(extract_dir, ignore_errors=True)
     download_dir.mkdir(parents=True, exist_ok=True)
-    extract_dir.mkdir(parents=True, exist_ok=True)
 
     log(f'Loading Athena vocabulary archive from Google Drive: {url}')
     if '/folders/' in url:
-        result = gdown.download_folder(url=url, output=str(download_dir), quiet=False, use_cookies=False)
+        result = gdown.download_folder(
+            url=url, output=str(download_dir), quiet=False,
+            use_cookies=False, skip_download=True,
+        )
         if result is None:
-            raise CommandError(f'Google Drive folder download failed: {url}')
+            raise CommandError(f'Google Drive folder listing failed: {url}')
+        zips = sorted(
+            (item for item in result if Path(item.path).suffix.lower() == '.zip'),
+            key=lambda item: item.path,
+        )
+        if not zips:
+            raise CommandError(f'No .zip file found in Google Drive vocabulary source: {url}')
+        if len(zips) > 1:
+            log(
+                f'  Found {len(zips)} zip files; using first by name: {zips[0].path}. '
+                'Pass a direct Google Drive file URL to select a specific zip.'
+            )
+        filename = gdown.download(
+            id=zips[0].id, output=str(download_dir / 'athena-vocabulary.zip'),
+            quiet=False, use_cookies=False,
+        )
     else:
-        filename = gdown.download(url=url, output=str(download_dir / 'athena-vocabulary.zip'), quiet=False)
-        if not filename:
-            raise CommandError(f'Google Drive file download failed: {url}')
-
-    zips = sorted(download_dir.rglob('*.zip'))
-    if not zips:
-        raise CommandError(
-            f'No .zip file found after downloading Google Drive vocabulary source: {url}'
+        filename = gdown.download(
+            url=url, output=str(download_dir / 'athena-vocabulary.zip'),
+            quiet=False, use_cookies=False,
         )
-    archive = zips[0]
-    if len(zips) > 1:
-        log(
-            f'  Found {len(zips)} zip files; using first by name: {archive.name}. '
-            'Pass a direct Google Drive file URL to select a specific zip.'
-        )
-    return _extract_vocabulary_archive(archive, extract_dir, log)
+    if not filename:
+        raise CommandError(f'Google Drive file download failed: {url}')
+    return Path(filename)
 
 
 def _release_version_from_url(url):
@@ -428,6 +442,13 @@ class Command(BaseCommand):
                             help='Skip optional UMLS archive caching even when UMLS_API_KEY is set.')
 
     def handle(self, *args, **options):
+        # Own only this invocation's downloads; clean partial files on failures
+        # as well as success. TemporaryDirectory also respects an operator's
+        # TMPDIR setting when scratch space is mounted outside the default /tmp.
+        with tempfile.TemporaryDirectory(prefix='promop-athena-') as download_dir:
+            return self._handle(Path(download_dir), *args, **options)
+
+    def _handle(self, download_dir, *args, **options):
         base = options['path']
         archive = options['archive']
         bucket_name = options['bucket']
@@ -442,16 +463,15 @@ class Command(BaseCommand):
             raise CommandError('Provide exactly one of --path, --archive, --bucket, or --gdrive')
 
         self._gcs_bucket = None
+        self._archive = None
         if bucket_name:
             from google.cloud import storage as gcs
             self._gcs_bucket = gcs.Client().bucket(bucket_name)
             self._log(f'Loading from gs://{bucket_name}/ (download-one-process-delete)')
         if gdrive_url:
-            base = _download_gdrive_vocabulary(gdrive_url, self._log)
+            archive = _download_gdrive_vocabulary(gdrive_url, download_dir, self._log)
         if archive:
-            base = _extract_vocabulary_archive(
-                archive, Path('/tmp/vocab/archive-extracted'), self._log
-            )
+            self._archive = _VocabularyArchive(archive, self._log)
 
         t0 = time.monotonic()
         self._build_start = time.time()  # wall-clock for VocabularyRelease
@@ -576,6 +596,8 @@ class Command(BaseCommand):
     def _open(self, filename):
         if self._gcs_bucket:
             return _download_gcs_blob(self._gcs_bucket, filename, self._log)
+        if getattr(self, '_archive', None):
+            return self._archive.open(filename)
         return _open_tsv(self._base, filename)
 
     def _cleanup(self, filename):
