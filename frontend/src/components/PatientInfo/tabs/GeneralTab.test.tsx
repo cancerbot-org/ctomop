@@ -30,6 +30,7 @@ const measurement = (code: string) => ({
 });
 
 const DESCRIPTORS: Record<string, unknown> = {
+  death_date: { kind: 'direct', writable: true, target: 'patient_record', value_kind: 'date' },
   // Person attributes — no event date, because the record keeps no history of them.
   gender: {
     kind: 'profile', writable: true, target: 'person', payload_field: 'gender',
@@ -254,4 +255,10 @@ describe('GeneralTab — previously unreachable Person fields', () => {
 
     expect(screen.queryAllByLabelText('Result date')).toHaveLength(0);
   });
+});
+
+it('allows correcting the death date', async () => {
+  renderTab({ death_date: '2025-02-01' });
+  await waitFor(() => expect(screen.getByText('Death Date').parentElement?.parentElement?.querySelector('input')).toBeEnabled());
+  expect(screen.getByText('Death Date').parentElement?.parentElement?.querySelector('input')).toHaveValue('2025-02-01');
 });

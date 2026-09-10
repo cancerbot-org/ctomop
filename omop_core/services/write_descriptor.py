@@ -915,11 +915,12 @@ def build_writable_field_descriptor():
         if field in ('treatment_refractory_status', 'refractory_status'):
             descriptor[field]['options'] = [{'value': value} for value in REFRACTORY_STATUSES]
     descriptor['refractory_status']['canonical'] = 'treatment_refractory_status'
-    for field in ('relapse_count', 'treatment_refractory_status'):
+    for field in ('relapse_count', 'treatment_refractory_status', 'death_date'):
         descriptor[field]['reason'] = 'Inferred by default; enter a value to override, or clear to use the inferred value.'
         descriptor[field]['projection'] = {
             'omop_table': 'observation', 'concept_id': 0,
             'type_concept_id': CONCEPT_EHR_TYPE,
             'source_value': 'patient-record:' + field,
         }
+    descriptor['death_date']['reason'] = 'Corrections are dated OMOP observations; earlier facts remain as history.'
     return descriptor

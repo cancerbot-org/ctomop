@@ -405,7 +405,6 @@ class PatientRecordSerializer(serializers.ModelSerializer):
     validate_refractory_status = validate_treatment_refractory_status
 
     def update(self, instance, validated_data):
-        from omop_core.models import Death
         overrides = dict(instance.therapy_overrides or {})
         for field in ('relapse_count', 'treatment_refractory_status'):
             if field in validated_data:
@@ -417,20 +416,6 @@ class PatientRecordSerializer(serializers.ModelSerializer):
                 else:
                     overrides[field] = value
         instance.therapy_overrides = overrides
-        if 'death_date' in validated_data:
-            value = validated_data['death_date']
-            if value is None:
-                Death.objects.filter(person=instance.person).delete()
-            else:
-                # OMOP permits exactly one Death row per person. Editing this
-                # fact corrects that row; RecordRevision retains the UI history.
-                death = Death.objects.filter(person=instance.person).first()
-                if death:
-                    death.death_date = value
-                    death.death_datetime = None
-                    death.save(update_fields=['death_date', 'death_datetime'])
-                else:
-                    Death.objects.create(person=instance.person, death_date=value, death_type_concept_id=32817)
         return super().update(instance, validated_data)
 
     def get_fields(self):

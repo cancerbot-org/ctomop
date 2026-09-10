@@ -79,7 +79,7 @@ class SupportiveTherapyViewSet(viewsets.ViewSet):
             project_supportive_course(course)
             record = refresh_patient_record(person)
         return Response({'course': SupportiveTherapySerializer(course).data,
-                         'patient_info': PatientRecordSerializer(record).data}, status=200 if instance else 201)
+                         'patient_info': PatientRecordSerializer(record, context={'request': request}).data}, status=200 if instance else 201)
 
     def create(self, request):
         return self._save(request)

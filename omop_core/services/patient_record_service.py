@@ -658,6 +658,7 @@ class OmopSnapshot:
     obs_by_code: dict           # concept_code → [Observation]
     meas_by_source: dict        # source_value → [Measurement]
     obs_by_source: dict         # source_value → [Observation]
+    death_date_assertion: object | None = None  # Latest UI assertion, including an explicit clear
 
 
 def _build_snapshot(person: Person) -> OmopSnapshot:
@@ -700,6 +701,8 @@ def _build_snapshot(person: Person) -> OmopSnapshot:
     )
     death = Death.objects.filter(person=person).only('death_date').first()
 
+    death_date_assertion = next((o for o in observations
+        if o.observation_source_value == 'patient-record:death_date'), None)
     from omop_core.services.omop_projection import without_cleared_history
     measurements = without_cleared_history(measurements, 'measurement')
     observations = without_cleared_history(observations, 'observation')
@@ -732,6 +735,7 @@ def _build_snapshot(person: Person) -> OmopSnapshot:
         drug_exposures=drug_exposures,
         procedures=procedures,
         death=death,
+        death_date_assertion=death_date_assertion,
         meas_by_code=dict(meas_by_code),
         obs_by_code=dict(obs_by_code),
         meas_by_source=dict(meas_by_source),
@@ -1022,6 +1026,16 @@ def _get_demographics(person: Person, snapshot: OmopSnapshot = None) -> dict:
 
     if snapshot.death:
         data['death_date'] = snapshot.death.death_date
+    assertion = snapshot.death_date_assertion
+    if assertion is not None:
+        from omop_core.services.omop_projection import CLEAR_VALUE
+        if assertion.value_source_value == CLEAR_VALUE:
+            data['death_date'] = None
+        elif assertion.value_as_string:
+            try:
+                data['death_date'] = date.fromisoformat(assertion.value_as_string)
+            except ValueError:
+                pass
 
     if person.year_of_birth not in PERSON_YEAR_PLACEHOLDERS:
         try:

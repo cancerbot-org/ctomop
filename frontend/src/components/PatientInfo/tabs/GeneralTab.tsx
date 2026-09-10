@@ -101,6 +101,7 @@ export default function GeneralTab({
           </div>
 
           {field('Date of Birth', 'date_of_birth', 'date')}
+          {field('Death Date', 'death_date', 'date')}
 
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-portal-text-primary">Age</label>

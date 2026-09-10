@@ -1,6 +1,5 @@
 from datetime import date, timedelta
 from importlib import import_module
-from unittest.mock import patch
 
 import pytest
 from django.apps import apps
@@ -11,7 +10,7 @@ from omop_core.models import Death, Observation, PatientRecord, SupportiveTherap
 from omop_core.services.patient_record_service import refresh_patient_record
 from omop_core.services.write_descriptor import build_writable_field_descriptor
 from patient_portal.models import Identity, PatientUser
-from tests.factories import ConceptFactory, PatientRecordFactory
+from tests.factories import PatientRecordFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -79,10 +78,10 @@ def test_death_date_roundtrip_correction_and_clear(editor):
     record, client = editor
     response = patch_record(editor, {'death_date': '2025-02-01'})
     assert response.data['death_date'] == '2025-02-01'
-    assert Death.objects.get(person=record.person).death_date == date(2025, 2, 1)
+    assert Observation.objects.get(person=record.person, observation_source_value='patient-record:death_date').value_as_string == '2025-02-01'
     assert refresh_patient_record(record.person).death_date == date(2025, 2, 1)
     patch_record(editor, {'death_date': '2025-02-02'})
-    assert Death.objects.filter(person=record.person).count() == 1
+    assert Observation.objects.filter(person=record.person, observation_source_value='patient-record:death_date').count() == 1
     assert record.revisions.filter(field='death_date', old_value='2025-02-01', new_value='2025-02-02').exists()
     patch_record(editor, {'death_date': None})
     assert not Death.objects.filter(person=record.person).exists()
@@ -193,3 +192,40 @@ def test_supportive_catalog_reuses_legacy_disease_codes(editor):
     response = client.post('/api/v1/supportive-therapies/', {
         'person': record.person_id, 'regimen_code': 'ivig'}, format='json')
     assert response.status_code == 201, response.data
+
+
+
+def test_death_correction_preserves_imported_death_and_prior_day_assertions(editor):
+    record, _ = editor
+    Death.objects.create(person=record.person, death_date=date(2025, 1, 1), death_type_concept_id=0)
+    patch_record(editor, {'death_date': '2025-02-01'})
+    row = Observation.objects.get(person=record.person, observation_source_value='patient-record:death_date')
+    row.observation_date = timezone.localdate() - timedelta(days=1)
+    row.save()
+    patch_record(editor, {'death_date': '2025-02-02'})
+    assert Death.objects.get(person=record.person).death_date == date(2025, 1, 1)
+    row.refresh_from_db()
+    assert row.value_as_string == '2025-02-01'
+    assert Observation.objects.filter(person=record.person, observation_source_value='patient-record:death_date').count() == 2
+    patch_record(editor, {'death_date': None})
+    assert refresh_patient_record(record.person).death_date is None
+    assert Death.objects.get(person=record.person).death_date == date(2025, 1, 1)
+
+
+@pytest.mark.parametrize('disease,outcome,valid,normalized', [
+    ('Breast Cancer', 'VGPR', False, None),
+    ('Breast Cancer', 'PR', True, 'Partial Response'),
+    ('Multiple Myeloma', 'VGPR', True, 'Very Good Partial Response'),
+])
+def test_line_outcome_is_validated_for_patient_disease(editor, catalog, disease, outcome, valid, normalized):
+    from patient_portal.api.serializers import TherapyLineWriteSerializer
+    record, _ = editor
+    record.disease = disease
+    record.save()
+    serializer = TherapyLineWriteSerializer(data={'person': record.person_id,
+        'line_number': 1, 'drugs': [{'concept_id': 0}], 'outcome': outcome})
+    assert serializer.is_valid() is valid
+    if valid:
+        assert serializer.validated_data['outcome'] == normalized
+    else:
+        assert 'outcome' in serializer.errors
