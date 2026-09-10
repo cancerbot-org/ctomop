@@ -10921,6 +10921,70 @@ class ServiceTokenOmopAccessTest(TestCase):
                 self.assertEqual(response.status_code, 403)
         self.assertTrue(Measurement.objects.filter(pk=self.m_a.pk).exists())
 
+    @override_settings(
+        SERVICE_AUTH_TOKEN='test-service-secret',
+        SERVICE_AUTH_SCOPES='patient/*.read system/etl.write',
+    )
+    def test_etl_grant_writes_but_cannot_delete(self):
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION='Bearer test-service-secret')
+        response = client.post('/api/persons/find_or_create/', {
+            'actor_iss': 'https://etl.example.test',
+            'actor_sub': 'import-subject',
+        }, format='json')
+        self.assertIn(response.status_code, (200, 201), response.data)
+        response = client.post('/api/v1/measurements/', [{
+            'person': self.person_a.person_id,
+            'measurement_concept': self.m_a.measurement_concept_id,
+            'measurement_date': '2024-03-01',
+            'measurement_type_concept': self.m_a.measurement_type_concept_id,
+            'value_as_number': 4.5,
+        }], format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['created'], 1)
+        url = f'/api/measurements/{self.m_a.pk}/'
+        response = client.patch(url, {'value_as_number': 8.5}, format='json')
+        self.assertEqual(response.status_code, 200)
+        response = client.delete(url)
+        self.assertEqual(response.status_code, 403)
+        response = client.post(
+            '/api/v1/measurements/bulk_delete/',
+            {'ids': [self.m_a.pk]}, format='json',
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Measurement.objects.filter(pk=self.m_a.pk).exists())
+        response = client.delete(
+            f'/api/v1/patient-records/{self.person_a.person_id}/admin-delete/',
+            {'confirm': 'DELETE'}, format='json',
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Person.objects.filter(pk=self.person_a.pk).exists())
+        self.assertEqual(client.get('/api/v1/field-formulas/').status_code, 403)
+        identity = Identity.objects.get(issuer='urn:service', sub='hk-labs-sync')
+        self.assertFalse(identity.is_staff)
+
+    @override_settings(
+        SERVICE_AUTH_TOKEN='test-service-secret',
+        SERVICE_AUTH_SCOPES='patient/*.read system/etl.write',
+    )
+    def test_etl_capability_is_not_a_general_write_grant(self):
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION='Bearer test-service-secret')
+        response = client.post('/api/lab-results/sync/', {}, format='json')
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(SERVICE_AUTH_TOKEN='test-service-secret')
+    def test_bearer_repairs_and_rejects_preexisting_staff_identity(self):
+        Identity.objects.filter(pk=self.service_identity.pk).update(
+            is_staff=True, is_superuser=True,
+        )
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION='Bearer test-service-secret')
+        self.assertEqual(client.get('/api/v1/field-formulas/').status_code, 403)
+        self.service_identity.refresh_from_db()
+        self.assertFalse(self.service_identity.is_staff)
+        self.assertFalse(self.service_identity.is_superuser)
+
     @override_settings(SERVICE_AUTH_TOKEN='test-service-secret')
     def test_bearer_write_grant_can_be_removed(self):
         client = APIClient()
@@ -25005,6 +25069,25 @@ class CodeMappingLookupTest(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.admin)
         self.url = '/api/v1/code-mappings/lookup/'
+
+    @override_settings(
+        SERVICE_AUTH_TOKEN='test-service-secret',
+        SERVICE_AUTH_SCOPES='patient/*.read system/etl.write',
+    )
+    def test_staging_etl_bearer_can_lookup(self):
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION='Bearer test-service-secret')
+        resp = client.post(self.url, {
+            'codes': [{
+                'source_vocabulary_id': 'CPT4',
+                'source_code': '99213',
+                'omop_table': 'procedure',
+            }],
+        }, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['resolved'], 1)
+        identity = Identity.objects.get(issuer='urn:service', sub='hk-labs-sync')
+        self.assertFalse(identity.is_staff)
 
     def test_lookup_returns_approved_mapping(self):
         resp = self.client.post(self.url, {

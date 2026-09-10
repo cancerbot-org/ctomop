@@ -112,7 +112,11 @@ import os
 import re
 from decimal import Decimal, InvalidOperation
 from io import StringIO
-from .permissions import ScopedTokenPermission, VocabReadPermission, PatientCrudPermission, PatientSelfScopePermission, PatientDeletePermission, get_request_org, is_service_token
+from .permissions import (
+    EtlPatientCrudPermission, EtlWritePermission, PatientCrudPermission,
+    PatientDeletePermission, PatientSelfScopePermission, ScopedTokenPermission,
+    VocabReadPermission, get_request_org, is_service_token,
+)
 from .providers.base import TokenClaims
 from .serializers import (
     PrologSurveySerializer, PrologSurveyResponseSerializer,
@@ -5181,7 +5185,7 @@ class PersonViewSet(viewsets.GenericViewSet):
       POST /api/persons/find_or_create/  — resolve OIDC identity to a Person row
       PATCH /api/persons/{person_id}/    — fill-if-empty demographic patch
     """
-    permission_classes = [ScopedTokenPermission, PatientSelfScopePermission]
+    permission_classes = [EtlWritePermission, PatientSelfScopePermission]
     queryset = Person.objects.all()
     lookup_field = 'person_id'
 
@@ -5273,8 +5277,8 @@ class PersonViewSet(viewsets.GenericViewSet):
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         # Trusted backend (service-token): skip per-person row-level ACL.
-        # ScopedTokenPermission confirmed the caller holds a valid HMAC-verified
-        # service token. Service tokens have full cross-person write access by design.
+        # EtlWritePermission confirmed the HMAC-verified caller also holds the
+        # endpoint-specific ETL capability.
         if not is_service_token(request):
             org = get_request_org(request)
             if org is not None:
@@ -6705,10 +6709,11 @@ class _OmopBulkDeleteMixin:
     """Delete many clinical rows of one person in a single request."""
 
     # POST, because a DELETE with a body gets stripped by intermediaries. That
-    # makes the permission class matter: the viewsets use PatientCrudPermission,
-    # which grants a session patient POST but denies them DELETE. Evaluated on a
-    # POST the base class reproduces the DELETE rule, so the batch grants nothing
-    # the row level delete refuses.
+    # makes the permission class matter: the parent viewsets accept the ETL
+    # capability and grant a session patient POST, but this action deliberately
+    # restores ScopedTokenPermission. Evaluated as POST, it requires the broad
+    # patient write scope and rejects both the ETL capability and session users,
+    # so the batch grants nothing the row-level DELETE refuses.
     @action(detail=False, methods=['post'], url_path='bulk_delete',
             permission_classes=[ScopedTokenPermission])
     def bulk_delete(self, request: Request, *args: Any, **kwargs: Any) -> Response:
@@ -6910,7 +6915,7 @@ class _ProvenanceMixin:
 @method_decorator(csrf_exempt, name='dispatch')
 class ConditionOccurrenceViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _ProvenanceMixin, _OmopFilterMixin, viewsets.ModelViewSet):
     serializer_class = ConditionOccurrenceSerializer
-    permission_classes = [PatientCrudPermission, PatientSelfScopePermission]
+    permission_classes = [EtlPatientCrudPermission, PatientSelfScopePermission]
     queryset = ConditionOccurrence.objects.all()
     clinical_filter_fields = {
         'concept_param': 'condition_concept_id',
@@ -6927,7 +6932,7 @@ class ConditionOccurrenceViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _
 @method_decorator(csrf_exempt, name='dispatch')
 class DrugExposureViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _ProvenanceMixin, _OmopFilterMixin, viewsets.ModelViewSet):
     serializer_class = DrugExposureSerializer
-    permission_classes = [PatientCrudPermission, PatientSelfScopePermission]
+    permission_classes = [EtlPatientCrudPermission, PatientSelfScopePermission]
     queryset = DrugExposure.objects.all()
     clinical_filter_fields = {
         'concept_param': 'drug_concept_id',
@@ -6944,7 +6949,7 @@ class DrugExposureViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _Provena
 @method_decorator(csrf_exempt, name='dispatch')
 class MeasurementViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _ProvenanceMixin, _OmopFilterMixin, viewsets.ModelViewSet):
     serializer_class = MeasurementSerializer
-    permission_classes = [PatientCrudPermission, PatientSelfScopePermission]
+    permission_classes = [EtlPatientCrudPermission, PatientSelfScopePermission]
     queryset = Measurement.objects.all()
     clinical_filter_fields = {
         'concept_param': 'measurement_concept_id',
@@ -6963,7 +6968,7 @@ class MeasurementViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _Provenan
 @method_decorator(csrf_exempt, name='dispatch')
 class ObservationViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _ProvenanceMixin, _OmopFilterMixin, viewsets.ModelViewSet):
     serializer_class = ObservationSerializer
-    permission_classes = [PatientCrudPermission, PatientSelfScopePermission]
+    permission_classes = [EtlPatientCrudPermission, PatientSelfScopePermission]
     queryset = Observation.objects.all()
     clinical_filter_fields = {
         'concept_param': 'observation_concept_id',
@@ -6980,7 +6985,7 @@ class ObservationViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _Provenan
 @method_decorator(csrf_exempt, name='dispatch')
 class ProcedureOccurrenceViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _ProvenanceMixin, _OmopFilterMixin, viewsets.ModelViewSet):
     serializer_class = ProcedureOccurrenceSerializer
-    permission_classes = [PatientCrudPermission, PatientSelfScopePermission]
+    permission_classes = [EtlPatientCrudPermission, PatientSelfScopePermission]
     queryset = ProcedureOccurrence.objects.all()
     clinical_filter_fields = {
         'concept_param': 'procedure_concept_id',
@@ -10314,7 +10319,7 @@ def code_mapping_vocabularies(request):
 
 
 @api_view(['POST'])
-@permission_classes([ScopedTokenPermission])
+@permission_classes([EtlWritePermission])
 def code_mapping_lookup(request):
     """Resolve a batch of source-code encounters through SCCM.
 
