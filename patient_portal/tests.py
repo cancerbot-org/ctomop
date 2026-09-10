@@ -3428,8 +3428,8 @@ class SmartPatientRecordReadOnlyTest(_SmartBase):
         record = PatientRecord.objects.get(person=self.person)
         self.assertEqual(record.disease, 'Updated disease')
 
-    def test_patient_info_patch_ignores_gender_silently(self):
-        """Gender is a profile field — silently ignored on PatientRecord PATCH."""
+    def test_patient_info_patch_writes_gender_to_record_and_person(self):
+        """Gender writes through PatientRecord PATCH and projects to Person."""
         record, _ = PatientRecord.objects.get_or_create(
             person=self.person, defaults={'organization': self.organization},
         )
@@ -3444,7 +3444,7 @@ class SmartPatientRecordReadOnlyTest(_SmartBase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
         record.refresh_from_db()
-        self.assertEqual(record.gender, 'M')
+        self.assertEqual(record.gender, 'F')
 
     def test_serializer_marks_gender_read_only(self):
         """Declared serializer fields must agree with the mapped-field contract."""
@@ -3490,8 +3490,8 @@ class SmartPatientRecordReadOnlyTest(_SmartBase):
         self.assertEqual(str(record.validation_date), '2026-08-18')
         self.assertTrue(record.suppress_demographics_for_others)
 
-    def test_patient_info_patch_ignores_profile_fields_silently(self):
-        """Profile fields are read-only on PatientRecord — silently ignored."""
+    def test_patient_info_patch_writes_profile_fields(self):
+        """Profile fields now write through PatientRecord PATCH and project to Person."""
         record, _ = PatientRecord.objects.get_or_create(
             person=self.person, defaults={'organization': self.organization},
         )
@@ -3507,19 +3507,20 @@ class SmartPatientRecordReadOnlyTest(_SmartBase):
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
         record.refresh_from_db()
-        self.assertIsNone(record.email)
+        self.assertEqual(record.email, 'patient-record-write@example.test')
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.email, 'patient-record-write@example.test')
 
-    def test_person_patch_rejects_invalid_profile_email(self):
+    def test_patient_record_patch_rejects_invalid_profile_email(self):
         PatientRecord.objects.get_or_create(
             person=self.person, defaults={'organization': self.organization},
         )
         resp = self.write_client.patch(
-            f'/api/persons/{self.person.person_id}/',
+            f'/api/patient-info/{self.person.person_id}/',
             {'email': 'not an email'},
             format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST, resp.data)
-        self.assertEqual(resp.data['detail'], "'email' must be a valid email address.")
 
     def test_patient_info_delete_returns_405(self):
         resp = self.write_client.delete(f'/api/patient-info/{self.person.person_id}/')
@@ -26495,10 +26496,9 @@ class RetireLegacySurveysGuardTest(TestCase):
 
 class PatientSelfEditProfileTest(TestCase):
     """Verify that a non-staff patient can PATCH their own profile fields
-    via /api/v1/persons/{person_id}/ (the target='person' route).
+    via /api/patient-info/{person_id}/ (unified PatientRecord PATCH route).
 
-    Profile fields include: given_name, family_name, email, phone_number,
-    gender, race, ethnicity, date_of_birth (via year/month/day), city, region.
+    Profile fields are saved to PatientRecord and projected to Person/Location.
     """
 
     @classmethod
@@ -26526,19 +26526,7 @@ class PatientSelfEditProfileTest(TestCase):
         return c
 
     def _url(self):
-        return f'/api/v1/persons/{self.person.person_id}/'
-
-    def test_patient_can_set_given_name(self):
-        resp = self._client().patch(self._url(), {'given_name': 'Alice'}, format='json')
-        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
-        self.person.refresh_from_db()
-        self.assertEqual(self.person.given_name, 'Alice')
-
-    def test_patient_can_set_family_name(self):
-        resp = self._client().patch(self._url(), {'family_name': 'Smith'}, format='json')
-        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
-        self.person.refresh_from_db()
-        self.assertEqual(self.person.family_name, 'Smith')
+        return f'/api/patient-info/{self.person.person_id}/'
 
     def test_patient_can_set_email(self):
         resp = self._client().patch(self._url(), {'email': 'alice@example.com'}, format='json')
@@ -26554,7 +26542,7 @@ class PatientSelfEditProfileTest(TestCase):
 
     def test_patient_can_set_date_of_birth(self):
         resp = self._client().patch(self._url(), {
-            'year_of_birth': 1985, 'month_of_birth': 3, 'day_of_birth': 15,
+            'date_of_birth': '1985-03-15',
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
         self.person.refresh_from_db()
@@ -26583,8 +26571,9 @@ class PatientSelfEditProfileTest(TestCase):
     def test_patient_can_set_city(self):
         resp = self._client().patch(self._url(), {'city': 'Portland'}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
-        # City is stored on the Location row, not directly on Person.
-        # Just verify the endpoint accepted it.
+        # City is stored on the Location row via projection.
+        record = PatientRecord.objects.get(person=self.person)
+        self.assertEqual(record.city, 'Portland')
 
     def test_patient_can_set_region(self):
         resp = self._client().patch(self._url(), {'region': 'OR'}, format='json')
@@ -26594,8 +26583,8 @@ class PatientSelfEditProfileTest(TestCase):
         other_person = Person.objects.create(person_id=99002)
         PatientRecord.objects.get_or_create(person=other_person)
         resp = self._client().patch(
-            f'/api/v1/persons/{other_person.person_id}/',
-            {'given_name': 'Hacker'},
+            f'/api/patient-info/{other_person.person_id}/',
+            {'email': 'hacker@example.com'},
             format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)

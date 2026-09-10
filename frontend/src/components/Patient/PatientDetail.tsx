@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, AlertCircle, ChevronDown, Download } from "lucide-react";
 import api from "@/api/axios";
 import { fetchWritableFields, LIFECYCLE, type FieldDescriptors } from "@/hooks/useWritableFields";
-import { writeProfileFields, type ProfileEdit } from "@/api/clinicalFacts";
+// Profile fields now write through PatientRecord PATCH alongside clinical fields.
 import { getActiveBranding } from "@/config/branding";
 import type { User } from "@/hooks/useAuth";
 import DeleteAccountDialog from "./DeleteAccountDialog";
@@ -338,9 +338,9 @@ export default function PatientDetail({
       const { patient_name: _echoed, ...info } = data.info as Record<string, unknown>;
       const renamed = !!data.name && data.name !== patientNameRef.current;
 
-      // All clinical edits go through PatientRecord PATCH. The backend
-      // handles OMOP projection for fields with approved mappings.
-      // Profile fields (person-targeted) go to the persons endpoint.
+      // All fields — clinical and profile alike — go through PatientRecord
+      // PATCH. The backend projects profile fields to Person/Location and
+      // clinical fields to OMOP tables after the PATCH lands.
       // Fail closed: an empty descriptor makes nothing look writable, so a
       // descriptor we could not fetch is a failed save, reported as one.
       let descriptors: FieldDescriptors;
@@ -353,20 +353,12 @@ export default function PatientDetail({
         );
       }
       const baseline = patientInfoRef.current ?? {};
-      // Profile fields (target === 'person') go to the persons endpoint.
-      // Everything else — clinical fields (with or without OMOP projection) —
-      // goes to PatientRecord PATCH. The backend projects mapped fields into
-      // OMOP tables after the PATCH lands.
-      const profileEdits: ProfileEdit[] = [];
       const patchFields: Record<string, unknown> = {};
 
       for (const [f, v] of Object.entries(info)) {
         if (LIFECYCLE.has(f) || v === baseline[f]) continue;
         const desc = descriptors[f];
-        if (desc?.writable && desc.target === 'person') {
-          profileEdits.push({ field: f, descriptor: desc, value: v });
-        } else if (desc?.writable && desc.target === 'patient_record') {
-          // Direct or mapped — all go through PatientRecord PATCH.
+        if (desc?.writable && desc.target === 'patient_record') {
           patchFields[f] = v;
         } else if (!(f in descriptors)) {
           // Unknown to the descriptor (e.g. custom fields) — PATCH them too.
@@ -374,15 +366,7 @@ export default function PatientDetail({
         }
       }
 
-      // Person profile fields go in a single request (latitude/longitude pair).
-      if (profileEdits.length) {
-        await writeProfileFields(personId, profileEdits);
-        for (const { field } of profileEdits) {
-          if (patientInfoRef.current) patientInfoRef.current[field] = info[field];
-        }
-      }
-
-      // All clinical + unmapped fields ride the PatientRecord PATCH.
+      // All fields ride the single PatientRecord PATCH.
       if (renamed || Object.keys(patchFields).length > 0) {
         await api.patch(
           `/patient-info/${personId}/`,
