@@ -5,7 +5,8 @@
  * is replaced by a single write path: all writable fields land on PatientRecord,
  * and the backend projects mapped fields into OMOP tables.
  *
- * Profile fields (target === 'person') still go to the persons endpoint.
+ * Profile fields (target === 'patient_record' with projection_target) also go
+ * through the same PATCH — the backend projects them to Person/Location.
  *
  * The rule these pin: send only changed, writable fields in the PATCH. Lifecycle
  * columns are never sent, aliases are never sent, and unchanged values are never
@@ -29,15 +30,7 @@ vi.mock('@/hooks/useVocabulary', () => ({
   useVocabulary: () => ({ options: [], source: null, loading: false }),
 }));
 
-vi.mock('@/api/clinicalFacts', async () => {
-  const actual = await vi.importActual<typeof import('@/api/clinicalFacts')>(
-    '@/api/clinicalFacts',
-  );
-  return { ...actual, writeProfileFields: vi.fn().mockResolvedValue({}) };
-});
-
 import api from '@/api/axios';
-import { writeProfileFields } from '@/api/clinicalFacts';
 
 const DESCRIPTORS = {
   anc_thousand_per_ul: {
@@ -173,7 +166,6 @@ describe('PatientDetail save — the edit, not the record', () => {
     await editAndSave('3.1', '5.5');
 
     await waitFor(() => expect(api.patch).toHaveBeenCalled());
-    expect(writeProfileFields).not.toHaveBeenCalled();
   });
 
   it('does not PATCH at all when the descriptor cannot be fetched', async () => {
@@ -191,7 +183,6 @@ describe('PatientDetail save — the edit, not the record', () => {
     await editAndSave('howell@example.org', 'a.howell@example.org');
 
     expect(api.patch).not.toHaveBeenCalled();
-    expect(writeProfileFields).not.toHaveBeenCalled();
   });
 
   it('surfaces the rejected field names from a read-only refusal', async () => {

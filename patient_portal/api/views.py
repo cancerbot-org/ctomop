@@ -533,6 +533,206 @@ def _apply_patient_name(person, name):
     return True
 
 
+# ---- Profile field projection (PatientRecord → Person/Location) ----------
+# These sets mirror the write_descriptor dicts and identify which validated
+# fields need projection to Person or Location after the serializer saves
+# them to PatientRecord.
+
+_PROFILE_SIMPLE_PERSON_FIELDS = frozenset({
+    'email', 'phone_number', 'facility_name', 'validated', 'validated_by',
+    'validation_date', 'suppress_demographics_for_others',
+})
+
+_PROFILE_DEMOGRAPHIC_FIELDS = {
+    'gender': ('gender_concept', 'gender_source_value'),
+    'race': ('race_concept', 'race_source_value'),
+    'ethnicity': ('ethnicity_concept', 'ethnicity_source_value'),
+}
+
+_PROFILE_LOCATION_FIELDS = {
+    'city':        ('city', 'str', 50),
+    'region':      ('state', 'str', 2),
+    'postal_code': ('zip', 'str', 9),
+    'country':     ('country', 'str', 100),
+    'latitude':    ('latitude', 'decimal', None),
+    'longitude':   ('longitude', 'decimal', None),
+}
+
+_PROFILE_LOCATION_DECIMAL_RANGE = {'latitude': (-90, 90), 'longitude': (-180, 180)}
+
+_ALL_PROFILE_FIELDS = (
+    _PROFILE_SIMPLE_PERSON_FIELDS
+    | set(_PROFILE_DEMOGRAPHIC_FIELDS)
+    | set(_PROFILE_LOCATION_FIELDS)
+    | {'date_of_birth'}
+)
+
+
+def _validate_location_fields(location_patch, person, patient_info=None):
+    """Validate location fields before serializer.save().
+
+    Raises ValidationError for invalid values. Must run before the serializer
+    writes to PatientRecord, because the model has a check constraint requiring
+    both lat/lng or neither.
+    """
+    if not location_patch:
+        return
+    for field, value in location_patch.items():
+        if value is None:
+            continue
+        column, kind, max_len = _PROFILE_LOCATION_FIELDS[field]
+        if kind == 'str' and max_len:
+            s = str(value).strip()
+            if s and len(s) > max_len:
+                raise ValidationError({
+                    'detail': (
+                        f"'{field}' must be at most {max_len} characters "
+                        f'(OMOP Location.{column}).'
+                    ),
+                })
+        elif kind == 'decimal':
+            try:
+                d = Decimal(str(value))
+            except (InvalidOperation, TypeError, ValueError):
+                raise ValidationError({
+                    'detail': f"'{field}' must be a number.",
+                })
+            if field in _PROFILE_LOCATION_DECIMAL_RANGE:
+                lo, hi = _PROFILE_LOCATION_DECIMAL_RANGE[field]
+                if not (lo <= d <= hi):
+                    raise ValidationError({
+                        'detail': f"'{field}' must be between {lo} and {hi}.",
+                    })
+    # Coordinate pair constraint: check what the final state will be.
+    # Check against PatientRecord values (which have the DB check constraint)
+    # and also against Location values for the projection.
+    existing_lat = getattr(patient_info, 'latitude', None) if patient_info else None
+    existing_lng = getattr(patient_info, 'longitude', None) if patient_info else None
+    if existing_lat is None and existing_lng is None and person.location_id:
+        loc = Location.objects.filter(location_id=person.location_id).first()
+        if loc:
+            existing_lat = loc.latitude
+            existing_lng = loc.longitude
+    final_lat = location_patch.get('latitude', existing_lat)
+    final_lng = location_patch.get('longitude', existing_lng)
+    if (final_lat is None) != (final_lng is None):
+        missing = 'longitude' if final_lng is None else 'latitude'
+        raise ValidationError({
+            'detail': (
+                f"'{missing}': the record requires both coordinates "
+                f'or neither.'
+            ),
+        })
+
+
+def _project_profile_fields(person, direct_fields, patch_data):
+    """Project profile fields from PatientRecord onto Person/Location.
+
+    Called after the serializer has saved profile values to PatientRecord.
+    Writes the same values to Person columns and/or Location rows so the
+    OMOP model stays consistent, without calling refresh_patient_record().
+
+    Returns the set of profile field names that were projected (so the caller
+    can exclude them from user_edited_fields).
+    """
+    profile_fields = direct_fields & _ALL_PROFILE_FIELDS
+    if not profile_fields:
+        return set()
+
+    person_changed = []
+
+    # ---- Simple Person columns ----
+    for field in profile_fields & _PROFILE_SIMPLE_PERSON_FIELDS:
+        value = patch_data[field]
+        if isinstance(value, str):
+            value = value.strip() or None
+        if getattr(person, field) != value:
+            setattr(person, field, value)
+            person_changed.append(field)
+
+    # ---- date_of_birth → year/month/day on Person ----
+    if 'date_of_birth' in profile_fields:
+        dob = patch_data['date_of_birth']
+        if dob is not None:
+            if isinstance(dob, str):
+                dob = parse_date(dob)
+            if dob is not None:
+                for attr, val in [('year_of_birth', dob.year),
+                                  ('month_of_birth', dob.month),
+                                  ('day_of_birth', dob.day)]:
+                    if getattr(person, attr) != val:
+                        setattr(person, attr, val)
+                        person_changed.append(attr)
+            else:
+                for attr in ('year_of_birth', 'month_of_birth', 'day_of_birth'):
+                    if getattr(person, attr) is not None:
+                        setattr(person, attr, None)
+                        person_changed.append(attr)
+        else:
+            for attr in ('year_of_birth', 'month_of_birth', 'day_of_birth'):
+                if getattr(person, attr) is not None:
+                    setattr(person, attr, None)
+                    person_changed.append(attr)
+
+    # ---- Demographics (gender, race, ethnicity) ----
+    for field in profile_fields & set(_PROFILE_DEMOGRAPHIC_FIELDS):
+        concept_attr, source_attr = _PROFILE_DEMOGRAPHIC_FIELDS[field]
+        incoming = patch_data[field]
+        if incoming is not None:
+            incoming = str(incoming).strip() or None
+        concept = resolve_demographic_concept(field, incoming)
+        new_concept_id = concept.concept_id if concept else None
+        if getattr(person, f'{concept_attr}_id') != new_concept_id:
+            setattr(person, concept_attr, concept)
+            person_changed.append(concept_attr)
+        if getattr(person, source_attr) != incoming:
+            setattr(person, source_attr, incoming)
+            person_changed.append(source_attr)
+
+    # ---- Location fields ----
+    # Validation was already done by _validate_location_fields() before
+    # serializer.save(), so we only need to project here.
+    location_fields = profile_fields & set(_PROFILE_LOCATION_FIELDS)
+    if location_fields:
+        location_updates = {}
+        for field in location_fields:
+            column, kind, max_len = _PROFILE_LOCATION_FIELDS[field]
+            incoming = patch_data[field]
+            if incoming is not None and kind == 'str':
+                incoming = str(incoming).strip() or None
+            elif incoming is not None and kind == 'decimal':
+                try:
+                    incoming = Decimal(str(incoming))
+                except (InvalidOperation, TypeError, ValueError):
+                    incoming = None
+            location_updates[column] = incoming
+
+        if location_updates:
+            location = None
+            if person.location_id:
+                location = Location.objects.filter(
+                    location_id=person.location_id
+                ).first()
+            if location is None:
+                location = Location(location_id=next_pk(Location, 'location_id'))
+            location_changed = [
+                c for c, v in location_updates.items() if getattr(location, c) != v
+            ]
+            for column, value in location_updates.items():
+                setattr(location, column, value)
+            if location._state.adding:
+                location.save()
+                person.location_id = location.location_id
+                person_changed.append('location_id')
+            elif location_changed:
+                location.save(update_fields=location_changed)
+
+    if person_changed:
+        person.save(update_fields=person_changed)
+
+    return profile_fields
+
+
 def _record_provenance(record, source, source_user_id, target_patient_id=None, modification_reason=None, organization=None):
     """Create or update a ProvenanceRecord pointing at any model instance."""
     ProvenanceRecord.objects.update_or_create(
@@ -876,6 +1076,17 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         # the provider UI PATCHes, and leaving the key in the body would 405 the
         # request below as a non-projection-owned field.
         patient_name, patch_data = _pop_patient_name(request.data)
+        # language_skills are PersonLanguageSkill rows, not PatientRecord columns.
+        # Pop them before the serializer sees an unknown key.
+        language_skills = patch_data.pop('language_skills', None) if 'language_skills' in patch_data else None
+        # Demographics (gender/race/ethnicity) are popped because the serializer's
+        # GenderField is read-only and would silently drop the value.  They are
+        # projected to Person separately, writing the raw display text as the
+        # source value and resolving the concept.
+        demographics = {
+            f: patch_data.pop(f)
+            for f in list(patch_data) if f in _PROFILE_DEMOGRAPHIC_FIELDS
+        }
         mutations = patch_data.pop('genetic_mutations', None) if 'genetic_mutations' in patch_data else None
         # The editor PATCHes the complete GET representation.  A projected
         # mutation list carried back unchanged is therefore an autosave echo,
@@ -884,12 +1095,28 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
         if mutations == PatientRecordSerializer(patient_info).data.get('genetic_mutations'):
             mutations = None
 
+        # Validate language_skills early, before the transaction.
+        if language_skills is not None and not isinstance(language_skills, dict):
+            return Response(
+                {'detail': "'language_skills' must be an object mapping a "
+                           "language to its capabilities."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         with transaction.atomic():
             # Match derivation's lock order and serialize the read/modify/write
             # of user_edited_fields as well as same-day OMOP projection.
             patient_info = PatientRecord.objects.select_for_update().get(pk=patient_info.pk)
             serializer = PatientRecordSerializer(patient_info, data=patch_data, partial=True)
             serializer.is_valid(raise_exception=True)
+            # Validate location fields early, before serializer.save() writes
+            # to PatientRecord — the model has a check constraint requiring
+            # both lat/lng or neither, so a partial clear would fail at the DB.
+            location_in_patch = {
+                f: serializer.validated_data[f]
+                for f in serializer.validated_data if f in _PROFILE_LOCATION_FIELDS
+            }
+            _validate_location_fields(location_in_patch, person, patient_info)
             previous_values = {
                 field: getattr(patient_info, field)
                 for field in serializer.validated_data
@@ -910,19 +1137,65 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
                 if field in direct_fields:
                     setattr(patient_info, f'{field}_units', unit)
             serializer.save()
-            if direct_fields:
-                edited = set(patient_info.user_edited_fields or []) | direct_fields
+
+            # Demographics were popped before the serializer (GenderField is
+            # read-only and translates 'Female' → 'F'). Write the DB code to
+            # PatientRecord and the raw display text to Person.
+            if demographics:
+                from patient_portal.api.serializers import GenderField
+                gender_field = GenderField()
+                demo_update_fields = []
+                for demo_field, demo_value in demographics.items():
+                    old = getattr(patient_info, demo_field)
+                    # For gender, translate the display text to the DB code.
+                    db_value = (gender_field.to_internal_value(demo_value)
+                                if demo_field == 'gender' and demo_value else demo_value)
+                    if old != db_value:
+                        setattr(patient_info, demo_field, db_value)
+                        previous_values[demo_field] = old
+                        direct_fields.add(demo_field)
+                        demo_update_fields.append(demo_field)
+                if demo_update_fields:
+                    patient_info.save(update_fields=demo_update_fields)
+
+            # Profile fields are backed by Person/Location, not OMOP clinical
+            # tables — exclude them from user_edited_fields.
+            # Pass the raw demographic values (not the serializer-translated ones)
+            # so Person.gender_source_value gets the display text.
+            profile_patch_data = dict(serializer.validated_data)
+            profile_patch_data.update(demographics)
+            profile_projected = _project_profile_fields(
+                person, direct_fields, profile_patch_data,
+            )
+            clinical_fields = direct_fields - profile_projected
+
+            if clinical_fields:
+                edited = set(patient_info.user_edited_fields or []) | clinical_fields
                 patient_info.user_edited_fields = sorted(edited)
                 patient_info.save(update_fields=['user_edited_fields'])
             _write_record_revisions(patient_info, previous_values, request)
-            if direct_fields:
+
+            # Handle language skills (PersonLanguageSkill rows).
+            touched_languages = False
+            if language_skills is not None:
+                try:
+                    created, removed = set_language_skills(person, language_skills)
+                    touched_languages = bool(created or removed)
+                except LanguageSkillError as exc:
+                    raise ValidationError({'detail': str(exc)})
+
+            if clinical_fields:
                 from omop_core.services.patient_record_service import recompute_patient_record_fields
 
-                projected = self._project_mapped_fields(person, direct_fields, serializer.validated_data)
+                projected = self._project_mapped_fields(person, clinical_fields, serializer.validated_data)
                 patient_info.user_edited_fields = sorted(
                     set(patient_info.user_edited_fields or []) - projected
                 )
-                recompute_patient_record_fields(patient_info, changed_fields=direct_fields)
+                recompute_patient_record_fields(patient_info, changed_fields=clinical_fields)
+                patient_info.refresh_from_db()
+            elif profile_projected or touched_languages:
+                from omop_core.services.patient_record_service import recompute_patient_record_fields
+                recompute_patient_record_fields(patient_info, changed_fields=profile_projected)
                 patient_info.refresh_from_db()
 
         return Response({**PatientRecordSerializer(patient_info).data, 'previous_values': previous_values})
@@ -4907,65 +5180,6 @@ def auth_test(request):
 # Person ViewSet — identity resolution and demographic patch
 # =============================================================================
 
-# Fields considered "placeholder" values that a fill-if-empty PATCH may overwrite.
-_PERSON_STR_PLACEHOLDERS = {'', 'unknown', 'Unknown'}
-_PERSON_YEAR_PLACEHOLDER = PERSON_YEAR_PLACEHOLDERS
-_PERSON_INT_PLACEHOLDER  = {None, 0}
-
-_PERSON_PATCHABLE_FIELDS = {
-    'given_name':            ('str',  _PERSON_STR_PLACEHOLDERS),
-    'family_name':           ('str',  _PERSON_STR_PLACEHOLDERS),
-    'gender_source_value':   ('str',  _PERSON_STR_PLACEHOLDERS),
-    'race_source_value':     ('str',  _PERSON_STR_PLACEHOLDERS),
-    'ethnicity_source_value':('str',  _PERSON_STR_PLACEHOLDERS),
-}
-
-# PatientRecord field → (Person concept FK, Person source column). Both are
-# written together: derivation reads the concept first and falls back to the
-# source value, so writing text alone leaves a stale concept outranking it and the
-# correction silently appears not to have taken.
-_PERSON_DEMOGRAPHIC_FIELDS = {
-    'gender': ('gender_concept', 'gender_source_value'),
-    'race': ('race_concept', 'race_source_value'),
-    'ethnicity': ('ethnicity_concept', 'ethnicity_source_value'),
-}
-
-
-# PatientRecord field → (Location column, kind). These live on the OMOP Location
-# row that Person.location points at, not on Person, which is why the projection
-# name and the column name differ for two of them.
-#
-# Replaceable rather than fill-if-empty: an address is corrected far more often
-# than a birth date, and a patient who moves needs the new value to win.
-_PERSON_LOCATION_FIELDS = {
-    'city':        ('city', 'str', 50),
-    'region':      ('state', 'str', 2),
-    'postal_code': ('zip', 'str', 9),
-    'country':     ('country', 'str', 100),
-    'latitude':    ('latitude', 'decimal', None),
-    'longitude':   ('longitude', 'decimal', None),
-}
-
-# Bounds are the CDM's, checked here so an over-long value is refused with a
-# reason instead of being truncated by the database. `region` maps to `state`,
-# which the CDM caps at two characters — a full region name is a 400, not a
-# silent 'Ca'.
-_LOCATION_DECIMAL_RANGE = {'latitude': (-90, 90), 'longitude': (-180, 180)}
-
-_PERSON_REPLACEABLE_FIELDS = {
-    'email': 'email',
-    'phone_number': 'str',
-    'facility_name': 'str',
-    'year_of_birth': 'int',
-    'month_of_birth': 'int',
-    'day_of_birth': 'int',
-    'validated': 'bool',
-    'validated_by': 'str',
-    'validation_date': 'date',
-    'suppress_demographics_for_others': 'bool',
-}
-
-
 @method_decorator(csrf_exempt, name='dispatch')
 def _caller_may_write_patient(request, person_id: int) -> bool:
     """Whether this caller may edit this patient, by the rules the writes enforce.
@@ -5150,7 +5364,9 @@ class PersonViewSet(viewsets.GenericViewSet):
     """
     Endpoints:
       POST /api/persons/find_or_create/  — resolve OIDC identity to a Person row
-      PATCH /api/persons/{person_id}/    — fill-if-empty demographic patch
+
+    Profile fields (demographics, location, language skills) now write through
+    PATCH /api/patient-info/{person_id}/ → _patch_record → _project_profile_fields.
     """
     permission_classes = [ScopedTokenPermission, PatientSelfScopePermission]
     queryset = Person.objects.all()
@@ -5235,17 +5451,19 @@ class PersonViewSet(viewsets.GenericViewSet):
     def partial_update(self, request, person_id=None):
         """
         PATCH /api/persons/{person_id}/
-        Fill-if-empty: each field is only written when the current value is null or a placeholder.
-        Never clobbers real data.
+        Fill-if-empty Person fields + profile field writes.
+
+        Fill-if-empty: given_name, family_name, etc. are only written when the
+        current value is null or a placeholder. Never clobbers real data.
+
+        Profile fields (demographics, location, language skills) and replaceable
+        fields (email, phone, etc.) are delegated to _project_profile_fields.
         """
         try:
             person = Person.objects.get(person_id=person_id)
         except (Person.DoesNotExist, ValueError):
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Trusted backend (service-token): skip per-person row-level ACL.
-        # ScopedTokenPermission confirmed the caller holds a valid HMAC-verified
-        # service token. Service tokens have full cross-person write access by design.
         if not is_service_token(request):
             org = get_request_org(request)
             if org is not None:
@@ -5255,16 +5473,34 @@ class PersonViewSet(viewsets.GenericViewSet):
                 from omop_core.authorization import can_access_patient, can_write_patient
                 if not can_access_patient(request.user, person.person_id):
                     return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
-                # Reading a person is not permission to rewrite their demographics:
-                # the analyst role passes can_access_patient but is absent from
-                # _WRITE_ROLES. The read-denial above stays a 404 so this route does
-                # not confirm which person_ids exist; a caller who can already read
-                # the row gets the explicit 403 instead.
                 if not can_write_patient(request.user, person.person_id):
                     return Response(
                         {'detail': 'Analysts have read-only access. Contact a doctor or org admin to update patient data.'},
                         status=status.HTTP_403_FORBIDDEN,
                     )
+
+        _PERSON_STR_PLACEHOLDERS = {'', 'unknown', 'Unknown'}
+
+        _PERSON_PATCHABLE_FIELDS = {
+            'given_name':            ('str',  _PERSON_STR_PLACEHOLDERS),
+            'family_name':           ('str',  _PERSON_STR_PLACEHOLDERS),
+            'gender_source_value':   ('str',  _PERSON_STR_PLACEHOLDERS),
+            'race_source_value':     ('str',  _PERSON_STR_PLACEHOLDERS),
+            'ethnicity_source_value':('str',  _PERSON_STR_PLACEHOLDERS),
+        }
+
+        _PERSON_REPLACEABLE_FIELDS = {
+            'email': 'email',
+            'phone_number': 'str',
+            'facility_name': 'str',
+            'year_of_birth': 'int',
+            'month_of_birth': 'int',
+            'day_of_birth': 'int',
+            'validated': 'bool',
+            'validated_by': 'str',
+            'validation_date': 'date',
+            'suppress_demographics_for_others': 'bool',
+        }
 
         changed = []
         for field, (kind, placeholders) in _PERSON_PATCHABLE_FIELDS.items():
@@ -5279,7 +5515,7 @@ class PersonViewSet(viewsets.GenericViewSet):
                         {'detail': f"'{field}' must be an integer."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-            current  = getattr(person, field)
+            current = getattr(person, field)
             if current in placeholders or current is None:
                 setattr(person, field, incoming)
                 changed.append(field)
@@ -5331,18 +5567,13 @@ class PersonViewSet(viewsets.GenericViewSet):
                 setattr(person, field, incoming)
                 changed.append(field)
 
-        # ---- Demographics -------------------------------------------------
-        # Replaceable, unlike the *_source_value entries above: a wrong gender or
-        # race must be correctable, not merely fillable when blank.
-        for field, (concept_attr, source_attr) in _PERSON_DEMOGRAPHIC_FIELDS.items():
+        # Demographics — replaceable, resolve concept + source value.
+        for field, (concept_attr, source_attr) in _PROFILE_DEMOGRAPHIC_FIELDS.items():
             if field not in request.data:
                 continue
             incoming = request.data[field]
             incoming = str(incoming).strip() or None if incoming is not None else None
             concept = resolve_demographic_concept(field, incoming)
-            # Clear the concept when the new value is not a curated answer. Leaving
-            # the old one would let derivation keep reporting the value that was
-            # just corrected, since it reads the concept before the source text.
             if getattr(person, f'{concept_attr}_id') != (concept.concept_id if concept else None):
                 setattr(person, concept_attr, concept)
                 changed.append(concept_attr)
@@ -5350,15 +5581,11 @@ class PersonViewSet(viewsets.GenericViewSet):
                 setattr(person, source_attr, incoming)
                 changed.append(source_attr)
 
-        # ---- Location -----------------------------------------------------
-        # Six projection fields resolve to the OMOP Location row rather than to
-        # Person. The row is created on first write, because a patient whose
-        # address arrives after registration has no location to update.
+        # Location fields — validate and project.
         location_updates = {}
         touched_location = []
-        for field, (column, kind, max_len) in _PERSON_LOCATION_FIELDS.items():
-            if field not in request.data:
-                continue
+        for field in set(request.data) & set(_PROFILE_LOCATION_FIELDS):
+            column, kind, max_len = _PROFILE_LOCATION_FIELDS[field]
             incoming = request.data[field]
             if incoming is not None and kind == 'str':
                 incoming = str(incoming).strip() or None
@@ -5378,7 +5605,7 @@ class PersonViewSet(viewsets.GenericViewSet):
                         {'detail': f"'{field}' must be a number."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                lo, hi = _LOCATION_DECIMAL_RANGE[field]
+                lo, hi = _PROFILE_LOCATION_DECIMAL_RANGE[field]
                 if not (lo <= incoming <= hi):
                     return Response(
                         {'detail': f"'{field}' must be between {lo} and {hi}."},
@@ -5386,18 +5613,6 @@ class PersonViewSet(viewsets.GenericViewSet):
                     )
             location_updates[column] = incoming
 
-        # Coordinates are a pair or nothing.
-        #
-        # PatientRecord carries a check constraint requiring latitude and
-        # longitude to be both set or both null, and derivation copies whatever
-        # the Location row holds. So accepting one without the other stores a
-        # Location that no later derivation can project: the write itself blew up
-        # with an unhandled IntegrityError, and every subsequent clinical write
-        # for that patient failed too, because each one re-derives. One mistyped
-        # coordinate made a patient unwritable.
-        #
-        # The tab offers the two as separate boxes, which is exactly how someone
-        # arrives here — fill one, move on.
         if location_updates:
             pair = {'latitude', 'longitude'}
             supplied = pair & set(location_updates)
@@ -5410,9 +5625,6 @@ class PersonViewSet(viewsets.GenericViewSet):
                         location_id=person.location_id,
                     ).first()
                     current = getattr(existing_location, missing, None)
-                # Fine when the other half is already on file and the submitted
-                # half stays set, or when both are absent. Refuse any transition
-                # that would leave exactly one coordinate set.
                 if (location_updates[supplied_column] is None) != (current is None):
                     return Response(
                         {'detail': (
@@ -5438,31 +5650,13 @@ class PersonViewSet(viewsets.GenericViewSet):
                 setattr(location, column, value)
             if location._state.adding:
                 location.save()
-                # Person.location_id is a plain IntegerField, not a FK — the CDM
-                # link is by id only, so assign the id rather than the instance.
                 person.location_id = location.location_id
                 changed.append('location_id')
             elif location_changed:
                 location.save(update_fields=location_changed)
-                # Kept out of `changed`, which is a list of *Person* columns
-                # handed to person.save(update_fields=...) — a Location column
-                # there would raise. Tracked separately so the refresh below
-                # still fires.
                 touched_location = location_changed
 
-        # A Location edit changes the projection just as much as a Person edit,
-        # and it used to fall through both of these. `changed` only ever held
-        # Person columns, plus 'location_id' when the row was *created* — so the
-        # first address write refreshed (it created the row) and every later one
-        # did not. The Location row was updated and the projection was not,
-        # leaving the database saying Somerville while the record read Cambridge,
-        # under a 200 reporting no change at all.
-        # ---- Language skills (#808) ---------------------------------------
-        # Rows, not columns, so they are handled apart from the loops above:
-        # each capability a person has in a language is its own
-        # PersonLanguageSkill row. Replace semantics per language named; a
-        # language left out of the payload is untouched, which is what keeps one
-        # language's answer from implying anything about the other.
+        # Language skills
         touched_languages = []
         if 'language_skills' in request.data:
             payload = request.data['language_skills']
