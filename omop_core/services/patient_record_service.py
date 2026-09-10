@@ -658,6 +658,7 @@ class OmopSnapshot:
     obs_by_code: dict           # concept_code → [Observation]
     meas_by_source: dict        # source_value → [Measurement]
     obs_by_source: dict         # source_value → [Observation]
+    death_date_assertion: object | None = None  # Latest UI assertion, including an explicit clear
 
 
 def _build_snapshot(person: Person) -> OmopSnapshot:
@@ -700,6 +701,8 @@ def _build_snapshot(person: Person) -> OmopSnapshot:
     )
     death = Death.objects.filter(person=person).only('death_date').first()
 
+    death_date_assertion = next((o for o in observations
+        if o.observation_source_value == 'patient-record:death_date'), None)
     from omop_core.services.omop_projection import without_cleared_history
     measurements = without_cleared_history(measurements, 'measurement')
     observations = without_cleared_history(observations, 'observation')
@@ -732,6 +735,7 @@ def _build_snapshot(person: Person) -> OmopSnapshot:
         drug_exposures=drug_exposures,
         procedures=procedures,
         death=death,
+        death_date_assertion=death_date_assertion,
         meas_by_code=dict(meas_by_code),
         obs_by_code=dict(obs_by_code),
         meas_by_source=dict(meas_by_source),
@@ -833,6 +837,8 @@ def refresh_patient_record(person: Person) -> PatientRecord:
             patient_info = PatientRecord.objects.select_for_update().get(person=person)
         except PatientRecord.DoesNotExist:
             patient_info = PatientRecord(person=person)
+        # Reuse the supplied Person when save computes age; avoid another lookup.
+        patient_info.person = person
 
         # Snapshot user-edited values that may not yet have OMOP backing.
         # After derivation, these are restored when derivation produced nothing
@@ -897,7 +903,12 @@ def refresh_patient_record(person: Person) -> PatientRecord:
             setattr(patient_info, field, value)
             if not matches:
                 still_orphaned.append(field)
-        patient_info.user_edited_fields = sorted(still_orphaned)
+        # Individual courses supersede legacy aggregate supportive-field edits.
+        from omop_core.services.supportive_therapy_service import supportive_course_summary
+        course_values = supportive_course_summary(person)
+        for field, value in course_values.items():
+            setattr(patient_info, field, value)
+        patient_info.user_edited_fields = sorted(set(still_orphaned) - course_values.keys())
 
         patient_info.derivation_version = DERIVATION_VERSION
         patient_info.derived_at = timezone.now()
@@ -1032,6 +1043,16 @@ def _get_demographics(person: Person, snapshot: OmopSnapshot = None) -> dict:
 
     if snapshot.death:
         data['death_date'] = snapshot.death.death_date
+    assertion = snapshot.death_date_assertion
+    if assertion is not None:
+        from omop_core.services.omop_projection import CLEAR_VALUE
+        if assertion.value_source_value == CLEAR_VALUE:
+            data['death_date'] = None
+        elif assertion.value_as_string:
+            try:
+                data['death_date'] = date.fromisoformat(assertion.value_as_string)
+            except ValueError:
+                pass
 
     if person.year_of_birth not in PERSON_YEAR_PLACEHOLDERS:
         try:
@@ -3901,6 +3922,10 @@ def _apply_active_field_formulas(patient_info: PatientRecord) -> set[str]:
     from omop_core.models import CustomPatientField, FieldFormula
     from omop_core.services.formula_evaluator import evaluate_formula
 
+    overrides = patient_info.therapy_overrides or {}
+    for field in ('relapse_count', 'treatment_refractory_status'):
+        if field in overrides:
+            setattr(patient_info, field, overrides[field])
     values = _formula_values(patient_info)
     custom_fields = dict(patient_info.custom_fields or {})
     custom_field_names = set(CustomPatientField.objects.filter(
@@ -3908,6 +3933,8 @@ def _apply_active_field_formulas(patient_info: PatientRecord) -> set[str]:
     ).values_list('field_name', flat=True))
     changed_fields = set()
     for field_formula in FieldFormula.objects.filter(is_active=True).order_by('field_name'):
+        if field_formula.field_name in overrides:
+            continue
         try:
             value = evaluate_formula(field_formula.formula, values)
         except ValueError:

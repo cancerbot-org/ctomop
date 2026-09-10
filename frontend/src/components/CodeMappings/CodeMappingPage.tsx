@@ -199,6 +199,7 @@ const strategyLabel: Record<string, string> = {
   umls: "UMLS",
   vectors: "Vector",
   lexical: "Lexical",
+  semantic: "Semantic retrieval",
 };
 
 /** How far along a run is, counting the phase it is actually in.
@@ -260,7 +261,7 @@ type SuggestRunProgress = {
 const STRATEGY_LABELS = {
   umls: "UMLS",
   lexical: "Lexical",
-  vectors: "Vectors",
+  semantic: "Semantic retrieval",
 } as const;
 
 /**
@@ -477,7 +478,7 @@ export default function CodeMappingPage() {
   const validSuggestionLimit = suggestionLimit !== "" && Number.isInteger(suggestionLimit)
     && suggestionLimit >= 1 && suggestionLimit <= maxSuggestions;
   const [strategies, setStrategies] = useState({
-    umls: true, vectors: true, lexical: true,
+    umls: true, lexical: true, semantic: true,
   });
   const [dialogMode, setDialogMode] = useState<"new" | "edit" | null>(null);
   const [selectedRow, setSelectedRow] = useState<CodeMappingRow | null>(null);
@@ -1083,9 +1084,7 @@ export default function CodeMappingPage() {
    * somewhere a curator re-points *into* — enumerating SNOMED's 1.09M concepts
    * would not be a queue.
    */
-  // Vectors reranks what retrieval found; it retrieves nothing itself, so a run
-  // without UMLS or Lexical would report "no candidate concept" for every code.
-  const hasRetrieval = strategies.umls || strategies.lexical;
+  const hasRetrieval = strategies.umls || strategies.lexical || strategies.semantic;
 
   const runSuggest = async () => {
     if (!validSuggestionLimit) {
@@ -1523,24 +1522,18 @@ export default function CodeMappingPage() {
             className="h-8 w-16 rounded-md border border-slate-300 px-2 text-xs"
           />
           <span className="text-xs text-slate-600">Using</span>
-          {(["umls", "lexical", "vectors"] as const).map((key) => (
+          {(["umls", "lexical", "semantic"] as const).map((key) => (
             <span key={key} className="inline-flex items-center gap-1">
               <label className="inline-flex items-center gap-1 text-xs text-slate-600">
                 <input
                   type="checkbox"
-                  checked={strategies[key] && !(key === "vectors" && !hasRetrieval)}
-                  disabled={key === "vectors" && !hasRetrieval}
+                  checked={strategies[key]}
                   onChange={(e) =>
                     setStrategies((prev) => ({ ...prev, [key]: e.target.checked }))
                   }
-                  title={
-                    key === "vectors" && !hasRetrieval
-                      ? "Vectors reranks what retrieval found, so it needs UMLS or Lexical."
-                      : undefined
-                  }
                   className="h-3.5 w-3.5 rounded border-slate-300 disabled:opacity-40"
                 />
-                <span className={key === "vectors" && !hasRetrieval ? "text-slate-400" : ""}>
+                <span>
                   {STRATEGY_LABELS[key]}
                 </span>
               </label>
@@ -1962,13 +1955,13 @@ export default function CodeMappingPage() {
                         </label>
                         <HelpTip tip={TIP.search_vocabulary} />
                       </div>
-                      {(["umls", "lexical", "vectors"] as const).map((key) => (
+                      {(["umls", "lexical", "semantic"] as const).map((key) => (
                         <div key={key} className="inline-flex items-center gap-1 text-xs text-slate-600">
                           <label className="inline-flex items-center gap-1">
                             <input type="checkbox" checked={strategies[key]} onChange={(e) => setStrategies((prev) => ({ ...prev, [key]: e.target.checked }))} />
                             {STRATEGY_LABELS[key]}
                           </label>
-                          <HelpTip tip={key === "umls" ? "Bridge the code to an equivalent concept through UMLS. A single match is used as-is." : key === "lexical" ? "Retrieve candidate destinations by matching names and synonyms." : "Reorder the retrieved candidates by semantic similarity."} />
+                          <HelpTip tip={key === "umls" ? "Bridge the code to an equivalent concept through UMLS. A single match is used as-is." : key === "lexical" ? "Retrieve candidate destinations by matching names and synonyms." : "Find candidate destinations by meaning, including concepts whose names and synonyms do not match the source wording."} />
                         </div>
                       ))}
                       <button

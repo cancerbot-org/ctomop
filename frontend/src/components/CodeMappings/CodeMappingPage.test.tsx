@@ -1106,7 +1106,7 @@ describe("CodeMappingPage", () => {
       expect(screen.getByRole("tablist").nextElementSibling).toBe(toolbar);
       const controls = toolbar.querySelectorAll("button, input");
       expect(controls[0]).toHaveTextContent("Suggest");
-      for (const [index, name] of ["UMLS", "Lexical", "Vectors"].entries()) {
+      for (const [index, name] of ["UMLS", "Lexical", "Semantic retrieval"].entries()) {
         const checkbox = within(toolbar).getByRole("checkbox", { name });
         expect(controls[index + 2]).toBe(checkbox);
         expect(checkbox).toBeChecked();
@@ -1118,9 +1118,31 @@ describe("CodeMappingPage", () => {
       fireEvent.change(batchSize, { target: { value: "25" } });
       fireEvent.click(within(toolbar).getByRole("button", { name: "Suggest" }));
       await waitFor(() => expect(mockPost).toHaveBeenCalled());
-      expect(mockPost.mock.calls[0][1]).toMatchObject({ limit: 25 });
+      expect(mockPost.mock.calls[0][1]).toMatchObject({
+        limit: 25, strategies: ["umls", "lexical", "semantic"],
+      });
       expect(mockPost.mock.calls[0][1]).not.toHaveProperty("lexical_limit");
       expect(mockPost.mock.calls[0][1]).not.toHaveProperty("min_occurrences");
+    });
+
+    it("can suggest with semantic retrieval alone and requires at least one retriever", async () => {
+      mockPost.mockResolvedValue({ data: suggestRun() });
+      renderPage();
+      await screen.findByText("M-PROTEIN, SERUM", { selector: "td" });
+      const toolbar = screen.getByRole("group", { name: "Suggest controls" });
+      for (const name of ["UMLS", "Lexical"]) {
+        fireEvent.click(within(toolbar).getByRole("checkbox", { name }));
+      }
+      const button = within(toolbar).getByRole("button", { name: "Suggest" });
+      const semantic = within(toolbar).getByRole("checkbox", { name: "Semantic retrieval" });
+      expect(within(toolbar).queryByRole("checkbox", { name: /Vector/ })).not.toBeInTheDocument();
+      expect(button).toBeEnabled();
+      fireEvent.click(semantic);
+      expect(button).toBeDisabled();
+      fireEvent.click(semantic);
+      fireEvent.click(button);
+      await waitFor(() => expect(mockPost).toHaveBeenCalled());
+      expect(mockPost.mock.calls[0][1]).toMatchObject({ strategies: ["semantic"] });
     });
 
     it("uses the active server batch cap as the default", async () => {
@@ -1332,9 +1354,9 @@ describe("Uncoded review counters and refresh", () => {
     expect(within(section).queryByText(/^Metrics:/)).not.toBeInTheDocument();
     expect(screen.queryByText("Review counts: all models")).not.toBeInTheDocument();
     const controls = screen.getByRole("group", { name: "Suggest controls" });
-    const vectors = within(controls).getByRole("checkbox", { name: "Vectors" });
+    const semantic = within(controls).getByRole("checkbox", { name: "Semantic retrieval" });
     const replace = within(controls).getByRole("checkbox", { name: "Replace Current Suggestions" });
-    expect(vectors.closest("span")?.nextElementSibling).toBe(replace.closest("label"));
+    expect(semantic.closest("span")?.nextElementSibling).toBe(replace.closest("label"));
     // Approved leads the strip now that no box names a model version.
     expect(section.firstElementChild).toHaveTextContent("Approved");
   });

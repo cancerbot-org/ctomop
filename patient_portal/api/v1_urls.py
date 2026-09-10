@@ -1,6 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from .concept_mint import mint_destination
+from .supportive_therapies import SupportiveTherapyViewSet, therapy_outcomes
 
 from .views import (
     SurveyViewSet, PatientSurveyResponseViewSet,
@@ -77,6 +78,7 @@ router.register(r'episodes', EpisodeViewSet, basename='v1-episodes')
 router.register(r'episode-events', EpisodeEventViewSet, basename='v1-episode-events')
 # Authoring a line of therapy, which is an Episode grouping drug exposures rather
 # than any single row. See TherapyLineViewSet.
+router.register(r'supportive-therapies', SupportiveTherapyViewSet, basename='v1-supportive-therapies')
 router.register(r'therapy-lines', TherapyLineViewSet, basename='v1-therapy-lines')
 router.register(r'documents', PatientDocumentViewSet, basename='v1-documents')
 router.register(r'trial-enrollments', PatientTrialEnrollmentViewSet, basename='v1-trial-enrollments')
@@ -91,6 +93,7 @@ router.register(r'surveys', SurveyViewSet, basename='v1-surveys')
 router.register(r'survey-responses', PatientSurveyResponseViewSet, basename='v1-survey-responses')
 
 urlpatterns = [
+    path('therapy-outcomes/', therapy_outcomes, name='v1-therapy-outcomes'),
     # The surveys the PROlog runner serves, for the portal's Surveys tab.
     path('prolog-surveys/', PrologSurveyListView.as_view(), name='v1-prolog-surveys'),
     path('', include(router.urls)),

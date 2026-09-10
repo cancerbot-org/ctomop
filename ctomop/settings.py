@@ -220,6 +220,10 @@ else:
 
 AUTH_USER_MODEL = "patient_portal.Identity"
 
+# Bound the optional whole-vocabulary semantic query; other retrievers continue
+# if it times out. Model loading/encoding is outside this database timeout.
+SUGGEST_SEMANTIC_TIMEOUT_MS = max(1, int(os.environ.get('SUGGEST_SEMANTIC_TIMEOUT_MS', '3000')))
+
 AUTHENTICATION_BACKENDS = [
     "patient_portal.backends.EmailBackend",
 ]
@@ -377,8 +381,9 @@ AUTH_TOKEN_CACHE_TTL = int(os.environ.get("AUTH_TOKEN_CACHE_TTL", "60"))
 
 # REST Framework
 SERVICE_AUTH_TOKEN = os.environ.get("SERVICE_AUTH_TOKEN", "")
-# Legacy shared-token callers must opt in to writes; an empty grant denies all
-# requests guarded by ScopedTokenPermission and its subclasses.
+# The legacy credential is read-only by default. ``system/etl.write`` is a
+# narrow compatibility capability accepted only on explicitly approved ETL
+# endpoints, and never for DELETE.
 SERVICE_AUTH_SCOPES = os.environ.get("SERVICE_AUTH_SCOPES", "patient/*.read")
 
 # Ranking key for Code Mapping suggestions (#856). Deliberately optional: with

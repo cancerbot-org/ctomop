@@ -152,6 +152,10 @@ services:
         sync: false
       - key: SERVICE_AUTH_TOKEN
         sync: false
+      # The staging ETL capability is accepted only by explicitly approved
+      # non-destructive write endpoints. It does not make the identity staff.
+      - key: SERVICE_AUTH_SCOPES
+        value: "patient/*.read system/etl.write"
       - key: MAILGUN_API_KEY
         sync: false
       - key: MAILGUN_SENDER_DOMAIN

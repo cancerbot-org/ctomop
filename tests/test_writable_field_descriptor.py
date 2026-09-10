@@ -400,8 +400,8 @@ class TestEveryFieldIsCategorised:
             assert d[field]['source_tables'] == ['Episode', 'EpisodeEvent']
         # Other treatment summaries retain their existing episode-authoring
         # guidance; they are not individual first/second/later-line columns.
-        for field in ('relapse_count', 'line_of_therapy'):
-            assert d[field]['group'] == 'therapy-inference', field
+        assert d['line_of_therapy']['group'] == 'therapy-inference'
+        assert d['relapse_count']['writable'] is True
 
     def test_location_fields_are_writable_not_grouped_as_missing(self):
         """They were grouped as 'location' only while they had no write path.
@@ -530,7 +530,7 @@ class TestAttributionsTrackDerivation:
 
 _LIFECYCLE = {
     'id', 'person', 'organization', 'created_at', 'updated_at',
-    'derived_at', 'derivation_version', 'user_edited_fields', 'custom_fields',
+    'derived_at', 'derivation_version', 'user_edited_fields', 'custom_fields', 'therapy_overrides',
 }
 
 
@@ -559,11 +559,11 @@ class TestSerializerFieldCoverage:
 
     def test_refractory_status_is_an_alias_of_its_canonical(self):
         entry = build_writable_field_descriptor()['refractory_status']
-        assert entry['writable'] is False
+        assert entry['writable'] is True
         assert entry['canonical'] == 'treatment_refractory_status'
 
     @pytest.mark.parametrize('field', [
-        'refractory_status', 'age', 'lines_of_therapy', 'name', 'person_id',
+        'age', 'lines_of_therapy', 'name', 'person_id',
         'therapy_release_id', 'first_line_therapy_display',
     ])
     def test_nothing_serializer_derived_claims_to_be_writable(self, field):

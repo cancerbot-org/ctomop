@@ -79,9 +79,11 @@ from omop_core.mapping.code_resolution import (
 )
 from omop_core.mapping.suggestions import (
     ALL_STRATEGIES,
+    DEFAULT_STRATEGIES,
     CANDIDATE_LIMIT,
     LEXICAL_LIMIT_MAX,
     STRATEGY_LEXICAL,
+    STRATEGY_SEMANTIC,
     STRATEGY_UMLS,
     SUGGESTION_MODEL_VERSION,
     VOCAB_TO_UMLS_ROOT,
@@ -112,7 +114,11 @@ import os
 import re
 from decimal import Decimal, InvalidOperation
 from io import StringIO
-from .permissions import ScopedTokenPermission, VocabReadPermission, PatientCrudPermission, PatientSelfScopePermission, PatientDeletePermission, get_request_org, is_service_token
+from .permissions import (
+    EtlPatientCrudPermission, EtlWritePermission, PatientCrudPermission,
+    PatientDeletePermission, PatientSelfScopePermission, ScopedTokenPermission,
+    VocabReadPermission, get_request_org, is_service_token,
+)
 from .providers.base import TokenClaims
 from .serializers import (
     PrologSurveySerializer, PrologSurveyResponseSerializer,
@@ -1118,7 +1124,10 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
             direct_fields = {
                 field for field in serializer.validated_data
                 if field in PATIENT_RECORD_OMOP_MAPPED_FIELDS
-                and serializer.validated_data[field] != previous_values.get(field)
+                and (serializer.validated_data[field] != previous_values.get(field)
+                     or (field in {'relapse_count', 'treatment_refractory_status'}
+                         and field not in (patient_info.therapy_overrides or {})
+                         and serializer.validated_data[field] is not None))
             }
             _apply_patient_name(person, patient_name)
             if mutations is not None:
@@ -5361,7 +5370,7 @@ class PersonViewSet(viewsets.GenericViewSet):
     Profile fields (demographics, location, language skills) now write through
     PATCH /api/patient-info/{person_id}/ → _patch_record → _project_profile_fields.
     """
-    permission_classes = [ScopedTokenPermission, PatientSelfScopePermission]
+    permission_classes = [EtlWritePermission, PatientSelfScopePermission]
     queryset = Person.objects.all()
     lookup_field = 'person_id'
 
@@ -5457,6 +5466,9 @@ class PersonViewSet(viewsets.GenericViewSet):
         except (Person.DoesNotExist, ValueError):
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        # Trusted backend (service-token): skip per-person row-level ACL.
+        # EtlWritePermission confirmed the HMAC-verified caller also holds the
+        # endpoint-specific ETL capability.
         if not is_service_token(request):
             org = get_request_org(request)
             if org is not None:
@@ -6871,10 +6883,11 @@ class _OmopBulkDeleteMixin:
     """Delete many clinical rows of one person in a single request."""
 
     # POST, because a DELETE with a body gets stripped by intermediaries. That
-    # makes the permission class matter: the viewsets use PatientCrudPermission,
-    # which grants a session patient POST but denies them DELETE. Evaluated on a
-    # POST the base class reproduces the DELETE rule, so the batch grants nothing
-    # the row level delete refuses.
+    # makes the permission class matter: the parent viewsets accept the ETL
+    # capability and grant a session patient POST, but this action deliberately
+    # restores ScopedTokenPermission. Evaluated as POST, it requires the broad
+    # patient write scope and rejects both the ETL capability and session users,
+    # so the batch grants nothing the row-level DELETE refuses.
     @action(detail=False, methods=['post'], url_path='bulk_delete',
             permission_classes=[ScopedTokenPermission])
     def bulk_delete(self, request: Request, *args: Any, **kwargs: Any) -> Response:
@@ -7076,7 +7089,7 @@ class _ProvenanceMixin:
 @method_decorator(csrf_exempt, name='dispatch')
 class ConditionOccurrenceViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _ProvenanceMixin, _OmopFilterMixin, viewsets.ModelViewSet):
     serializer_class = ConditionOccurrenceSerializer
-    permission_classes = [PatientCrudPermission, PatientSelfScopePermission]
+    permission_classes = [EtlPatientCrudPermission, PatientSelfScopePermission]
     queryset = ConditionOccurrence.objects.all()
     clinical_filter_fields = {
         'concept_param': 'condition_concept_id',
@@ -7093,7 +7106,7 @@ class ConditionOccurrenceViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _
 @method_decorator(csrf_exempt, name='dispatch')
 class DrugExposureViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _ProvenanceMixin, _OmopFilterMixin, viewsets.ModelViewSet):
     serializer_class = DrugExposureSerializer
-    permission_classes = [PatientCrudPermission, PatientSelfScopePermission]
+    permission_classes = [EtlPatientCrudPermission, PatientSelfScopePermission]
     queryset = DrugExposure.objects.all()
     clinical_filter_fields = {
         'concept_param': 'drug_concept_id',
@@ -7110,7 +7123,7 @@ class DrugExposureViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _Provena
 @method_decorator(csrf_exempt, name='dispatch')
 class MeasurementViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _ProvenanceMixin, _OmopFilterMixin, viewsets.ModelViewSet):
     serializer_class = MeasurementSerializer
-    permission_classes = [PatientCrudPermission, PatientSelfScopePermission]
+    permission_classes = [EtlPatientCrudPermission, PatientSelfScopePermission]
     queryset = Measurement.objects.all()
     clinical_filter_fields = {
         'concept_param': 'measurement_concept_id',
@@ -7129,7 +7142,7 @@ class MeasurementViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _Provenan
 @method_decorator(csrf_exempt, name='dispatch')
 class ObservationViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _ProvenanceMixin, _OmopFilterMixin, viewsets.ModelViewSet):
     serializer_class = ObservationSerializer
-    permission_classes = [PatientCrudPermission, PatientSelfScopePermission]
+    permission_classes = [EtlPatientCrudPermission, PatientSelfScopePermission]
     queryset = Observation.objects.all()
     clinical_filter_fields = {
         'concept_param': 'observation_concept_id',
@@ -7146,7 +7159,7 @@ class ObservationViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _Provenan
 @method_decorator(csrf_exempt, name='dispatch')
 class ProcedureOccurrenceViewSet(_OmopDeferRefreshMixin, _OmopBulkCreateMixin, _ProvenanceMixin, _OmopFilterMixin, viewsets.ModelViewSet):
     serializer_class = ProcedureOccurrenceSerializer
-    permission_classes = [PatientCrudPermission, PatientSelfScopePermission]
+    permission_classes = [EtlPatientCrudPermission, PatientSelfScopePermission]
     queryset = ProcedureOccurrence.objects.all()
     clinical_filter_fields = {
         'concept_param': 'procedure_concept_id',
@@ -8193,7 +8206,8 @@ def therapy_regimen_list(request):
     if disease_code or round_code:
         dtr_qs = DiseaseTherapyRegimen.objects.all()
         if disease_code:
-            dtr_qs = dtr_qs.filter(disease__code=disease_code)
+            from omop_core.services.treatment_catalog import disease_filter
+            dtr_qs = dtr_qs.filter(disease_filter(disease_code))
         if round_code:
             dtr_qs = dtr_qs.filter(round__code=round_code)
         regimen_ids = dtr_qs.values_list('regimen_id', flat=True)
@@ -8202,7 +8216,10 @@ def therapy_regimen_list(request):
     if search:
         qs = qs.filter(title__icontains=search)
 
-    items = list(qs.values('code', 'title', 'concept_id')[:50])
+    values = qs.values('code', 'title', 'concept_id')
+    # A disease/round picker needs the complete available list. Search remains
+    # bounded, but alphabetical truncation must not hide valid supportive care.
+    items = list(values if round_code and not search else values[:50])
     return Response(items)
 
 
@@ -10002,17 +10019,17 @@ def code_mapping_suggest(request):
         # Vectors reorders what retrieval found; it finds nothing itself. On its
         # own it would run to completion and report "no candidate concept" for
         # every code, which reads as a broken tab rather than a bad selection.
-        if not {STRATEGY_UMLS, STRATEGY_LEXICAL} & set(raw_strategies):
+        if not {STRATEGY_UMLS, STRATEGY_LEXICAL, STRATEGY_SEMANTIC} & set(raw_strategies):
             return Response(
                 {'strategies': (
                     'Vectors reranks the candidates retrieval found, so it '
-                    'cannot run alone. Select UMLS or Lexical as well.'
+                    'cannot run alone. Select UMLS, Lexical or Semantic retrieval as well.'
                 )},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         strategies = raw_strategies
     else:
-        strategies = list(ALL_STRATEGIES)
+        strategies = list(DEFAULT_STRATEGIES)
 
     # Replace mode re-answers rows a previous run already answered, rather than
     # deleting them. Deleting was right while the candidate set came from a scan
@@ -10109,16 +10126,16 @@ def code_mapping_suggest_one(request):
         return Response({'detail': 'Organization admin access required.'}, status=status.HTTP_403_FORBIDDEN)
     source_code = str(request.data.get('source_code') or '').strip()
     omop_table = normalize_omop_table(request.data.get('omop_table'))
-    strategies = request.data.get('strategies') or list(ALL_STRATEGIES)
+    strategies = request.data.get('strategies') or list(DEFAULT_STRATEGIES)
     if not source_code or not omop_table or not isinstance(strategies, list) or any(s not in ALL_STRATEGIES for s in strategies):
         return Response({'detail': 'source_code, omop_table, and valid strategies are required.'}, status=status.HTTP_400_BAD_REQUEST)
     # Same rule as the batch endpoint: vectors reranks what retrieval found and
     # retrieves nothing itself, so on its own it answers "no candidate concept"
     # every time, which reads as a broken dialog rather than a bad selection.
-    if not {STRATEGY_UMLS, STRATEGY_LEXICAL} & set(strategies):
+    if not {STRATEGY_UMLS, STRATEGY_LEXICAL, STRATEGY_SEMANTIC} & set(strategies):
         return Response({'strategies': (
             'Vectors reranks the candidates retrieval found, so it cannot run '
-            'alone. Select UMLS or Lexical as well.'
+            'alone. Select UMLS, Lexical or Semantic retrieval as well.'
         )}, status=status.HTTP_400_BAD_REQUEST)
     try:
         lexical_limit = int(request.data.get('lexical_limit') or CANDIDATE_LIMIT)
@@ -10480,7 +10497,7 @@ def code_mapping_vocabularies(request):
 
 
 @api_view(['POST'])
-@permission_classes([ScopedTokenPermission])
+@permission_classes([EtlWritePermission])
 def code_mapping_lookup(request):
     """Resolve a batch of source-code encounters through SCCM.
 

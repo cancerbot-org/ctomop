@@ -618,6 +618,26 @@ class TestSuggestAPIStrategies:
             strategies=['lexical', 'vectors'], min_occurrences=99999,
         ).status_code == 202
 
+    @pytest.mark.parametrize('strategies', [['semantic'], ['semantic', 'vectors']])
+    def test_semantic_is_an_independent_retriever(self, strategies):
+        with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
+            response = self._post(strategies=strategies, min_occurrences=99999)
+        assert response.status_code == 202
+        assert fake.calls[0][1]['strategies'] == strategies
+
+    def test_suggest_one_accepts_semantic_without_other_retrievers(self):
+        response = self.client.post(
+            '/api/v1/code-mappings/suggest-one/',
+            data={'source_code': 'LOCAL-123', 'omop_table': 'measurement',
+                  'strategies': ['semantic']}, format='json',
+        )
+        assert response.status_code == 200
+
+    def test_default_strategies_include_semantic(self):
+        with use_suggest_dispatcher(FakeSuggestDispatcher()) as fake:
+            self._post(min_occurrences=99999)
+        assert fake.calls[0][1]['strategies'] == ['umls', 'lexical', 'semantic']
+
     def test_replace_requires_a_vocabulary(self):
         resp = self.client.post(
             '/api/v1/code-mappings/suggest/',

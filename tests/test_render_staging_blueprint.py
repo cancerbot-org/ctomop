@@ -30,6 +30,8 @@ def test_staging_reuses_existing_web_settings_and_shares_broker():
     assert web_env['ALLOWED_HOSTS']['value'] == 'promop-staging.onrender.com'
     assert web_env['CORS_ALLOWED_ORIGINS']['value'] == 'https://promop-staging.onrender.com'
     assert web_env['APP_BASE_URL']['value'] == 'https://promop-staging.onrender.com'
+    assert web_env['SERVICE_AUTH_SCOPES']['value'] == 'patient/*.read system/etl.write'
+    assert 'patient/*.write' not in web_env['SERVICE_AUTH_SCOPES']['value'].split()
     assert web_env['CELERY_BROKER_URL']['fromService']['name'] == broker['name']
     assert worker_env['CELERY_WORKER_CONCURRENCY']['value'] == '1'
     assert broker['maxmemoryPolicy'] == 'noeviction'
@@ -43,6 +45,7 @@ def test_production_yaml_keeps_http_settings_on_web_service():
     env = {e['key']: e for e in web['envVars']}
     assert env['CELERY_BROKER_URL'] == {'key': 'CELERY_BROKER_URL', 'sync': False}
     assert {'ALLOWED_HOSTS', 'CORS_ALLOWED_ORIGINS', 'ADMIN_EMAIL'} <= env.keys()
+    assert 'SERVICE_AUTH_SCOPES' not in env
 
 
 @pytest.mark.parametrize('missing', ['CELERY_BROKER_URL', 'DATABASE_URL', 'SECRET_KEY'])

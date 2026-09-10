@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pencil, Plus } from 'lucide-react';
 import { useWritableFields, invalidateWritableFieldsCache } from '@/hooks/useWritableFields';
 import { listTherapyRegimens, type EditableTherapyLine } from '@/api/therapyLines';
@@ -6,6 +6,8 @@ import type { TherapyRegimen } from '@/types/therapy';
 import ClinicalField from '../ClinicalField';
 import Section from '../Section';
 import TherapyLineDialog from '../TherapyLineDialog';
+import SupportiveTherapyDialog from '../SupportiveTherapyDialog';
+import type { SupportiveTherapyCourse } from '@/api/supportiveTherapies';
 
 interface Props {
   formData: Record<string, unknown>;
@@ -34,6 +36,7 @@ function diseaseToDiseaseCode(
   // Try the raw disease string first for finer discrimination (MCL vs FL).
   if (typeof disease === 'string') {
     const d = disease.toLowerCase();
+    if (['c3242', 'c3209', 'c9335', 'c2987', 'mcl', 'dlbcl'].includes(d)) return disease.toUpperCase();
     if (d.includes('mantle')) return 'MCL';
     if (d.includes('follicular')) return 'C3209';
     if (d.includes('myeloma') || d === 'mm') return 'C3242';
@@ -63,6 +66,9 @@ export default function TreatmentTab({ formData, onChange, diseaseType, onRecord
   const { descriptors } = useWritableFields(personId ?? undefined);
   const [dialogState, setDialogState] = useState<TherapyDialogState | null>(null);
 
+  const [supportiveDialog, setSupportiveDialog] = useState<{ course?: SupportiveTherapyCourse } | null>(null);
+  const supportiveCourses = (formData.supportive_therapy_courses ?? []) as SupportiveTherapyCourse[];
+
   const field = (label: string, name: string, type: 'text' | 'number' | 'date') => (
     <ClinicalField
       label={label}
@@ -86,30 +92,34 @@ export default function TreatmentTab({ formData, onChange, diseaseType, onRecord
 
   // Planned therapy regimen picker: load regimens for the patient's disease + next line.
   const diseaseCode = diseaseToDiseaseCode(formData?.disease, diseaseType);
-  const nextLine = linesCount + 1;
+  const nextLine = Math.max(linesCount, ...therapyLines.map((line) => line.line)) + 1;
   const nextRound = nextLine === 1 ? 'first_line_therapy'
     : nextLine === 2 ? 'second_line_therapy'
     : 'later_line_therapy';
   const [plannedRegimens, setPlannedRegimens] = useState<TherapyRegimen[]>([]);
   const [loadingPlanned, setLoadingPlanned] = useState(false);
 
-  const loadPlannedRegimens = useCallback(async () => {
-    if (!diseaseCode) return;
-    setLoadingPlanned(true);
-    try {
-      setPlannedRegimens(await listTherapyRegimens(diseaseCode, nextRound));
-    } catch {
-      setPlannedRegimens([]);
-    } finally {
-      setLoadingPlanned(false);
-    }
-  }, [diseaseCode, nextRound]);
-
+  const [plannedError, setPlannedError] = useState('');
   useEffect(() => {
-    (async () => {
-      await loadPlannedRegimens();
-    })();
-  }, [loadPlannedRegimens]);
+    let active = true;
+    const load = async () => {
+      setPlannedRegimens([]);
+      setPlannedError('');
+      setLoadingPlanned(false);
+      if (!diseaseCode) return;
+      setLoadingPlanned(true);
+      try {
+        const items = await listTherapyRegimens(diseaseCode, nextRound);
+        if (active) setPlannedRegimens(items);
+      } catch {
+        if (active) setPlannedError('Could not load planned therapies. Reopen this tab to retry.');
+      } finally { if (active) setLoadingPlanned(false); }
+    };
+    void load();
+    return () => { active = false; };
+  }, [diseaseCode, nextRound]);
+  const plannedValue = String(formData.planned_therapies ?? '');
+
 
   return (
     <div>
@@ -170,7 +180,7 @@ export default function TreatmentTab({ formData, onChange, diseaseType, onRecord
       {dialogState && personId !== null && (
         <TherapyLineDialog
           personId={personId}
-          defaultLineNumber={linesCount + 1}
+          defaultLineNumber={nextLine}
           line={dialogState.mode === 'edit' ? dialogState.line : undefined}
           diseaseCode={diseaseToDiseaseCode(formData?.disease, diseaseType)}
           onClose={() => setDialogState(null)}
@@ -192,47 +202,41 @@ export default function TreatmentTab({ formData, onChange, diseaseType, onRecord
       </Section>
 
       <Section title="Supportive Therapy">
-        <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
-          {field('Supportive Therapy Start Date', 'supportive_therapy_start_date', 'date')}
-          {field('Supportive Therapy End Date', 'supportive_therapy_end_date', 'date')}
-          {field('Supportive Therapies', 'supportive_therapies', 'text')}
-          {field('Supportive Therapy Intent', 'supportive_therapy_intent', 'text')}
-        </div>
+        {personId !== null && <button type="button" onClick={() => setSupportiveDialog({})}
+          className="mb-3 inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted">
+          <Plus size={14} /> Add supportive therapy
+        </button>}
+        {supportiveCourses.length > 0 ? <ul className="divide-y divide-border rounded-md border border-border">
+          {supportiveCourses.map((course) => <li key={course.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+            <div className="flex-1">
+              <p className="font-medium">{course.regimen_title}{course.intent && <span className="ml-2 font-normal">{course.intent}</span>}</p>
+              <p className="text-xs text-muted-foreground">{course.start_date || 'No start date'} to {course.end_date || 'present'}{course.discontinuation_reason && ` · Reason: ${course.discontinuation_reason}`}</p>
+            </div>
+            <button type="button" aria-label={`Edit ${course.regimen_title}`} onClick={() => setSupportiveDialog({ course })} className="rounded-md border px-2.5 py-1.5">Edit</button>
+          </li>)}
+        </ul> : <p className="text-sm text-muted-foreground">{String(formData.supportive_therapies || 'No supportive therapies recorded.')}</p>}
       </Section>
+      {supportiveDialog && personId !== null && <SupportiveTherapyDialog
+        personId={personId} diseaseCode={diseaseCode} course={supportiveDialog.course}
+        onClose={() => setSupportiveDialog(null)} onSaved={(info) => onRecordRefreshed?.(info)}
+      />}
 
       <Section title="Planned Therapies">
         <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
           <div className="sm:col-span-2">
-            {plannedRegimens.length > 0 ? (
-              <div>
-                <label
-                  htmlFor="planned_therapies"
-                  className="block text-sm font-medium text-portal-text-primary mb-1"
-                >
-                  Planned Therapies
-                </label>
-                <select
-                  id="planned_therapies"
-                  value={String(formData?.planned_therapies ?? '')}
-                  onChange={(e) => onChange('planned_therapies', e.target.value || null)}
-                  className="w-full rounded-md border border-input px-2 py-1.5 text-sm"
-                >
-                  <option value="">Select a regimen…</option>
-                  {plannedRegimens.map((r) => (
-                    <option key={r.code} value={r.title}>{r.title}</option>
-                  ))}
-                </select>
-              </div>
-            ) : loadingPlanned ? (
-              <div>
-                <label className="block text-sm font-medium text-portal-text-primary mb-1">
-                  Planned Therapies
-                </label>
-                <p className="text-xs text-muted-foreground">Loading regimens…</p>
-              </div>
-            ) : (
-              field('Planned Therapies', 'planned_therapies', 'text')
-            )}
+            <label htmlFor="planned_therapies" className="mb-1 block text-sm font-medium">Planned Therapies</label>
+            <select id="planned_therapies" value={plannedValue}
+              disabled={loadingPlanned || !diseaseCode || !!plannedError || !descriptors.planned_therapies?.writable}
+              onChange={(e) => onChange('planned_therapies', e.target.value || null)}
+              className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm disabled:opacity-50">
+              <option value="">{loadingPlanned ? 'Loading regimens…' : 'Select a regimen…'}</option>
+              {plannedValue && !plannedRegimens.some((r) => r.title === plannedValue) && <option value={plannedValue}>{plannedValue}</option>}
+              {plannedRegimens.map((r) => <option key={r.code} value={r.title}>{r.title}</option>)}
+            </select>
+            {plannedError && <p role="alert" className="text-sm text-red-700">{plannedError}</p>}
+            {!diseaseCode && <p className="text-xs text-muted-foreground">Select a disease to see available therapies.</p>}
+            {diseaseCode && !loadingPlanned && !plannedError && plannedRegimens.length === 0 && <p className="text-xs text-muted-foreground">No regimens are available for the next line.</p>}
+
           </div>
         </div>
       </Section>

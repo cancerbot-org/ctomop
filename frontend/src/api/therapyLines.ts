@@ -1,15 +1,6 @@
 import { clinicalClient, clinicalUrl } from '@/api/clinicalTransport';
 import type { TherapyRegimen } from '@/types/therapy';
 
-/**
- * Authoring a line of therapy.
- *
- * Every therapy field on PatientRecord is inferred from an Episode grouping the
- * drug exposures given in a line, so none of them can be written directly — the
- * treatment tab is read-only for that reason. This is the one write that moves
- * them, and the server does the CDM work behind it.
- */
-
 export interface DrugConcept {
   concept_id: number;
   concept_name: string;
@@ -58,20 +49,12 @@ export interface EditableTherapyLine {
   drugs?: Array<DrugConcept & { source_value?: string | null }>;
 }
 
-/**
- * Outcome values the server can code.
- *
- * `episode_service.OUTCOME_SNOMED_CODES` keys on the bare phrase, while the tab's
- * display constant carries the abbreviation ("Complete Response (CR)"). Sending
- * the label would still store the text but would miss the SNOMED code, so the
- * value sent and the value shown are kept separate here.
- */
-export const THERAPY_OUTCOME_CHOICES: Array<{ value: string; label: string }> = [
-  { value: 'Complete Response', label: 'Complete Response (CR)' },
-  { value: 'Partial Response', label: 'Partial Response (PR)' },
-  { value: 'Stable Disease', label: 'Stable Disease (SD)' },
-  { value: 'Progressive Disease', label: 'Progressive Disease (PD)' },
-];
+export interface TherapyOutcomeChoice { code: string; value: string; label: string }
+
+export async function listTherapyOutcomes(disease?: string): Promise<TherapyOutcomeChoice[]> {
+  const response = await clinicalClient().get(clinicalUrl('/v1/therapy-outcomes/'), { params: { disease } });
+  return response.data;
+}
 
 export const THERAPY_INTENT_CHOICES: Array<{ value: string; label: string }> = [
   { value: 'Curative', label: 'Curative' },
