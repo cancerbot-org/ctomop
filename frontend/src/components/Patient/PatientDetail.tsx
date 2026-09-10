@@ -15,6 +15,7 @@ import AdvanceDirectives from "./AdvanceDirectives";
 import PatientMessages from "./PatientMessages";
 import GeneralTab from "@/components/PatientInfo/tabs/GeneralTab";
 import DiseaseTab from "@/components/PatientInfo/tabs/DiseaseTab";
+import GenomicsTab from "@/components/PatientInfo/tabs/GenomicsTab";
 import TreatmentTab from "@/components/PatientInfo/tabs/TreatmentTab";
 import BloodTab from "@/components/PatientInfo/tabs/BloodTab";
 import LabsTab from "@/components/PatientInfo/tabs/LabsTab";
@@ -32,7 +33,7 @@ function RecordConfirmation({
 }: {
   validated: boolean;
   validationDate: string | null;
-  onConfirm: () => void;
+  onConfirm: () => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
 
@@ -557,27 +558,7 @@ export default function PatientDetail({
     }
   }, [personId]);
 
-  const handleMutationAdd = useCallback(() => {
-    const raw = pendingDataRef.current?.info?.genetic_mutations ?? editedInfoRef.current?.genetic_mutations ?? [];
-    const m = [...(raw as { gene: string; mutation: string; origin: string; interpretation: string }[])];
-    m.push({ gene: "", mutation: "", origin: "", interpretation: "" });
-    handleFieldChange("genetic_mutations", m);
-  }, [handleFieldChange]);
 
-  const handleMutationRemove = useCallback((i: number) => {
-    const raw = pendingDataRef.current?.info?.genetic_mutations ?? editedInfoRef.current?.genetic_mutations ?? [];
-    const m = [...(raw as { gene: string; mutation: string; origin: string; interpretation: string }[])];
-    m.splice(i, 1);
-    handleFieldChange("genetic_mutations", m);
-  }, [handleFieldChange]);
-
-  const handleMutationChange = useCallback((i: number, field: string, value: string) => {
-    const raw = pendingDataRef.current?.info?.genetic_mutations ?? editedInfoRef.current?.genetic_mutations ?? [];
-    const m = [...(raw as { gene: string; mutation: string; origin: string; interpretation: string }[])];
-    m[i] = { ...m[i], [field]: value };
-    if (field === "gene") m[i].mutation = "";
-    handleFieldChange("genetic_mutations", m);
-  }, [handleFieldChange]);
 
   const handleZipcodeChange = useCallback(async (zipcode: string) => {
     handleFieldChange("postal_code", zipcode);
@@ -660,7 +641,7 @@ export default function PatientDetail({
   // Build tab list dynamically — patient mode adds Allergies (after Labs) and Surveys (last).
   // Immunizations are shown inside the Treatment tab, not as a separate tab.
   const canViewOmop = !patientMode && !!(user?.is_staff || user?.is_org_admin);
-  const coreTabs = ["General", getDiseaseTabLabel(), "Treatment", "Blood", "Labs"];
+  const coreTabs = ["General", getDiseaseTabLabel(), "Treatment", "Blood", "Labs", "Genomics"];
   const afterLabsTabs = patientMode ? ["Allergies"] : [];
   const trailingTabs = ["Behavior", "Wearables"];
   const surveyTabs = patientMode ? ["Surveys"] : [];
@@ -676,10 +657,11 @@ export default function PatientDetail({
 
   const tabDescriptions: Record<number, string> = {
     0: "Keep patient details up to date for accurate personalisation.",
-    1: "Disease-specific clinical information and genetic details.",
+    1: "Disease-specific clinical information.",
     2: "Therapy history, treatment lines, and planned therapies.",
     3: "Blood counts and differential.",
     4: "Chemistry, liver function, coagulation, cardiac and tumour markers.",
+    5: "Genes, variants, origins, interpretations, and test details.",
     ...(allergiesIdx >= 0 ? { [allergiesIdx]: "Known allergies and intolerances from your health records." } : {}),
     [behaviorIdx]: "Lifestyle, socioeconomic, and behavioural health factors.",
     [wearablesIdx]: "30 day summaries derived from synced OMOP data.",
@@ -829,21 +811,25 @@ export default function PatientDetail({
                         validated={!!editedInfo.validated}
                         validationDate={editedInfo.validation_date as string | null}
                         onConfirm={async () => {
-                          const result = await confirmRecord();
-                          setEditedInfo((prev) => ({
-                            ...prev,
-                            validated: result.validated,
-                            validated_by: result.validated_by,
-                            validation_date: result.validation_date,
-                          }));
-                          setPatientInfo((prev) =>
-                            prev ? {
+                          try {
+                            const result = await confirmRecord();
+                            setEditedInfo((prev) => ({
                               ...prev,
                               validated: result.validated,
                               validated_by: result.validated_by,
                               validation_date: result.validation_date,
-                            } : prev,
-                          );
+                            }));
+                            setPatientInfo((prev) =>
+                              prev ? {
+                                ...prev,
+                                validated: result.validated,
+                                validated_by: result.validated_by,
+                                validation_date: result.validation_date,
+                              } : prev,
+                            );
+                          } catch {
+                            setSaveErrorMsg('Failed to confirm record. Please try again.');
+                          }
                         }}
                       />
                     )}
@@ -861,9 +847,6 @@ export default function PatientDetail({
                   <DiseaseTab
                     formData={editedInfo}
                     onChange={handleFieldChange}
-                    onMutationAdd={handleMutationAdd}
-                    onMutationRemove={handleMutationRemove}
-                    onMutationChange={handleMutationChange}
                     diseaseType={getDiseaseType()}
                   />
                 )}
@@ -892,6 +875,7 @@ export default function PatientDetail({
                 )}
                 {activeTab === 3 && <BloodTab formData={editedInfo} onChange={handleFieldChange} />}
                 {activeTab === 4 && <LabsTab formData={editedInfo} onChange={handleFieldChange} />}
+                {activeTab === 5 && <GenomicsTab formData={editedInfo} />}
                 {allergiesIdx >= 0 && activeTab === allergiesIdx && <AllergyList user={user ?? null} />}
                 {activeTab === behaviorIdx && <BehaviorTab formData={editedInfo} onChange={handleFieldChange} onRefresh={reloadPatientInfo} />}
                 {activeTab === wearablesIdx && <WearableTab formData={editedInfo} onChange={handleFieldChange} onRefresh={reloadPatientInfo} />}

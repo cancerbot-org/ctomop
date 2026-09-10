@@ -26913,8 +26913,8 @@ class RecordAttestationTest(TestCase):
         self.record.refresh_from_db()
         self.assertTrue(self.record.suppress_demographics_for_others)
 
-    # --- 6. Staff PATCH silently drops suppress_demographics_for_others ---
-    def test_staff_patch_drops_suppress_demographics(self):
+    # --- 6. Staff/doctor/org_admin can set suppress_demographics_for_others ---
+    def test_staff_can_set_suppress_demographics(self):
         self.client.force_authenticate(user=self.staff_user)
         resp = self.client.patch(
             f'/api/patient-info/{self.person.person_id}/',
@@ -26923,8 +26923,7 @@ class RecordAttestationTest(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.record.refresh_from_db()
-        # Should NOT have been set — silently dropped from staff path
-        self.assertFalse(bool(self.record.suppress_demographics_for_others))
+        self.assertTrue(self.record.suppress_demographics_for_others)
 
     # --- 7. Re-confirm updates the date ---
     def test_reconfirm_updates_date(self):
