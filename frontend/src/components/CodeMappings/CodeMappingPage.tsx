@@ -653,9 +653,12 @@ export default function CodeMappingPage() {
   // reviews when this tab has none. Every box in the accuracy strip is scored
   // over all model versions, so the six numbers describe one population; the
   // fallbacks support older API responses.
+  // Metrics stay scoped too: with no snapshot for this tab they read as em
+  // dashes rather than as the overall model's score.
   const allModels = scopedAccuracy?.all_models;
   const reviewTotals = allModels ?? scopedAccuracy?.review_totals ?? scopedAccuracy;
-  const aggregateMetrics = allModels ?? selectedAccuracy;
+  const aggregateMetrics = allModels
+    ?? (scopedAccuracy ? scopedAccuracy.latest_reviewed ?? scopedAccuracy : undefined);
 
   const suggestModelVersion = accuracy?.suggest_model_version ?? "";
 

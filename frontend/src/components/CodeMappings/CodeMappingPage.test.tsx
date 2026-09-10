@@ -1400,6 +1400,9 @@ describe("Uncoded review counters and refresh", () => {
     render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
     const section = await screen.findByRole("region", { name: "Suggestion accuracy" });
     expect(within(section).getByText("Approved").parentElement).toHaveTextContent("0");
+    // Metrics are scoped like the counts beside them, so they read as dashes
+    // rather than borrowing the overall model's score.
+    expect(within(section).getAllByText("—")).toHaveLength(3);
   });
 });
 
