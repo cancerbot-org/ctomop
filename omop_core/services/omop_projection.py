@@ -114,7 +114,11 @@ def curated_values_from_snapshot(snapshot):
         if value is None:
             continue
         try:
-            values[name] = readable_fields[name].to_python(value)
+            value = readable_fields[name].to_python(value)
+            if name == 'cytogenetic_markers':
+                from omop_core.services.cytogenetics import normalise_cytogenetic_markers
+                value = normalise_cytogenetic_markers(value)
+            values[name] = value
         except (ValidationError, ValueError, TypeError):
             continue
     return values
