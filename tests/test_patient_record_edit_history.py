@@ -305,7 +305,7 @@ def test_pending_edit_and_clear_keep_lab_aliases_consistent(editor, projection_f
             assert refreshed.calcium_mg_dl == expected
 
 
-@pytest.mark.parametrize('failure_stage', ['write', 'backfill_refresh', 'patch_refresh'])
+@pytest.mark.parametrize('failure_stage', ['write', 'backfill_refresh'])
 def test_projection_failures_do_not_log_patient_data(editor, caplog, monkeypatch, failure_stage):
     record, _ = editor
     concept = hemoglobin()
@@ -323,9 +323,7 @@ def test_projection_failures_do_not_log_patient_data(editor, caplog, monkeypatch
                 source_value='718-7', unit='g/dL', value_kind='number', status='approved',
             )
     else:
-        target = ('omop_core.services.omop_projection.next_pk' if failure_stage == 'write'
-                  else 'patient_portal.api.views.refresh_patient_record')
-        with patch(target, side_effect=RuntimeError(sensitive)):
+        with patch('omop_core.services.omop_projection.next_pk', side_effect=RuntimeError(sensitive)):
             patch_field(editor, 'hemoglobin_g_dl', '12.3')
     logs = [entry for entry in caplog.records if 'OMOP' in entry.getMessage()]
     assert logs
@@ -333,3 +331,152 @@ def test_projection_failures_do_not_log_patient_data(editor, caplog, monkeypatch
     for entry in logs:
         assert not entry.args
         assert entry.exc_info is None
+
+
+@pytest.mark.parametrize('mapped', [False, True])
+def test_direct_save_never_reads_omop_history(editor, mapped):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    record, _ = editor
+    record.disease = 'Existing patient-entered disease'
+    record.save()
+    if mapped:
+        hemoglobin()
+    with CaptureQueriesContext(connection) as queries, patch(
+        'omop_core.services.patient_record_service._build_snapshot',
+        side_effect=AssertionError('Direct edits must not reload OMOP history'),
+    ) as snapshot:
+        patch_field(editor, 'hemoglobin_g_dl', '12.3')
+        patch_field(editor, 'hemoglobin_g_dl', '13.4')
+        patch_field(editor, 'hemoglobin_g_dl', None)
+    snapshot.assert_not_called()
+    assert record.disease == 'Existing patient-entered disease'
+    assert record.derived_at is None
+    # Mapped writes look up only today's matching fact. Unmapped writes must
+    # not query the measurement table at all, even as patient history grows.
+    measurement_reads = [
+        query['sql'] for query in queries if query['sql'].startswith('SELECT')
+        and 'FROM "measurement"' in query['sql']
+    ]
+    if mapped:
+        assert measurement_reads
+        assert all('"measurement_date" =' in sql for sql in measurement_reads
+                   if '"measurement_concept_id"' in sql)
+    else:
+        assert measurement_reads == []
+
+
+def test_existing_identical_fact_acknowledges_pending_edit_without_refresh(editor):
+    record, _ = editor
+    concept = hemoglobin()
+    with suppress_patient_record_refresh():
+        MeasurementFactory(
+            person=record.person, measurement_concept=concept,
+            measurement_source_value='718-7', measurement_date=timezone.localdate(),
+            value_as_number=12, unit_source_value='g/dL',
+        )
+    with patch('omop_core.services.patient_record_service._build_snapshot') as snapshot:
+        patch_field(editor, 'hemoglobin_g_dl', 12)
+    snapshot.assert_not_called()
+    assert 'hemoglobin_g_dl' not in record.user_edited_fields
+    assert Measurement.objects.filter(person=record.person).count() == 1
+
+
+def test_direct_save_recomputes_bmi_units_and_clears_without_omop(editor):
+    record, client = editor
+    with patch('omop_core.services.patient_record_service._build_snapshot') as snapshot:
+        response = client.patch(f'/api/patient-info/{record.person_id}/',
+                                {'weight': 80, 'height': 200}, format='json')
+        assert response.status_code == 200, response.data
+        record.refresh_from_db()
+        assert record.bmi == 20
+        assert record.weight_units == 'kg'
+        assert record.height_units == 'cm'
+        patch_field(editor, 'height', None)
+        assert record.bmi is None
+    snapshot.assert_not_called()
+
+
+def test_direct_receptor_edits_recompute_tnbc_and_clear_dependent_results(editor):
+    record, client = editor
+    response = client.patch(f'/api/patient-info/{record.person_id}/', {
+        'estrogen_receptor_status': 'Negative', 'progesterone_receptor_status': 'Negative',
+        'her2_status': 'Negative',
+    }, format='json')
+    assert response.status_code == 200, response.data
+    record.refresh_from_db()
+    assert record.tnbc_status is True
+    patch_field(editor, 'her2_status', None)
+    assert record.tnbc_status is None
+
+
+def test_direct_save_applies_active_formulas_after_model_calculations(editor):
+    from omop_core.models import FieldFormula
+    record, _ = editor
+    FieldFormula.objects.create(field_name='bmi', formula='42', is_active=True)
+    patch_field(editor, 'weight', 80)
+    assert record.bmi == 42
+
+
+def test_external_omop_change_still_refreshes_patient_record(editor):
+    record, _ = editor
+    concept = hemoglobin()
+    patch_field(editor, 'hemoglobin_g_dl', '12.3')
+    MeasurementFactory(
+        person=record.person, measurement_concept=concept,
+        measurement_source_value='718-7', value_as_number=14,
+        measurement_date=timezone.localdate() + timedelta(days=1),
+    )
+    record.refresh_from_db()
+    assert record.hemoglobin_g_dl == 14
+    assert record.derived_at is not None
+
+
+def test_custom_mapping_survives_later_external_refresh_without_pending_override(editor):
+    from tests.factories import ObservationFactory
+
+    record, _ = editor
+    concept = ConceptFactory(concept_code='supportive-therapy-note')
+    FieldConceptMapping.objects.create(
+        field_name='supportive_therapies', concept=concept, omop_table='observation',
+        source_value='supportive-note', value_kind='string', status='approved',
+    )
+    with patch('omop_core.services.patient_record_service._build_snapshot') as snapshot:
+        patch_field(editor, 'supportive_therapies', 'Existing supportive care')
+    snapshot.assert_not_called()
+    assert 'supportive_therapies' not in record.user_edited_fields
+    assert refresh_patient_record(record.person).supportive_therapies == 'Existing supportive care'
+    ObservationFactory(
+        person=record.person, observation_concept=concept, observation_source_value='supportive-note',
+        observation_date=timezone.localdate() + timedelta(days=1),
+        value_as_string='New imported supportive care', value_as_number=None,
+    )
+    record.refresh_from_db()
+    assert record.supportive_therapies == 'New imported supportive care'
+
+
+def test_curated_snapshot_reader_uses_one_query_without_editor_metadata(editor):
+    from types import SimpleNamespace
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    from omop_core.services.omop_projection import curated_values_from_snapshot
+    from tests.factories import ObservationFactory
+
+    record, _ = editor
+    concept = ConceptFactory(concept_code='supportive-note')
+    FieldConceptMapping.objects.create(
+        field_name='supportive_therapies', concept=concept, omop_table='observation',
+        source_value='', value_kind='string', status='approved',
+    )
+    with suppress_patient_record_refresh():
+        row = ObservationFactory(
+            person=record.person, observation_concept=concept,
+            observation_source_value='supportive-note', value_as_string='Supportive care',
+            value_as_number=None,
+        )
+    snapshot = SimpleNamespace(measurements=[], observations=[row])
+    with CaptureQueriesContext(connection) as queries:
+        values = curated_values_from_snapshot(snapshot)
+    assert values == {'supportive_therapies': 'Supportive care'}
+    assert len(queries) == 1

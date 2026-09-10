@@ -887,6 +887,9 @@ def refresh_patient_record(person: Person) -> PatientRecord:
                 setattr(patient_info, field, value)
 
         patient_info.custom_fields = _get_custom_patient_field_data(snapshot)
+        from omop_core.services.omop_projection import curated_values_from_snapshot
+        for field, value in curated_values_from_snapshot(snapshot).items():
+            setattr(patient_info, field, value)
 
         # Pending edits (including explicit clears) win until OMOP actually
         # represents the saved value. A stale fact or a failed projection must
@@ -907,34 +910,48 @@ def refresh_patient_record(person: Person) -> PatientRecord:
             setattr(patient_info, field, value)
         patient_info.user_edited_fields = sorted(set(still_orphaned) - course_values.keys())
 
-        # Extractors copied aliases before pending edits were restored. Mirror
-        # the final canonical values, including explicit clears, for all readers.
-        for canonical, aliases in _LAB_FIELD_ALIASES.items():
-            for alias in aliases:
-                setattr(patient_info, alias, getattr(patient_info, canonical))
-
-        _compute_derived_fields(patient_info)
-
         patient_info.derivation_version = DERIVATION_VERSION
         patient_info.derived_at = timezone.now()
+        return recompute_patient_record_fields(patient_info)
 
-        _clear_overflowing_decimal_fields(patient_info)
-        patient_info.save()
-        # PatientRecord.save retains a few legacy calculations (notably BMI).
-        # Reapply active formulas with a direct update so an approved formula is
-        # the final derivation authority for its target field.
-        formula_fields = _apply_active_field_formulas(patient_info)
-        if formula_fields:
-            concrete_names = {field.name for field in PatientRecord._meta.concrete_fields}
-            updates = {
-                field: getattr(patient_info, field) for field in formula_fields
-                if field in concrete_names
-            }
-            if any(field not in concrete_names for field in formula_fields):
-                updates['custom_fields'] = patient_info.custom_fields
-            updates['updated_at'] = timezone.now()
-            PatientRecord.objects.filter(pk=patient_info.pk).update(**updates)
-        return patient_info
+
+def recompute_patient_record_fields(patient_info: PatientRecord, *, changed_fields=()) -> PatientRecord:
+    """Save aliases and calculations from the current record without reading OMOP facts.
+
+    This does not advance derived_at/version: those describe the last full
+    OMOP refresh, not the last edit of PatientRecord's own values.
+    """
+    for canonical, aliases in _LAB_FIELD_ALIASES.items():
+        for alias in aliases:
+            setattr(patient_info, alias, getattr(patient_info, canonical))
+    # Full refresh clears these before extraction. Direct edits need to clear
+    # dependent results when an input is removed, without clearing other data.
+    for result, inputs in {
+        'hr_status': {'estrogen_receptor_status', 'progesterone_receptor_status'},
+        'metastatic_status': {'distant_metastasis_stage'},
+        'renal_adequacy_status': {'egfr_ml_min_173m2', 'serum_creatinine_mg_dl'},
+        'no_active_infection_status': {'active_infection_status'},
+        'no_other_active_malignancies': {'active_malignancies'},
+    }.items():
+        if inputs.intersection(changed_fields):
+            setattr(patient_info, result, None)
+    _compute_derived_fields(patient_info, apply_formulas=False)
+    _clear_overflowing_decimal_fields(patient_info)
+    patient_info.save()
+    # Model.save retains legacy calculations (notably BMI). Active formulas
+    # remain the final authority, for both direct edits and full OMOP refreshes.
+    formula_fields = _apply_active_field_formulas(patient_info)
+    if formula_fields:
+        concrete_names = {field.name for field in PatientRecord._meta.concrete_fields}
+        updates = {
+            field: getattr(patient_info, field) for field in formula_fields
+            if field in concrete_names
+        }
+        if any(field not in concrete_names for field in formula_fields):
+            updates['custom_fields'] = patient_info.custom_fields
+        updates['updated_at'] = timezone.now()
+        PatientRecord.objects.filter(pk=patient_info.pk).update(**updates)
+    return patient_info
 
 
 def _clear_overflowing_decimal_fields(patient_info: PatientRecord) -> None:
@@ -3766,7 +3783,7 @@ def _parse_date_value(v):
     return None
 
 
-def _compute_derived_fields(patient_info: PatientRecord) -> None:
+def _compute_derived_fields(patient_info: PatientRecord, *, apply_formulas=True) -> None:
     """Compute fields that depend on other PatientRecord fields being set."""
     if patient_info.active_infection_status is not None:
         patient_info.no_active_infection_status = not patient_info.active_infection_status
@@ -3826,6 +3843,7 @@ def _compute_derived_fields(patient_info: PatientRecord) -> None:
     # BMI — computed from weight and height when units are known
     weight = patient_info.weight
     height = patient_info.height
+    patient_info.bmi = None
     if weight is not None and height is not None and float(height) > 0:
         weight_units = (patient_info.weight_units or 'kg').lower()
         height_units = (patient_info.height_units or 'cm').lower()
@@ -3843,6 +3861,11 @@ def _compute_derived_fields(patient_info: PatientRecord) -> None:
     # HR status — derived from ER and PR receptor status (HR+ = ER+ or PR+)
     er = patient_info.estrogen_receptor_status
     pr = patient_info.progesterone_receptor_status
+    her2 = patient_info.her2_status
+    patient_info.tnbc_status = (
+        all(status == 'Negative' for status in (er, pr, her2))
+        if all(status is not None for status in (er, pr, her2)) else None
+    )
     if er is not None or pr is not None:
         if (er and 'positive' in er.lower()) or (pr and 'positive' in pr.lower()):
             patient_info.hr_status = 'HR+'
@@ -3879,7 +3902,8 @@ def _compute_derived_fields(patient_info: PatientRecord) -> None:
     if _lt_candidates:
         patient_info.last_treatment = max(_lt_candidates)
 
-    _apply_active_field_formulas(patient_info)
+    if apply_formulas:
+        _apply_active_field_formulas(patient_info)
 
 
 def _formula_values(patient_info: PatientRecord) -> dict[str, object]:

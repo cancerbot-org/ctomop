@@ -911,6 +911,11 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
             if mutations is not None:
                 _write_genetic_mutations(person, mutations)
                 patient_info.refresh_from_db()
+            # The UI's height/weight inputs use canonical units. Set them before
+            # Model.save computes BMI, without requiring an OMOP read-back.
+            for field, unit in (('weight', 'kg'), ('height', 'cm')):
+                if field in direct_fields:
+                    setattr(patient_info, f'{field}_units', unit)
             serializer.save()
             if direct_fields:
                 edited = set(patient_info.user_edited_fields or []) | direct_fields
@@ -918,17 +923,25 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
                 patient_info.save(update_fields=['user_edited_fields'])
             _write_record_revisions(patient_info, previous_values, request)
             if direct_fields:
-                self._project_mapped_fields(person, patient_info, direct_fields, serializer.validated_data)
+                from omop_core.services.patient_record_service import recompute_patient_record_fields
+
+                projected = self._project_mapped_fields(person, direct_fields, serializer.validated_data)
+                patient_info.user_edited_fields = sorted(
+                    set(patient_info.user_edited_fields or []) - projected
+                )
+                recompute_patient_record_fields(patient_info, changed_fields=direct_fields)
                 patient_info.refresh_from_db()
 
         return Response({**PatientRecordSerializer(patient_info).data, 'previous_values': previous_values})
 
     @staticmethod
-    def _project_mapped_fields(person, patient_info, direct_fields, patch_data):
+    def _project_mapped_fields(person, direct_fields, patch_data):
         """Project validated edits using the editor's curated or built-in recipe.
 
         Each projection uses a savepoint so failure preserves the PatientRecord
-        edit for a later retry. Read-only fields never reach this path.
+        edit for a later retry. Return fields backed by OMOP, including an
+        identical existing fact. PatientRecord already has these values, so
+        there is no OMOP-to-PatientRecord refresh on a direct save.
         """
         from omop_core.services.omop_projection import project_single_value, projection_for_descriptor
         from omop_core.services.write_descriptor import build_writable_field_descriptor
@@ -938,16 +951,19 @@ class PatientRecordViewSet(viewsets.ReadOnlyModelViewSet):
                 descriptors = build_writable_field_descriptor()
         except Exception:
             logger.warning('Could not resolve OMOP projections')
-            return
+            return set()
+        projected = set()
         for field in direct_fields:
             projection = projection_for_descriptor(descriptors.get(field))
             if projection:
-                project_single_value(person, field, patch_data[field], projection)
-        try:
-            with transaction.atomic():
-                refresh_patient_record(person)
-        except Exception:
-            logger.warning('OMOP projection refresh failed; edit remains pending')
+                if project_single_value(person, field, patch_data[field], projection,
+                                        acknowledge_existing=True):
+                    # Occurrences and structured answers need their dedicated
+                    # extractors before their saved values can be acknowledged.
+                    if (projection['omop_table'] in ('measurement', 'observation')
+                            and projection.get('value_kind') != 'json'):
+                        projected.add(field)
+        return projected
 
     @action(detail=True, methods=['get'], permission_classes=[ScopedTokenPermission, PatientSelfScopePermission])
     def provenance(self, request, pk=None):

@@ -1,11 +1,12 @@
 """Project PatientRecord edits into today's OMOP facts, retaining earlier days."""
 import logging
 
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
 from omop_core.models import (
-    ConditionOccurrence, DrugExposure, Measurement, Observation,
+    ConditionOccurrence, DrugExposure, FieldConceptMapping, Measurement, Observation,
     PatientRecord, Person, ProcedureOccurrence,
 )
 from omop_core.services.pk import next_pk
@@ -61,6 +62,64 @@ def projection_for_descriptor(entry):
     }
 
 
+def curated_values_from_snapshot(snapshot):
+    """Read approved scalar mappings during external OMOP refreshes only.
+
+    Direct saves acknowledge successful projections without reading them back.
+    Later imports must therefore be able to read approved mappings even when
+    the field has no built-in extractor (for example supportive therapy dates).
+    All facts come from the snapshot already loaded by that external refresh.
+    """
+    from omop_core.services.patient_record_service import PATIENT_RECORD_OMOP_MAPPED_FIELDS
+    from omop_core.services.write_descriptor import (
+        _LIFECYCLE_FIELDS, _WRITE_RECIPE_INCOMPLETE,
+        get_serializer_read_only_fields, mapping_target_for,
+    )
+
+    readable_fields = {
+        field.name: field for field in PatientRecord._meta.concrete_fields
+        if field.name in PATIENT_RECORD_OMOP_MAPPED_FIELDS
+        and field.name not in get_serializer_read_only_fields()
+        and field.name not in _LIFECYCLE_FIELDS
+        and field.name not in _WRITE_RECIPE_INCOMPLETE
+        and field.get_internal_type() != 'JSONField'
+    }
+
+    indexed = {}
+    for target, rows in (('measurement', snapshot.measurements), ('observation', snapshot.observations)):
+        _, _, concept_field, _, _, source_field, _, _ = _TARGET_CONFIG[target]
+        by_key = {}
+        for row in rows:
+            by_key.setdefault((getattr(row, concept_field), getattr(row, source_field)), row)
+        indexed[target] = by_key
+    values = {}
+    # One joined mapping lookup is sufficient. The editor descriptor also
+    # loads choices, units, and unrelated vocabulary recipes that readers do
+    # not need and that would exceed the full-refresh query budget.
+    mappings = FieldConceptMapping.objects.filter(
+        status='approved', field_name__in=readable_fields,
+    ).exclude(value_kind='json').values(
+        'field_name', 'omop_table', 'concept_id', 'concept__concept_code', 'source_value',
+    )
+    for mapping in mappings:
+        name = mapping['field_name']
+        target = mapping_target_for(mapping['omop_table'])
+        if target not in indexed:
+            continue
+        source_value = mapping['source_value'] or mapping['concept__concept_code']
+        row = indexed[target].get((mapping['concept_id'], source_value))
+        if row is None:
+            continue
+        value = row.value_as_number if row.value_as_number is not None else row.value_as_string
+        if value is None:
+            continue
+        try:
+            values[name] = readable_fields[name].to_python(value)
+        except (ValidationError, ValueError, TypeError):
+            continue
+    return values
+
+
 def project_field_to_omop(mapping) -> int:
     """Backfill pending user edits, not values already derived from OMOP.
 
@@ -98,12 +157,15 @@ def project_field_to_omop(mapping) -> int:
     return count
 
 
-def project_single_value(person, field_name, value, projection):
+def project_single_value(person, field_name, value, projection, *, acknowledge_existing=False):
     """Update a matching non-erroneous fact today, or create today's fact.
 
     Matching includes the concept and source key. Earlier dates are history and
     are never updated. The person lock serializes concurrent first writes for a
     day; an atomic savepoint keeps projection failures from poisoning PATCH.
+
+    Normally returns whether a fact changed. Direct saves can acknowledge an
+    identical existing fact too, so it is not mistaken for a failed projection.
     """
     target = projection.get('omop_table')
     concept_id = projection.get('concept_id')
@@ -152,7 +214,7 @@ def project_single_value(person, field_name, value, projection):
                 instance.unit_source_value = projection.get('unit') or None
                 instance.unit_concept_id = projection.get('unit_concept_id') or None
             if existing and all(getattr(instance, f) == v for f, v in previous.items()):
-                return False
+                return acknowledge_existing
             instance._skip_patient_record_refresh = True
             instance.save()
         return True

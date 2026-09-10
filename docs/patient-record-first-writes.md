@@ -48,7 +48,9 @@ Backend: PatientRecordSerializer.save()
     |       +---> For each changed, validated field with a descriptor projection:
     |       |       project_single_value() upserts the OMOP fact
     |       |
-    |       +---> refresh_patient_record() once at the end
+    |       +---> acknowledge successful scalar projections
+    |
+    +---> recompute aliases and calculated fields from PatientRecord
     |
     v
 Response to frontend
@@ -135,7 +137,19 @@ LOINC/SNOMED recipes and approved curated mappings, to call
   pending on PatientRecord until an appropriate answer mapping is available.
 - Sets `_skip_patient_record_refresh = True` on the OMOP instance to avoid
   recursive derivation.
-- One `refresh_patient_record()` call at the end picks up all projected facts.
+- Direct UI saves never call `refresh_patient_record()` or load the patient's
+  OMOP history, even when projection creates or updates a fact. PatientRecord
+  already contains the entered value. Aliases, BMI, receptor calculations, and
+  approved formulas are recomputed from its current fields instead.
+- Successful scalar Measurement/Observation projections remove the field's pending
+  edit marker, including when today's fact already has the same value. Failed,
+  unmapped, structured, and occurrence-only writes retain their pending protection.
+- External OMOP imports, corrections, deletions, and explicit refresh requests
+  still use the full OMOP-to-PatientRecord refresh. Approved scalar mappings
+  are read during that refresh, so fields without a built-in extractor also
+  retain their projected values and can receive newer imported results.
+- Direct edits do not advance `derived_at` or `derivation_version`; those
+  identify the last full OMOP refresh.
 
 ### At mapping approval (`project_field_to_omop`)
 
