@@ -35,12 +35,11 @@ which is what a source value is. How many survive is the caller's choice
 (``lexical_limit``), because it is the one knob that trades recall against the
 size of everything downstream.
 
-**3. Vectors, to rank that subset.** Embedding similarity is a far better
-*ordering* than trigram overlap and a far worse *filter*: as a retrieval tier it
-cosine-scanned 1.5M stored vectors per source code, 2.6-2.9s each on staging,
-to produce a rival shortlist that then needed its own ranker call. Reranking the
-shortlist costs one query embedding and a primary-key lookup of at most
-``lexical_limit`` stored vectors.
+**3. Semantic retrieval.** Following Lettuce's approach, filtered pgvector
+cosine search adds up to ten neighbours from the embedded vocabulary. This
+runs even when lexical has hits, because spelling can miss the right concept.
+It shares the existing BGE model and is bounded by a database timeout. See
+THIRD_PARTY_NOTICES.md for Lettuce's attribution and MIT license.
 
 **4. One ranking call.** For ``SERUM FREE LIGHT CHAIN KAPPA`` trigram's top hit
 is *Free kappa/lambda light chain ratio in serum* (0.67) -- a ratio, clinically
@@ -50,6 +49,10 @@ ranking buried it. So a model re-ranks the shortlist -- **once**. The previous
 waterfall gave each tier its own ranker call and took the first tier that
 answered, so a code that fell through UMLS and vectors paid for three model
 calls at 4-6s each and was usually given the lexical answer regardless.
+
+Older API clients can explicitly request vector reranking within the UMLS and
+lexical tiers. It is absent from the default pipeline and the UI: all candidates
+reach the LLM regardless of order, and semantic hits already have cosine order.
 
 The remaining calls run concurrently (:data:`RANK_CONCURRENCY`). They are pure
 network work -- :func:`rank_candidates` touches no database -- so the threads
@@ -68,6 +71,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.conf import settings
 from django.contrib.postgres.search import TrigramSimilarity
+from django.db import connection, transaction
 from django.db.models import (
     Case, CharField, Count, F, IntegerField, Max, Q, Value, When,
 )
@@ -98,7 +102,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MIN_OCCURRENCES = 10
 
 # Increment this whenever a material suggestion-algorithm change is released.
-SUGGESTION_MODEL_VERSION = 'v0.3'
+SUGGESTION_MODEL_VERSION = 'v0.4'
 SUGGESTION_PROVENANCE = f'suggest {SUGGESTION_MODEL_VERSION}'
 
 # How many trigram survivors lexical retrieval hands the reranker. Ten: enough
@@ -169,7 +173,11 @@ assert _UMLS_ROOT_TO_VOCAB.get('ICD10CM') == 'ICD10CM', (
 STRATEGY_UMLS = 'umls'
 STRATEGY_VECTORS = 'vectors'
 STRATEGY_LEXICAL = 'lexical'
-ALL_STRATEGIES = [STRATEGY_UMLS, STRATEGY_VECTORS, STRATEGY_LEXICAL]
+STRATEGY_SEMANTIC = 'semantic'
+DEFAULT_STRATEGIES = [STRATEGY_UMLS, STRATEGY_LEXICAL, STRATEGY_SEMANTIC]
+# Keep explicit requests from older clients compatible; default runs pass the
+# complete retrieval pool straight to the LLM, without redundant reordering.
+ALL_STRATEGIES = [*DEFAULT_STRATEGIES, STRATEGY_VECTORS]
 
 
 def _find_source_concept(source_vocabulary_id, source_code):
@@ -274,6 +282,73 @@ def umls_candidates(source_code, source_vocabulary_id, domain_id=None):
 
     cui_str = ','.join(sorted(cuis))
     return candidates, cui_str
+
+
+def semantic_candidates(source_value, domain_id, limit=CANDIDATE_LIMIT):
+    """Retrieve neighbours from the embedded vocabulary, independently of spelling.
+
+    Adapted from Lettuce's filtered pgvector cosine top-k retrieval approach:
+    https://github.com/Health-Informatics-UoN/lettuce/blob/7e8796ace2cbd86490bb077b3300da003c334e50/lettuce/omop/omop_queries.py
+    Copyright (c) 2024 University of Nottingham Health Informatics.
+    MIT license: see THIRD_PARTY_NOTICES.md and licenses/lettuce-MIT.txt.
+
+    Reuses PROMOP's BGE embeddings; no Lettuce server or second LLM is needed.
+    Only active standard concepts are eligible. A missing model/table or timed
+    out query returns no semantic candidates, leaving other retrieval intact.
+    The savepoint is essential: a SQL error must not poison the caller's
+    transaction. The local timeout is restored on success or savepoint rollback.
+    """
+    query = (source_value or '').strip()
+    if len(query) < 3 or connection.vendor != 'postgresql':
+        return []
+    limit = max(1, min(int(limit or CANDIDATE_LIMIT), LEXICAL_LIMIT_MAX))
+    try:
+        from pgvector.django import CosineDistance
+
+        # Avoid loading/downloading a model when embeddings have not been built.
+        with transaction.atomic():
+            if not ConceptEmbedding.objects.exists():
+                return []
+        query_vector = _get_embedding_model().encode(query).tolist()
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT current_setting('statement_timeout')")
+                previous_timeout = cursor.fetchone()[0]
+                cursor.execute("SELECT set_config('statement_timeout', %s, true)", [
+                    f'{settings.SUGGEST_SEMANTIC_TIMEOUT_MS}ms',
+                ])
+            neighbours = ConceptEmbedding.objects.filter(
+                concept__standard_concept='S', concept__invalid_reason__isnull=True,
+            )
+            if domain_id:
+                neighbours = neighbours.filter(concept__domain_id=domain_id)
+            # Order directly by distance so pgvector can use the cosine index.
+            # Do not rank the whole corpus in Python or order by 1 - distance.
+            rows = list(neighbours.annotate(
+                distance=CosineDistance('embedding', query_vector),
+            ).order_by('distance').values(
+                'concept_id', 'concept__concept_name', 'concept__concept_code',
+                'concept__vocabulary_id', 'concept__concept_class_id',
+                'concept__domain_id', 'distance',
+            )[:limit])
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT set_config('statement_timeout', %s, true)",
+                               [previous_timeout])
+    except Exception:  # noqa: BLE001 - optional retrieval must degrade, never fail
+        logger.warning('Semantic retrieval unavailable for %r.', query[:80], exc_info=True)
+        return []
+
+    return [{
+        'concept_id': row['concept_id'],
+        'concept_name': row['concept__concept_name'],
+        'concept_code': row['concept__concept_code'],
+        'vocabulary_id': row['concept__vocabulary_id'],
+        'concept_class_id': row['concept__concept_class_id'],
+        'domain_id': row['concept__domain_id'],
+        # Separate from vector_score: retrieving neighbours is not reranking.
+        'semantic_score': round(1 - row['distance'], 4),
+        'retrieval': STRATEGY_SEMANTIC,
+    } for row in sorted(rows, key=lambda r: (r['distance'], r['concept_id']))]
 
 
 def vector_rerank(source_value, candidates):
@@ -650,7 +725,7 @@ _RANKING_SCHEMA = {
 _RANKING_SYSTEM = """Suggest the best clinically compatible OMOP concept for curator review.
 
 You receive a source code/description and active standard candidate concepts
-retrieved through UMLS and/or lexical search, possibly reordered by vectors.
+retrieved through UMLS, lexical and/or semantic search, possibly reordered by vectors.
 A UMLS match is not required. Candidates can span OMOP domains: an ICD-10 source
 is not necessarily a Condition. Use the source meaning and candidate domain.
 
@@ -688,6 +763,7 @@ def rank_candidates(source_value, candidates, source_description=''):
     top_score = (
         top.get('lexical_score')
         or top.get('vector_score')
+        or top.get('semantic_score')
         or top.get('umls_score')
         or '?'
     )
@@ -820,6 +896,18 @@ def retrieval_pool(*, source_code, source_vocabulary_id, source_text, domain_id,
             if hit['concept_id'] not in seen
         ]
 
+    if STRATEGY_SEMANTIC in strategies:
+        # Always search when enabled, even if lexical returned plausible hits:
+        # the correct concept can still be absent from that shortlist.
+        by_id = {c['concept_id']: c for c in candidates}
+        for hit in semantic_candidates(source_text or source_code, domain_id):
+            existing = by_id.get(hit['concept_id'])
+            if existing is not None:
+                existing['semantic_score'] = hit['semantic_score']
+            else:
+                candidates.append(hit)
+                by_id[hit['concept_id']] = hit
+
     if STRATEGY_VECTORS in strategies:
         # Reranked within each tier, not across them. Sorting the merged list on
         # cosine alone would let a trigram hit overtake an NLM-curated UMLS
@@ -828,11 +916,14 @@ def retrieval_pool(*, source_code, source_vocabulary_id, source_text, domain_id,
         # documented degrade path the worse candidate would become the written
         # destination.
         umls_tier = [c for c in candidates if c.get('retrieval') == STRATEGY_UMLS]
-        lexical_tier = [c for c in candidates if c.get('retrieval') != STRATEGY_UMLS]
+        lexical_tier = [c for c in candidates if c.get('retrieval') == STRATEGY_LEXICAL]
+        semantic_tier = [c for c in candidates if c.get('retrieval') == STRATEGY_SEMANTIC]
         query = source_text or source_code
         umls_tier, _ = vector_rerank(query, umls_tier)
         lexical_tier, _ = vector_rerank(query, lexical_tier)
-        candidates = umls_tier + lexical_tier
+        # Semantic-only candidates already have cosine order. Preserve curated
+        # and lexical fallback precedence instead of comparing unlike scores.
+        candidates = umls_tier + lexical_tier + semantic_tier
 
     return candidates, umls_cui, False
 
@@ -1003,6 +1094,7 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
 
     - ``umls`` — CUI bridge.  A single standard concept ends it with no model call.
     - ``lexical`` — GIN trigram, the best *lexical_limit* survivors.
+    - ``semantic`` — up to ten cosine neighbours, even when lexical has hits.
     - ``vectors`` — reorders those survivors by embedding similarity.
 
     *progress*, when given, is called as ``progress(stage, done, total)`` with
@@ -1014,7 +1106,7 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
     Returns a list of result dicts, one per row considered.
     """
     if strategies is None:
-        strategies = list(ALL_STRATEGIES)
+        strategies = list(DEFAULT_STRATEGIES)
     lexical_limit = max(1, min(int(lexical_limit or CANDIDATE_LIMIT), LEXICAL_LIMIT_MAX))
 
     if omop_table is not None:
@@ -1220,9 +1312,9 @@ def suggest_mappings(omop_table, *, min_occurrences=DEFAULT_MIN_OCCURRENCES,
 def suggest_one_mapping(source_code, source_vocabulary_id, omop_table, *,
                         source_description='', strategies=None,
                         lexical_limit=CANDIDATE_LIMIT):
-    """Run the same UMLS → lexical → vector-rerank pipeline for one dialog row."""
+    """Run the shared retrieval and ranking pipeline for one dialog row."""
     if strategies is None:
-        strategies = list(ALL_STRATEGIES)
+        strategies = list(DEFAULT_STRATEGIES)
     lexical_limit = max(1, min(int(lexical_limit or CANDIDATE_LIMIT), LEXICAL_LIMIT_MAX))
     target = _QUARANTINE_TARGETS.get(omop_table)
     if target is None:

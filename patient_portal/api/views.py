@@ -79,9 +79,11 @@ from omop_core.mapping.code_resolution import (
 )
 from omop_core.mapping.suggestions import (
     ALL_STRATEGIES,
+    DEFAULT_STRATEGIES,
     CANDIDATE_LIMIT,
     LEXICAL_LIMIT_MAX,
     STRATEGY_LEXICAL,
+    STRATEGY_SEMANTIC,
     STRATEGY_UMLS,
     SUGGESTION_MODEL_VERSION,
     VOCAB_TO_UMLS_ROOT,
@@ -9827,17 +9829,17 @@ def code_mapping_suggest(request):
         # Vectors reorders what retrieval found; it finds nothing itself. On its
         # own it would run to completion and report "no candidate concept" for
         # every code, which reads as a broken tab rather than a bad selection.
-        if not {STRATEGY_UMLS, STRATEGY_LEXICAL} & set(raw_strategies):
+        if not {STRATEGY_UMLS, STRATEGY_LEXICAL, STRATEGY_SEMANTIC} & set(raw_strategies):
             return Response(
                 {'strategies': (
                     'Vectors reranks the candidates retrieval found, so it '
-                    'cannot run alone. Select UMLS or Lexical as well.'
+                    'cannot run alone. Select UMLS, Lexical or Semantic retrieval as well.'
                 )},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         strategies = raw_strategies
     else:
-        strategies = list(ALL_STRATEGIES)
+        strategies = list(DEFAULT_STRATEGIES)
 
     # Replace mode re-answers rows a previous run already answered, rather than
     # deleting them. Deleting was right while the candidate set came from a scan
@@ -9934,16 +9936,16 @@ def code_mapping_suggest_one(request):
         return Response({'detail': 'Organization admin access required.'}, status=status.HTTP_403_FORBIDDEN)
     source_code = str(request.data.get('source_code') or '').strip()
     omop_table = normalize_omop_table(request.data.get('omop_table'))
-    strategies = request.data.get('strategies') or list(ALL_STRATEGIES)
+    strategies = request.data.get('strategies') or list(DEFAULT_STRATEGIES)
     if not source_code or not omop_table or not isinstance(strategies, list) or any(s not in ALL_STRATEGIES for s in strategies):
         return Response({'detail': 'source_code, omop_table, and valid strategies are required.'}, status=status.HTTP_400_BAD_REQUEST)
     # Same rule as the batch endpoint: vectors reranks what retrieval found and
     # retrieves nothing itself, so on its own it answers "no candidate concept"
     # every time, which reads as a broken dialog rather than a bad selection.
-    if not {STRATEGY_UMLS, STRATEGY_LEXICAL} & set(strategies):
+    if not {STRATEGY_UMLS, STRATEGY_LEXICAL, STRATEGY_SEMANTIC} & set(strategies):
         return Response({'strategies': (
             'Vectors reranks the candidates retrieval found, so it cannot run '
-            'alone. Select UMLS or Lexical as well.'
+            'alone. Select UMLS, Lexical or Semantic retrieval as well.'
         )}, status=status.HTTP_400_BAD_REQUEST)
     try:
         lexical_limit = int(request.data.get('lexical_limit') or CANDIDATE_LIMIT)

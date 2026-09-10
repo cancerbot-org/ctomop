@@ -220,6 +220,10 @@ else:
 
 AUTH_USER_MODEL = "patient_portal.Identity"
 
+# Bound the optional whole-vocabulary semantic query; other retrievers continue
+# if it times out. Model loading/encoding is outside this database timeout.
+SUGGEST_SEMANTIC_TIMEOUT_MS = max(1, int(os.environ.get('SUGGEST_SEMANTIC_TIMEOUT_MS', '3000')))
+
 AUTHENTICATION_BACKENDS = [
     "patient_portal.backends.EmailBackend",
 ]
