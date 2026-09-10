@@ -1,6 +1,7 @@
 """Project PatientRecord edits into today's OMOP facts, retaining earlier days."""
 import logging
 
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
@@ -61,6 +62,44 @@ def projection_for_descriptor(entry):
     }
 
 
+def curated_values_from_snapshot(snapshot):
+    """Read approved scalar mappings during external OMOP refreshes only.
+
+    Direct saves acknowledge successful projections without reading them back.
+    Later imports must therefore be able to read approved mappings even when
+    the field has no built-in extractor (for example supportive therapy dates).
+    All facts come from the snapshot already loaded by that external refresh.
+    """
+    from omop_core.services.write_descriptor import build_writable_field_descriptor
+
+    indexed = {}
+    for target, rows in (('measurement', snapshot.measurements), ('observation', snapshot.observations)):
+        _, _, concept_field, _, _, source_field, _, _ = _TARGET_CONFIG[target]
+        by_key = {}
+        for row in rows:
+            by_key.setdefault((getattr(row, concept_field), getattr(row, source_field)), row)
+        indexed[target] = by_key
+    values = {}
+    for name, entry in build_writable_field_descriptor().items():
+        if not entry.get('curated'):
+            continue
+        projection = projection_for_descriptor(entry)
+        if (not projection or projection['omop_table'] not in indexed
+                or projection.get('value_kind') == 'json'):
+            continue
+        row = indexed[projection['omop_table']].get((projection['concept_id'], projection['source_value']))
+        if row is None:
+            continue
+        value = row.value_as_number if row.value_as_number is not None else row.value_as_string
+        if value is None:
+            continue
+        try:
+            values[name] = PatientRecord._meta.get_field(name).to_python(value)
+        except (ValidationError, ValueError, TypeError):
+            continue
+    return values
+
+
 def project_field_to_omop(mapping) -> int:
     """Backfill pending user edits, not values already derived from OMOP.
 
@@ -98,12 +137,15 @@ def project_field_to_omop(mapping) -> int:
     return count
 
 
-def project_single_value(person, field_name, value, projection):
+def project_single_value(person, field_name, value, projection, *, acknowledge_existing=False):
     """Update a matching non-erroneous fact today, or create today's fact.
 
     Matching includes the concept and source key. Earlier dates are history and
     are never updated. The person lock serializes concurrent first writes for a
     day; an atomic savepoint keeps projection failures from poisoning PATCH.
+
+    Normally returns whether a fact changed. Direct saves can acknowledge an
+    identical existing fact too, so it is not mistaken for a failed projection.
     """
     target = projection.get('omop_table')
     concept_id = projection.get('concept_id')
@@ -152,7 +194,7 @@ def project_single_value(person, field_name, value, projection):
                 instance.unit_source_value = projection.get('unit') or None
                 instance.unit_concept_id = projection.get('unit_concept_id') or None
             if existing and all(getattr(instance, f) == v for f, v in previous.items()):
-                return False
+                return acknowledge_existing
             instance._skip_patient_record_refresh = True
             instance.save()
         return True
