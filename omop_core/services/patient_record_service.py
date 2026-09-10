@@ -700,6 +700,10 @@ def _build_snapshot(person: Person) -> OmopSnapshot:
     )
     death = Death.objects.filter(person=person).only('death_date').first()
 
+    from omop_core.services.omop_projection import without_cleared_history
+    measurements = without_cleared_history(measurements, 'measurement')
+    observations = without_cleared_history(observations, 'observation')
+
     # Build code/source indexes
     meas_by_code: dict[str, list] = defaultdict(list)
     meas_by_source: dict[str, list] = defaultdict(list)
@@ -799,6 +803,22 @@ def _get_custom_patient_field_data(snapshot: OmopSnapshot) -> dict[str, object]:
     return values
 
 
+def _derived_value_matches(field_name, derived_value, saved_value):
+    """Compare at the PatientRecord column's precision, including float extractors."""
+    if _is_empty(derived_value) or _is_empty(saved_value):
+        return _is_empty(derived_value) and _is_empty(saved_value)
+    field = PatientRecord._meta.get_field(field_name)
+    if isinstance(field, models.DecimalField):
+        quantum = Decimal(1).scaleb(-field.decimal_places)
+        try:
+            return Decimal(str(derived_value)).quantize(quantum, rounding=ROUND_HALF_UP) == (
+                Decimal(str(saved_value)).quantize(quantum, rounding=ROUND_HALF_UP)
+            )
+        except (InvalidOperation, ValueError):
+            return False
+    return derived_value == saved_value
+
+
 def refresh_patient_record(person: Person) -> PatientRecord:
     """Derive and upsert PatientRecord from OMOP tables for a given person.
 
@@ -813,6 +833,15 @@ def refresh_patient_record(person: Person) -> PatientRecord:
             patient_info = PatientRecord.objects.select_for_update().get(person=person)
         except PatientRecord.DoesNotExist:
             patient_info = PatientRecord(person=person)
+
+        # Snapshot user-edited values that may not yet have OMOP backing.
+        # After derivation, these are restored when derivation produced nothing
+        # for the field (meaning no OMOP fact backs it yet).
+        user_edited = set(patient_info.user_edited_fields or [])
+        preserved = {}
+        for field in user_edited:
+            if hasattr(patient_info, field):
+                preserved[field] = getattr(patient_info, field)
 
         # Clear all OMOP-derived fields before re-deriving so deletions are reflected.
         _clear_derived_fields(patient_info)
@@ -852,6 +881,26 @@ def refresh_patient_record(person: Person) -> PatientRecord:
                 setattr(patient_info, field, value)
 
         patient_info.custom_fields = _get_custom_patient_field_data(snapshot)
+
+        # Pending edits (including explicit clears) win until OMOP actually
+        # represents the saved value. A stale fact or a failed projection must
+        # not silently undo a user's change.
+        still_orphaned = []
+        for field, value in preserved.items():
+            derived_value = getattr(patient_info, field, None)
+            matches = _derived_value_matches(field, derived_value, value)
+            # Keep the already-stored representation even on a match so saving
+            # a float extractor result cannot introduce another rounding step.
+            setattr(patient_info, field, value)
+            if not matches:
+                still_orphaned.append(field)
+        patient_info.user_edited_fields = sorted(still_orphaned)
+
+        # Extractors copied aliases before pending edits were restored. Mirror
+        # the final canonical values, including explicit clears, for all readers.
+        for canonical, aliases in _LAB_FIELD_ALIASES.items():
+            for alias in aliases:
+                setattr(patient_info, alias, getattr(patient_info, canonical))
 
         _compute_derived_fields(patient_info)
 

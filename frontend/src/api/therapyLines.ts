@@ -32,6 +32,8 @@ export interface TherapyLinePayload {
   drugs: TherapyLineDrug[];
   regimen_concept_id?: number | null;
   outcome?: string | null;
+  intent?: string | null;
+  discontinuation_reason?: string | null;
 }
 
 export interface TherapyLineResult {
@@ -49,6 +51,8 @@ export interface EditableTherapyLine {
   start_date?: string | null;
   end_date?: string | null;
   outcome?: string | null;
+  intent?: string | null;
+  discontinuation_reason?: string | null;
   regimen?: string | null;
   regimen_concept_id?: number | null;
   drugs?: Array<DrugConcept & { source_value?: string | null }>;
@@ -67,6 +71,23 @@ export const THERAPY_OUTCOME_CHOICES: Array<{ value: string; label: string }> = 
   { value: 'Partial Response', label: 'Partial Response (PR)' },
   { value: 'Stable Disease', label: 'Stable Disease (SD)' },
   { value: 'Progressive Disease', label: 'Progressive Disease (PD)' },
+];
+
+export const THERAPY_INTENT_CHOICES: Array<{ value: string; label: string }> = [
+  { value: 'Curative', label: 'Curative' },
+  { value: 'Palliative', label: 'Palliative' },
+  { value: 'Adjuvant', label: 'Adjuvant' },
+  { value: 'Neoadjuvant', label: 'Neoadjuvant' },
+  { value: 'Maintenance', label: 'Maintenance' },
+  { value: 'Salvage', label: 'Salvage' },
+];
+
+export const DISCONTINUATION_REASON_CHOICES: Array<{ value: string; label: string }> = [
+  { value: 'Progressive Disease', label: 'Progressive Disease' },
+  { value: 'Toxicity', label: 'Toxicity' },
+  { value: 'Patient Decision', label: 'Patient Decision' },
+  { value: 'Completed Protocol', label: 'Completed Protocol' },
+  { value: 'Other', label: 'Other' },
 ];
 
 /** Ingredients only: a line is the drugs given, not their branded pack sizes. */

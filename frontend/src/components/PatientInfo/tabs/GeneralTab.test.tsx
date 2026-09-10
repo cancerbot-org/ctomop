@@ -21,9 +21,12 @@ vi.mock('@/hooks/useVocabulary', () => ({
 }));
 
 const measurement = (code: string) => ({
-  kind: 'editable', writable: true, target: 'measurement',
-  concept_id: 1, code, value_kind: 'number', type_concept_id: 32856,
-  source_value: code,
+  kind: 'direct', writable: true, target: 'patient_record',
+  value_kind: 'number',
+  projection: {
+    omop_table: 'measurement', concept_id: 1, code,
+    type_concept_id: 32856, source_value: code,
+  },
 });
 
 const DESCRIPTORS: Record<string, unknown> = {

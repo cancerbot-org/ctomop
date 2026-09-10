@@ -47,9 +47,10 @@ class TestMappedFields:
         entry = build_writable_field_descriptor()['largest_lymph_node_size']
 
         assert entry['writable'] is True
-        assert entry['concept_id'] == concept.concept_id
-        assert entry['vocabulary'] == 'Cancer Modifier'
-        assert entry['source_value'] == concept.concept_code
+        assert entry['target'] == 'patient_record'
+        assert entry['projection']['concept_id'] == concept.concept_id
+        assert entry['projection']['vocabulary'] == 'Cancer Modifier'
+        assert entry['projection']['source_value'] == concept.concept_code
 
     def test_a_loaded_mapping_is_writable_with_a_full_fact_recipe(self):
         concept = _load_loinc('718-7')
@@ -58,23 +59,30 @@ class TestMappedFields:
         entry = build_writable_field_descriptor()['hemoglobin_g_dl']
 
         assert entry['writable'] is True
-        assert entry['target'] == 'measurement'
-        assert entry['concept_id'] == concept.concept_id
-        assert entry['code'] == '718-7'
-        assert entry['vocabulary'] == 'LOINC'
+        assert entry['target'] == 'patient_record'
+        assert entry['kind'] == 'direct'
         assert entry['value_kind'] == 'number'
         assert entry['unit'] == 'g/dL'
-        assert entry['unit_concept_id'] == unit.concept_id
-        assert entry['type_concept_id'] == CONCEPT_PATIENT_REPORTED_TYPE
-        assert entry['source_value'] == '718-7'
+        # OMOP routing lives under 'projection'
+        proj = entry['projection']
+        assert proj['omop_table'] == 'measurement'
+        assert proj['concept_id'] == concept.concept_id
+        assert proj['code'] == '718-7'
+        assert proj['vocabulary'] == 'LOINC'
+        assert proj['unit'] == 'g/dL'
+        assert proj['unit_concept_id'] == unit.concept_id
+        assert proj['type_concept_id'] == CONCEPT_PATIENT_REPORTED_TYPE
+        assert proj['source_value'] == '718-7'
 
     def test_every_key_a_measurement_write_needs_is_present(self):
         _load_loinc('718-7')
         entry = build_writable_field_descriptor()['hemoglobin_g_dl']
+        assert 'projection' in entry
         required = {
-            'target', 'concept_id', 'value_kind', 'type_concept_id', 'source_value',
+            'omop_table', 'concept_id', 'type_concept_id', 'source_value',
         }
-        assert required <= set(entry)
+        assert required <= set(entry['projection'])
+        assert 'value_kind' in entry
 
     def test_missing_unit_concept_does_not_make_the_field_unwritable(self):
         """UCUM may be absent; the fact is still writable with a source unit string."""
@@ -84,7 +92,7 @@ class TestMappedFields:
 
         assert entry['writable'] is True
         assert entry['unit'] == 'g/dL'
-        assert entry['unit_concept_id'] is None
+        assert entry['projection']['unit_concept_id'] is None
 
 
 class TestUnmappedFields:
@@ -93,17 +101,20 @@ class TestUnmappedFields:
         descriptor = build_writable_field_descriptor()
 
         assert 'planned_therapies' in descriptor
-        assert descriptor['planned_therapies']['writable'] is False
-        assert 'reason' in descriptor['planned_therapies']
+        # Under the PatientRecord-first architecture, unmapped fields are
+        # directly writable on PatientRecord (KIND_DIRECT).
+        assert descriptor['planned_therapies']['writable'] is True
+        assert descriptor['planned_therapies']['kind'] == 'direct'
 
-    def test_a_mapped_code_absent_from_the_vocabulary_is_not_writable(self):
-        """Better to refuse here than to strand a fact against an unresolvable concept."""
+    def test_a_mapped_code_absent_from_the_vocabulary_is_still_directly_writable(self):
+        """Without the vocab, no OMOP projection — but the field is directly writable."""
         descriptor = build_writable_field_descriptor()
 
         entry = descriptor['hemoglobin_g_dl']
-        assert entry['writable'] is False
-        assert '718-7' in entry['reason']
-        assert entry['code'] == '718-7'
+        assert entry['writable'] is True
+        assert entry['target'] == 'patient_record'
+        assert '718-7' in entry.get('reason', '')
+        assert 'projection' not in entry  # no OMOP projection without the concept
 
     def test_every_mapped_projection_field_appears(self):
         descriptor = build_writable_field_descriptor()
@@ -169,9 +180,11 @@ class TestKinds:
         assert entry['kind'] == 'selectable'
         assert entry['qualifies'] == 'weight'
 
-    def test_a_mapped_lab_is_editable(self):
+    def test_a_mapped_lab_is_direct_with_projection(self):
         _load_loinc('718-7')
-        assert build_writable_field_descriptor()['hemoglobin_g_dl']['kind'] == 'editable'
+        entry = build_writable_field_descriptor()['hemoglobin_g_dl']
+        assert entry['kind'] == 'direct'
+        assert 'projection' in entry
 
     def test_every_field_carries_a_reason_when_not_writable(self):
         """A UI must always be able to say why a box is not typeable."""
@@ -180,8 +193,8 @@ class TestKinds:
                 assert entry.get('reason'), field
 
     def test_kind_is_one_of_the_known_values(self):
-        allowed = {'editable', 'selectable', 'computed', 'alias', 'profile',
-                   'unmapped', 'authored'}
+        allowed = {'direct', 'editable', 'selectable', 'computed', 'alias',
+                   'profile', 'unmapped', 'authored'}
         for field, entry in build_writable_field_descriptor().items():
             assert entry['kind'] in allowed, (field, entry['kind'])
 
@@ -260,7 +273,7 @@ class TestExtractorAttributedMappings:
     the claim at its source.
     """
 
-    def test_an_attributed_field_is_editable_and_names_its_extractor(self):
+    def test_an_attributed_field_is_direct_with_projection_and_names_its_extractor(self):
         VocabularyFactory(vocabulary_id='LOINC')
         DomainFactory(domain_id='Measurement', domain_name='Measurement')
         ConceptFactory(concept_code='48676-1', vocabulary_id='LOINC',
@@ -268,13 +281,14 @@ class TestExtractorAttributedMappings:
 
         entry = build_writable_field_descriptor()['her2_status']
 
-        assert entry['kind'] == 'editable'
+        assert entry['kind'] == 'direct'
         assert entry['writable'] is True
-        assert entry['code'] == '48676-1'
+        assert entry['target'] == 'patient_record'
+        assert entry['projection']['code'] == '48676-1'
         assert entry['attributed_from'] == '_get_biomarker_data'
 
-    def test_target_table_follows_the_concept_domain(self):
-        """An Observation-domain concept must not be written to measurement."""
+    def test_projection_table_follows_the_concept_domain(self):
+        """An Observation-domain concept must project to observation, not measurement."""
         VocabularyFactory(vocabulary_id='SNOMED', vocabulary_name='SNOMED')
         DomainFactory(domain_id='Observation', domain_name='Observation')
         ConceptFactory(concept_code='408729009', vocabulary_id='SNOMED',
@@ -282,7 +296,8 @@ class TestExtractorAttributedMappings:
 
         entry = build_writable_field_descriptor()['insurance_type']
 
-        assert entry['target'] == 'observation'
+        assert entry['target'] == 'patient_record'
+        assert entry['projection']['omop_table'] == 'observation'
 
     def test_value_kind_comes_from_the_model_column(self):
         VocabularyFactory(vocabulary_id='LOINC')
@@ -294,12 +309,14 @@ class TestExtractorAttributedMappings:
 
         assert entry['value_kind'] == 'number'   # IntegerField on PatientRecord
 
-    def test_a_code_absent_from_the_vocabulary_is_reported_not_written(self):
-        """No concepts are loaded here, so an attributed field reports unwritable."""
+    def test_a_code_absent_from_the_vocabulary_is_still_directly_writable(self):
+        """No concepts loaded — no projection, but field is still directly writable."""
         entry = build_writable_field_descriptor()['androgen_receptor_status']
 
-        assert entry['writable'] is False
-        assert '49457-5' in entry['reason']
+        assert entry['writable'] is True
+        assert entry['target'] == 'patient_record'
+        assert 'projection' not in entry
+        assert '49457-5' in entry.get('reason', '')
         assert entry['attributed_from'] == '_get_genomics_pathology_data'
 
 

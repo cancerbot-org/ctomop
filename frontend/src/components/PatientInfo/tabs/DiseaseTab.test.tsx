@@ -34,9 +34,12 @@ vi.mock('@/hooks/useVocabulary', () => ({ useVocabulary: vi.fn() }));
  * nothing to act on, so the controls below could not save at all.
  */
 const observation = (source_value: string, value_kind: string, multiple = false) => ({
-  kind: 'editable', writable: true, target: 'observation',
-  concept_id: 32817, type_concept_id: 32817, source_value, value_kind,
-  curated: true, multiple,
+  kind: 'direct', writable: true, target: 'patient_record',
+  value_kind, curated: true, multiple,
+  projection: {
+    omop_table: 'observation', concept_id: 32817,
+    type_concept_id: 32817, source_value,
+  },
 });
 
 const DESCRIPTORS: Record<string, unknown> = {
@@ -453,9 +456,12 @@ const baseProps = {
 
 describe('DiseaseTab — descriptor-driven', () => {
   const measurement = (source_value: string) => ({
-    kind: 'editable', writable: true, target: 'measurement',
-    concept_id: 1, code: source_value, value_kind: 'string',
-    type_concept_id: 32856, source_value,
+    kind: 'direct', writable: true, target: 'patient_record',
+    value_kind: 'string',
+    projection: {
+      omop_table: 'measurement', concept_id: 1, code: source_value,
+      type_concept_id: 32856, source_value,
+    },
   });
 
   const CONVERTED: Record<string, unknown> = {
@@ -547,9 +553,12 @@ describe('DiseaseTab — descriptor-driven', () => {
  */
 describe('DiseaseTab — shared staging and biomarkers', () => {
   const measurement = (source_value: string, value_kind = 'string') => ({
-    kind: 'editable', writable: true, target: 'measurement',
-    concept_id: 1, code: source_value, value_kind,
-    type_concept_id: 32856, source_value,
+    kind: 'direct', writable: true, target: 'patient_record',
+    value_kind,
+    projection: {
+      omop_table: 'measurement', concept_id: 1, code: source_value,
+      type_concept_id: 32856, source_value,
+    },
   });
 
   const SHARED: Record<string, unknown> = {

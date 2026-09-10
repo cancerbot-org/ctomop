@@ -3270,9 +3270,9 @@ class PatientRecord(models.Model):
     user_edited_fields = models.JSONField(
         default=list, blank=True,
         help_text=(
-            "Legacy compatibility metadata from the retired PatientRecord-to-OMOP "
-            "write-through. It is not written or consulted by derivation; mapped "
-            "clinical fields are rebuilt only from OMOP facts."
+            "Fields directly edited by a user that may not yet have OMOP backing. "
+            "Derivation preserves these values when no OMOP fact exists for the "
+            "field, and auto-cleans entries once an OMOP fact is projected."
         ),
     )
     # Values for administrator-defined fields.  Runtime definitions cannot be

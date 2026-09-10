@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, AlertCircle, ChevronDown, Download } from "lucide-react";
 import api from "@/api/axios";
 import { fetchWritableFields, LIFECYCLE, type FieldDescriptors } from "@/hooks/useWritableFields";
-import { writeFieldValues } from "@/api/clinicalFacts";
+import { writeProfileFields, type ProfileEdit } from "@/api/clinicalFacts";
 import { getActiveBranding } from "@/config/branding";
 import type { User } from "@/hooks/useAuth";
 import DeleteAccountDialog from "./DeleteAccountDialog";
@@ -20,7 +20,6 @@ import BloodTab from "@/components/PatientInfo/tabs/BloodTab";
 import LabsTab from "@/components/PatientInfo/tabs/LabsTab";
 import BehaviorTab from "@/components/PatientInfo/tabs/BehaviorTab";
 import WearableTab from "@/components/PatientInfo/tabs/WearableTab";
-import { CustomPatientFields } from "@/components/PatientInfo/CustomPatientFields";
 import PatientOmopTab from "./PatientOmopTab";
 
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
@@ -339,18 +338,11 @@ export default function PatientDetail({
       const { patient_name: _echoed, ...info } = data.info as Record<string, unknown>;
       const renamed = !!data.name && data.name !== patientNameRef.current;
 
-      // A clinical field is not a column on this record — it is the projection of
-      // an OMOP fact, and PatientRecord owns no writable clinical column. Writing
-      // one means writing the fact and letting derivation follow, so those edits
-      // leave through writeClinicalFact rather than riding along in the PATCH,
-      // which would refuse them.
-      // Fail closed, and that has to mean the whole save — not just the clinical
-      // half. An empty descriptor makes nothing look writable, which correctly
-      // stops the OMOP writes, but it also makes the projection filter below
-      // match everything: without it there is no way to tell an OMOP-mapped
-      // column from one this record owns. Degrading to "PATCH the lot" is how
-      // the read-only 405 comes back, so a descriptor we could not fetch is a
-      // failed save, reported as one.
+      // All clinical edits go through PatientRecord PATCH. The backend
+      // handles OMOP projection for fields with approved mappings.
+      // Profile fields (person-targeted) go to the persons endpoint.
+      // Fail closed: an empty descriptor makes nothing look writable, so a
+      // descriptor we could not fetch is a failed save, reported as one.
       let descriptors: FieldDescriptors;
       try {
         descriptors = await fetchWritableFields();
@@ -361,64 +353,42 @@ export default function PatientDetail({
         );
       }
       const baseline = patientInfoRef.current ?? {};
-      const clinicalEdits = Object.keys(info).filter(
-        (f) => descriptors[f]?.writable && info[f] !== baseline[f],
-      );
-      // Sent as a set, not one at a time: the Person fields go in a single
-      // request because some are only valid together — latitude and longitude
-      // must be both set or both null, so sending one alone is refused.
-      if (clinicalEdits.length) {
-        await writeFieldValues(
-          personId,
-          clinicalEdits.map((field) => ({
-            field, descriptor: descriptors[field], value: info[field],
-          })),
-        );
-        for (const field of clinicalEdits) {
-          // Advance the baseline so a later keystroke elsewhere does not
-          // re-write this same value as another result.
+      // Profile fields (target === 'person') go to the persons endpoint.
+      // Everything else — clinical fields (with or without OMOP projection) —
+      // goes to PatientRecord PATCH. The backend projects mapped fields into
+      // OMOP tables after the PATCH lands.
+      const profileEdits: ProfileEdit[] = [];
+      const patchFields: Record<string, unknown> = {};
+
+      for (const [f, v] of Object.entries(info)) {
+        if (LIFECYCLE.has(f) || v === baseline[f]) continue;
+        const desc = descriptors[f];
+        if (desc?.writable && desc.target === 'person') {
+          profileEdits.push({ field: f, descriptor: desc, value: v });
+        } else if (desc?.writable && desc.target === 'patient_record') {
+          // Direct or mapped — all go through PatientRecord PATCH.
+          patchFields[f] = v;
+        } else if (!(f in descriptors)) {
+          // Unknown to the descriptor (e.g. custom fields) — PATCH them too.
+          patchFields[f] = v;
+        }
+      }
+
+      // Person profile fields go in a single request (latitude/longitude pair).
+      if (profileEdits.length) {
+        await writeProfileFields(personId, profileEdits);
+        for (const { field } of profileEdits) {
           if (patientInfoRef.current) patientInfoRef.current[field] = info[field];
         }
       }
 
-      // Everything the projection still owns goes the old way — and *only* that.
-      //
-      // This used to drop just the writable fields and echo the rest back, on the
-      // theory that an unchanged value is a no-op. It cannot work: writing the
-      // OMOP fact triggers derivation, which updates the canonical column AND its
-      // aliases, so by the time this PATCH is sent the payload captured before the
-      // write is stale. The server reads a stale value as an attempted change to a
-      // read-only field and refuses the whole request —
-      //
-      //   OMOP-mapped PatientRecord fields are read-only …
-      //   fields: [absolute_neutrophile_count, calcium_mg_dl, egfr, …]
-      //
-      // — every one of them an alias the edit itself had just moved.
-      //
-      // Any field the descriptor knows about is OMOP-mapped and never belongs in
-      // this request, whatever its kind. Lifecycle columns are dropped too: they
-      // are serializer read-only, and updated_at goes stale the moment anything
-      // is written.
-      //
-      // And only what actually CHANGED. Echoing back unchanged values is what
-      // created the bug in the first place: a value the client holds is only
-      // guaranteed current until the next write, and computed fields like
-      // lines_of_therapy or age go stale exactly the same way an alias does. A
-      // PATCH should carry the edit, not the record.
-      const projectionInfo = Object.fromEntries(
-        Object.entries(info).filter(
-          ([f, v]) =>
-            !(f in descriptors) && !LIFECYCLE.has(f) && v !== baseline[f],
-        ),
-      );
-      // Nothing left to say is not a reason to say it: a save that only moved
-      // clinical facts has already done its work through the OMOP writes above.
-      if (renamed || Object.keys(projectionInfo).length > 0) {
+      // All clinical + unmapped fields ride the PatientRecord PATCH.
+      if (renamed || Object.keys(patchFields).length > 0) {
         await api.patch(
           `/patient-info/${personId}/`,
-          renamed ? { ...projectionInfo, patient_name: data.name } : projectionInfo,
+          renamed ? { ...patchFields, patient_name: data.name } : patchFields,
         );
-        for (const f of Object.keys(projectionInfo)) {
+        for (const f of Object.keys(patchFields)) {
           if (patientInfoRef.current) patientInfoRef.current[f] = info[f];
         }
       }
@@ -608,26 +578,10 @@ export default function PatientDetail({
     }
   }, [personId]);
 
-  const handleCustomEditableValue = useCallback(async (
-    field: { field_name: string }, value: unknown,
-  ) => {
-    if (!personId) return;
-    const descriptors = await fetchWritableFields();
-    const descriptor = descriptors[field.field_name];
-    if (!descriptor?.writable) {
-      throw new Error(`${field.field_name} does not have a complete writable OMOP mapping.`);
-    }
-    await writeFieldValues(personId, [{ field: field.field_name, descriptor, value }]);
-    const response = await api.get(`/patient-info/${personId}/`);
-    const refreshed = response.data.patient_info;
-    setPatientInfo(refreshed);
-    setEditedInfo(refreshed);
-    patientInfoRef.current = { ...refreshed };
-  }, [personId]);
-
-  const getDiseaseType = (): "breast" | "lymphoma" | "myeloma" | "cll" | "other" => {
+  const getDiseaseType = (): "breast" | "lymphoma" | "myeloma" | "cll" | "mcl" | "other" => {
     const d = (typeof editedInfo?.disease === "string" ? editedInfo.disease : "").toLowerCase();
     if (d.includes("breast")) return "breast";
+    if (d.includes("mantle")) return "mcl";
     if (d.includes("lymphoma")) return "lymphoma";
     if (d.includes("myeloma")) return "myeloma";
     if (d.includes("cll") || d.includes("chronic lymphocytic")) return "cll";
@@ -635,7 +589,7 @@ export default function PatientDetail({
   };
 
   const getDiseaseTabLabel = () =>
-    ({ breast: "Breast Cancer", lymphoma: "Follicular Lymphoma", myeloma: "Multiple Myeloma", cll: "CLL", other: "Disease Specific" })[getDiseaseType()];
+    ({ breast: "Breast Cancer", lymphoma: "Follicular Lymphoma", myeloma: "Multiple Myeloma", cll: "CLL", mcl: "Mantle Cell Lymphoma", other: "Disease Specific" })[getDiseaseType()];
 
   if (loading) return <PatientDetailSkeleton />;
 
@@ -675,11 +629,6 @@ export default function PatientDetail({
   const wearablesIdx = behaviorIdx + 1;
   const surveysIdx = patientMode ? wearablesIdx + 1 : -1;
   const omopIdx = canViewOmop ? tabLabels.length - 1 : -1;
-  const activeCustomTab = ({
-    0: 'general', 1: 'disease', 2: 'treatment', 3: 'blood', 4: 'labs',
-    [behaviorIdx]: 'behavior', [wearablesIdx]: 'wearable',
-  } as Record<number, string>)[activeTab];
-  const canManageCustomFields = !!(user?.is_staff || user?.is_org_admin);
 
   const tabDescriptions: Record<number, string> = {
     0: "Keep patient details up to date for accurate personalisation.",
@@ -878,14 +827,6 @@ export default function PatientDetail({
                 {activeTab === wearablesIdx && <WearableTab formData={editedInfo} onChange={handleFieldChange} onRefresh={reloadPatientInfo} />}
                 {surveysIdx >= 0 && activeTab === surveysIdx && <PatientSurveys user={user ?? null} />}
                 {omopIdx >= 0 && activeTab === omopIdx && personId && <PatientOmopTab personId={personId} />}
-                {activeCustomTab && (
-                  <CustomPatientFields
-                    tab={activeCustomTab}
-                    formData={editedInfo}
-                    canManage={canManageCustomFields}
-                    onEditableValueChange={handleCustomEditableValue}
-                  />
-                )}
               </div>
             </div>
           </>
