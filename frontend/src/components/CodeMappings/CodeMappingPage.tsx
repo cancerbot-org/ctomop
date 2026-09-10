@@ -653,12 +653,15 @@ export default function CodeMappingPage() {
   // reviews when this tab has none. Every box in the accuracy strip is scored
   // over all model versions, so the six numbers describe one population; the
   // fallbacks support older API responses.
-  // Metrics stay scoped too: with no snapshot for this tab they read as em
-  // dashes rather than as the overall model's score.
+  // The metrics come only from the cross-version snapshot, so they always
+  // describe the same reviews the counts do. With no snapshot -- this tab has
+  // none, or a web instance mid-roll answered without the key -- they read as
+  // em dashes. A single version's score beside all-version counts is the
+  // mismatch this strip exists to avoid, and no box names a version any more
+  // to explain it. Counts keep their older-response fallback, because
+  // review_totals already spans versions.
   const allModels = scopedAccuracy?.all_models;
   const reviewTotals = allModels ?? scopedAccuracy?.review_totals ?? scopedAccuracy;
-  const aggregateMetrics = allModels
-    ?? (scopedAccuracy ? scopedAccuracy.latest_reviewed ?? scopedAccuracy : undefined);
 
   const suggestModelVersion = accuracy?.suggest_model_version ?? "";
 
@@ -1554,7 +1557,7 @@ export default function CodeMappingPage() {
           </label>
           <section
             aria-label="Suggestion accuracy"
-            title="Reviews of every model version on this tab. Per-model results are on the History page."
+            title="Every model version's reviews of this tab, scored together. The History page breaks results out by model, over all tabs at once."
             className="ml-auto flex max-w-full shrink-0 flex-wrap divide-x rounded-md border border-slate-200 bg-slate-50 text-right text-xs"
           >
             {([
@@ -1567,7 +1570,7 @@ export default function CodeMappingPage() {
                 <div className="text-sm font-semibold text-slate-900">{value ?? 0}</div>
               </div>
             ))}
-            {([['Precision', aggregateMetrics?.precision], ['Recall', aggregateMetrics?.recall], ['F1', aggregateMetrics?.f1]] as const).map(([label, value]) => (
+            {([['Precision', allModels?.precision], ['Recall', allModels?.recall], ['F1', allModels?.f1]] as const).map(([label, value]) => (
               <div key={label} className="px-3 py-2">
                 <div className="font-medium text-slate-500">{label}</div>
                 <div className="text-sm font-semibold text-slate-900">{metric(value ?? null)}</div>

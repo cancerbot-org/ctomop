@@ -1359,16 +1359,22 @@ describe("Uncoded review counters and refresh", () => {
     expect(within(section).queryByText(/model reviews/)).not.toBeInTheDocument();
   });
 
-  it("falls back to the latest reviewed model when the API predates all_models", async () => {
+  it("shows dashes rather than one model's score when the API predates all_models", async () => {
+    // A web instance mid-roll answers without the key. Counts still span
+    // versions, so a single version's score beside them would be #1154 again
+    // with nothing left on the strip to explain it.
     const latestReviewed = { ...metrics, model_version: "v0.2", reviewed: 2, approved: 2, precision: 1, recall: 1, f1: 1 };
     mockGet.mockImplementation((url: string) => Promise.resolve({ data: url.includes("accuracy") ? {
       overall: metrics,
-      by_source_vocabulary: { "": { ...metrics, model_version: "v0.3", latest_reviewed: latestReviewed } },
+      by_source_vocabulary: { "": { ...metrics, model_version: "v0.3", latest_reviewed: latestReviewed,
+        review_totals: { approved: 5, rejected: 1, overridden: 0 } } },
     } : url.includes("reference") ? reference : [proposedRow] }));
     render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
     const section = await screen.findByRole("region", { name: "Suggestion accuracy" });
     expect(await within(section).findByText("Precision")).toBeInTheDocument();
-    expect(within(section).getAllByText("100.0%")).toHaveLength(3);
+    expect(within(section).queryByText("100.0%")).not.toBeInTheDocument();
+    expect(within(section).getAllByText("—")).toHaveLength(3);
+    expect(within(section).getByText("Approved").parentElement).toHaveTextContent("5");
   });
 
   it("updates confirmed reviews and counters without waiting for the table reload", async () => {
