@@ -22696,7 +22696,7 @@ class TherapyLineAuthoringTest(TestCase):
 # Async derivation — the 202 contract and the status endpoint
 # ---------------------------------------------------------------------------
 
-@override_settings(SERVICE_AUTH_SCOPES='patient/*.read patient/*.write')
+@override_settings(SERVICE_AUTH_SCOPES='patient/*.read system/etl.write')
 class AsyncDerivationTest(TestCase):
     """refresh/ queues, derivation-status/ reports. No broker involved."""
 
