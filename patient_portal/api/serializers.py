@@ -355,7 +355,9 @@ class PatientRecordSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
     age = serializers.SerializerMethodField()
     gender = GenderField(read_only=True)
-    refractory_status = serializers.CharField(source='treatment_refractory_status', read_only=True)
+    refractory_status = serializers.CharField(source='treatment_refractory_status', required=False, allow_null=True, allow_blank=True)
+    relapse_count = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    supportive_therapy_courses = serializers.SerializerMethodField()
     first_line_therapy_display = serializers.SerializerMethodField()
     second_line_therapy_display = serializers.SerializerMethodField()
     later_therapy_display = serializers.SerializerMethodField()
@@ -373,13 +375,48 @@ class PatientRecordSerializer(serializers.ModelSerializer):
             'organization', 'person', 'created_at', 'updated_at',
             'first_line_therapy_display', 'second_line_therapy_display', 'later_therapy_display',
             'lines_of_therapy', 'therapy_release_id',
-            'death_date',
             # Derivation versioning — set only by refresh_patient_record, never by client.
             'derivation_version', 'derived_at',
             # Tracks fields with direct user edits not yet backed by OMOP facts;
             # managed by the PATCH handler, not by the client.
-            'user_edited_fields', 'custom_fields',
+            'user_edited_fields', 'custom_fields', 'therapy_overrides',
         )
+
+    def get_supportive_therapy_courses(self, obj):
+        from patient_portal.api.supportive_therapies import SupportiveTherapySerializer
+        return SupportiveTherapySerializer(
+            obj.person.supportive_courses.select_related('regimen').all(), many=True,
+        ).data
+
+    def validate_death_date(self, value):
+        if value and value > localdate():
+            raise serializers.ValidationError('Death date cannot be in the future.')
+        dob = getattr(self.instance, 'date_of_birth', None)
+        if value and dob and value < dob:
+            raise serializers.ValidationError('Death date cannot precede date of birth.')
+        return value
+
+    def validate_treatment_refractory_status(self, value):
+        from omop_core.services.treatment_catalog import REFRACTORY_STATUSES
+        if value not in (None, '') and value not in REFRACTORY_STATUSES:
+            raise serializers.ValidationError('Select a recognized refractory status.')
+        return value
+
+    validate_refractory_status = validate_treatment_refractory_status
+
+    def update(self, instance, validated_data):
+        overrides = dict(instance.therapy_overrides or {})
+        for field in ('relapse_count', 'treatment_refractory_status'):
+            if field in validated_data:
+                value = validated_data[field]
+                if value in (None, ''):
+                    overrides.pop(field, None)
+                    if field == 'relapse_count':
+                        instance._cleared_relapse_count = True
+                else:
+                    overrides[field] = value
+        instance.therapy_overrides = overrides
+        return super().update(instance, validated_data)
 
     def get_fields(self):
         fields = super().get_fields()
@@ -1409,6 +1446,21 @@ class TherapyLineWriteSerializer(serializers.Serializer):
                 'regimen. A line with neither groups no drug exposures and no '
                 'therapy field would follow from it.',
             )
+        if attrs.get('outcome'):
+            from omop_core.services.treatment_catalog import outcomes_for_disease
+            record = PatientRecord.objects.filter(person=attrs['person']).first()
+            options = outcomes_for_disease(record.disease if record else '')
+            aliases = {key: item['value'] for item in options for key in (item['code'], item['value'], item['label'])}
+            value = attrs['outcome']
+            if value not in aliases:
+                # Preserve legacy values on a no-op edit; new selections must
+                # belong to the patient's disease-specific catalog.
+                if not Observation.objects.filter(person=attrs['person'],
+                    observation_source_value=f"LOT-{attrs['line_number']}-outcome",
+                    value_as_string=value, is_erroneous=False).exists():
+                    raise serializers.ValidationError({'outcome': 'Select an outcome for this disease.'})
+            else:
+                attrs['outcome'] = aliases[value]
         return attrs
 
 

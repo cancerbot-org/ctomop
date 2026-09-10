@@ -83,7 +83,7 @@ _THERAPY_PREFIXES = (
 # Fields that match a therapy prefix but are user-entered data, not episode-derived.
 # These should fall through to KIND_DIRECT rather than KIND_AUTHORED.
 _THERAPY_PREFIX_EXCEPTIONS = frozenset({
-    'planned_therapies',
+    'planned_therapies', 'relapse_count', 'treatment_refractory_status',
     'supportive_therapies',
     'supportive_therapy_start_date',
     'supportive_therapy_end_date',
@@ -189,6 +189,7 @@ _SERIALIZER_ALIASES = {
 # method — and each is assembled at serialization time from data that lives
 # elsewhere.
 _SERIALIZER_COMPUTED = {
+    'supportive_therapy_courses': 'Entered supportive treatment courses; edit through the supportive-therapies endpoint.',
     'age': 'Calculated from the date of birth on the Person record.',
     'name': 'Assembled from the given and family names on the Person record.',
     'person_id': 'The Person identifier this record derives from.',
@@ -266,7 +267,7 @@ _COMPUTED_INPUTS = {
 # mapping state; they are excluded rather than reported as unwritable fields.
 _LIFECYCLE_FIELDS = frozenset({
     'id', 'person', 'organization', 'created_at', 'updated_at',
-    'derived_at', 'derivation_version', 'user_edited_fields',
+    'derived_at', 'derivation_version', 'user_edited_fields', 'therapy_overrides',
 })
 
 
@@ -521,6 +522,7 @@ def get_serializer_read_only_fields():
     for field in PatientRecord._meta.concrete_fields:
         if field.name.endswith('_units'):
             read_only.add(field.name)
+    read_only -= {'relapse_count', 'treatment_refractory_status'}
     _CACHED_SERIALIZER_READ_ONLY = frozenset(read_only)
     return _CACHED_SERIALIZER_READ_ONLY
 
@@ -904,4 +906,21 @@ def build_writable_field_descriptor():
             'reason': reason,
         })
 
+    from omop_core.services.treatment_catalog import REFRACTORY_STATUSES
+    for field in ('relapse_count', 'treatment_refractory_status', 'refractory_status', 'death_date'):
+        descriptor[field] = {
+            'kind': KIND_DIRECT, 'writable': True, 'target': 'patient_record',
+            'value_kind': 'number' if field == 'relapse_count' else 'date' if field == 'death_date' else 'string',
+        }
+        if field in ('treatment_refractory_status', 'refractory_status'):
+            descriptor[field]['options'] = [{'value': value} for value in REFRACTORY_STATUSES]
+    descriptor['refractory_status']['canonical'] = 'treatment_refractory_status'
+    for field in ('relapse_count', 'treatment_refractory_status', 'death_date'):
+        descriptor[field]['reason'] = 'Inferred by default; enter a value to override, or clear to use the inferred value.'
+        descriptor[field]['projection'] = {
+            'omop_table': 'observation', 'concept_id': 0,
+            'type_concept_id': CONCEPT_EHR_TYPE,
+            'source_value': 'patient-record:' + field,
+        }
+    descriptor['death_date']['reason'] = 'Corrections are dated OMOP observations; earlier facts remain as history.'
     return descriptor

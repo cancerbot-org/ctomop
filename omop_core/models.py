@@ -2589,6 +2589,38 @@ class DiseaseTherapyRegimen(models.Model):
         return f"{self.disease} / {self.round} → {self.regimen}"
 
 
+class TherapyOutcome(models.Model):
+    """A treatment-response option, optionally limited to particular diseases."""
+    code = models.CharField(max_length=20, unique=True)
+    title = models.CharField(max_length=100)
+    value = models.CharField(max_length=60)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    diseases = models.ManyToManyField(Disease, related_name='therapy_outcomes')
+
+    class Meta:
+        ordering = ['sort_order', 'code']
+
+
+class SupportiveTherapyCourse(models.Model):
+    """An individually editable supportive treatment; never an anticancer line."""
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='supportive_courses')
+    regimen = models.ForeignKey(TherapyRegimen, on_delete=models.PROTECT)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    intent = models.CharField(max_length=50, blank=True, default='')
+    discontinuation_reason = models.CharField(max_length=60, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['start_date', 'id']
+        constraints = [models.CheckConstraint(
+            condition=models.Q(end_date__isnull=True) | models.Q(start_date__isnull=True)
+                | models.Q(end_date__gte=models.F('start_date')),
+            name='supportive_course_date_order',
+        )]
+
+
 # ---------------------------------------------------------------------------
 # End controlled vocabulary models
 # ---------------------------------------------------------------------------
@@ -2803,6 +2835,7 @@ class PatientRecord(models.Model):
     supportive_therapy_start_date = models.DateField(blank=True, null=True, help_text="Supportive Therapy Start Date")
     supportive_therapy_end_date = models.DateField(blank=True, null=True, help_text="Supportive Therapy End Date")
     supportive_therapy_intent = models.CharField(max_length=50, blank=True, null=True, help_text="Supportive Therapy Intent")
+    therapy_overrides = models.JSONField(default=dict, blank=True)
     relapse_count = models.IntegerField(blank=True, null=True)
     treatment_refractory_status = models.CharField(max_length=255, blank=True, null=True)
 
@@ -3386,6 +3419,9 @@ class PatientRecord(models.Model):
         
         # Update therapy-related computed fields
         self._update_therapy_computed_fields()
+        for field, value in (self.therapy_overrides or {}).items():
+            if field in {'relapse_count', 'treatment_refractory_status'}:
+                setattr(self, field, value)
         
         super().save(*args, **kwargs)
     

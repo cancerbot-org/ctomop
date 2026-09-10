@@ -41,7 +41,7 @@ const DESCRIPTORS: Record<string, unknown> = {
 beforeEach(() => {
   vi.clearAllMocks();
   __resetWritableFieldsCache();
-  mockGet.mockResolvedValue({ data: DESCRIPTORS });
+  mockGet.mockImplementation((url: string) => Promise.resolve({ data: url.includes('writable-fields') ? DESCRIPTORS : [] }));
 });
 
 function renderTab(formData: Record<string, unknown> = {}) {
@@ -103,7 +103,7 @@ describe('TreatmentTab', () => {
     await waitFor(() => expect(mockGet).toHaveBeenCalled());
 
     expect(screen.getByText('Supportive Therapy')).toBeInTheDocument();
-    expect(screen.getByText('Supportive Therapies')).toBeInTheDocument();
+    expect(screen.getByText('Zoledronic acid')).toBeInTheDocument();
   });
 
   it('renders planned therapies section', async () => {
@@ -186,4 +186,30 @@ describe('TreatmentTab - authoring a line', () => {
 
     expect(screen.queryByRole('button', { name: /add therapy line/i })).not.toBeInTheDocument();
   });
+});
+
+
+it('selects planned regimens for the next actual line and preserves the current value', async () => {
+  const onChange = vi.fn();
+  mockGet.mockImplementation((url: string) => Promise.resolve({ data: url.includes('writable-fields')
+    ? { planned_therapies: { kind: 'direct', target: 'patient_record', writable: true } }
+    : [{ code: 'new', title: 'Next regimen' }] }));
+  render(<TreatmentTab formData={{ person_id: 262, disease: 'C3242', therapy_lines_count: 1,
+    lines_of_therapy: [{ line: 2 }], planned_therapies: 'Previous plan' }} onChange={onChange} diseaseType="myeloma" />);
+  const picker = await screen.findByLabelText('Planned Therapies');
+  await waitFor(() => expect(picker).toBeEnabled());
+  expect(mockGet).toHaveBeenCalledWith('/v1/therapy-regimens/', { params: { disease: 'C3242', round: 'later_line_therapy' } });
+  expect(picker).toHaveValue('Previous plan');
+  fireEvent.change(picker, { target: { value: 'Next regimen' } });
+  expect(onChange).toHaveBeenCalledWith('planned_therapies', 'Next regimen');
+});
+
+it('offers editable relapse and refractory fields from the descriptor', async () => {
+  mockGet.mockImplementation((url: string) => Promise.resolve({ data: url.includes('writable-fields') ? {
+    relapse_count: { kind: 'direct', writable: true, target: 'patient_record', value_kind: 'number' },
+    refractory_status: { kind: 'direct', writable: true, target: 'patient_record', value_kind: 'string', options: [{ value: 'Primary Refractory' }] },
+  } : [] }));
+  renderTab({ relapse_count: 2, refractory_status: 'Primary Refractory' });
+  await waitFor(() => expect(screen.getByText('Relapse Count').parentElement?.parentElement?.querySelector('input')).toBeEnabled());
+  expect(screen.getByText('Refractory Status').parentElement?.parentElement?.querySelector('[role="combobox"]')).toBeEnabled();
 });

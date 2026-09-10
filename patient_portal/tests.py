@@ -24299,7 +24299,8 @@ class TherapyRegimenCRUDTest(MappingHubTestBase):
 
     def test_list_regimens(self):
         self.client.force_authenticate(user=self.admin)
-        resp = self.client.get('/api/v1/therapy-regimens/')
+        # The unfiltered endpoint is capped; catalog seeds can fill its first page.
+        resp = self.client.get('/api/v1/therapy-regimens/', {'search': 'Test Rd'})
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         codes = [r['code'] for r in resp.data]
         self.assertIn('test_rd', codes)
