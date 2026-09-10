@@ -1299,7 +1299,7 @@ describe("server mapping pages", () => {
           results: [{ ...proposedRow, source_code: page === 1 ? "FIRST PAGE" : "SECOND PAGE" }],
           duplicates: [], selected_source: "",
           tabs: [{ vocabulary_id: "", label: "Uncoded", is_standard: false, proposed: 101, approved: 0, athena: 0 }],
-          pages: { Unmapped: { page, page_size: 50, total: 101 }, Mapped: { page: 1, page_size: 50, total: 0 }, "Athena Mapped": { page: 1, page_size: 50, total: 0 } },
+          pages: { Unmapped: { page, page_size: 100, total: 101 }, Mapped: { page: 1, page_size: 100, total: 0 }, "Athena Mapped": { page: 1, page_size: 100, total: 0 } },
           rejected_count: 0,
         } });
       }
@@ -1307,7 +1307,7 @@ describe("server mapping pages", () => {
     });
     render(<MemoryRouter><CodeMappingPage /></MemoryRouter>);
     expect(await screen.findByText("FIRST PAGE")).toBeInTheDocument();
-    expect(screen.getByText("Page 1 of 3 · 101 mappings")).toBeInTheDocument();
+    expect(screen.getByText("Page 1 of 2 · 101 mappings")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(await screen.findByText("SECOND PAGE")).toBeInTheDocument();
     fireEvent.click(screen.getByTitle("Sort Unmapped by Seen"));
@@ -1412,7 +1412,7 @@ describe("expanded ICD10 review feedback", () => {
         return Promise.resolve({ data: {
           results: [mapping], duplicates: [], selected_source: "ICD10", rejected_count: 0,
           tabs: [{ vocabulary_id: "ICD10", label: "ICD10", is_standard: true, proposed: 1, approved: 0, athena: 0 }],
-          pages: { Unmapped: { page: 1, page_size: 50, total: 1 }, Mapped: { page: 1, page_size: 50, total: 0 }, "Athena Mapped": { page: 1, page_size: 50, total: 0 } },
+          pages: { Unmapped: { page: 1, page_size: 100, total: 1 }, Mapped: { page: 1, page_size: 100, total: 0 }, "Athena Mapped": { page: 1, page_size: 100, total: 0 } },
         } });
       }
       return Promise.resolve({ data: url.includes("reference") ? reference : {} });

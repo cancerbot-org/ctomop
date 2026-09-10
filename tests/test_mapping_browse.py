@@ -1,5 +1,5 @@
 import pytest
-from rest_framework.test import APIRequestFactory, force_authenticate
+from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 
 from omop_core.models import SourceCodeConceptMapping
 from patient_portal.api.views import code_mapping_list
@@ -27,14 +27,14 @@ def test_pages_sort_before_slicing_and_report_full_counts(browse):
     for i in range(105):
         row(f'C{i:03}', occurrence_count=i)
     first = browse().data
-    assert len(first['results']) == 50
+    assert len(first['results']) == 100
     assert first['results'][0]['source_code'] == 'C104'
-    assert first['pages']['Unmapped'] == {'page': 1, 'page_size': 50, 'total': 105}
+    assert first['pages']['Unmapped'] == {'page': 1, 'page_size': 100, 'total': 105}
     assert first['tabs'][0]['proposed'] == 105
     second = browse(page_0=2).data
-    assert second['results'][0]['source_code'] == 'C054'
+    assert second['results'][0]['source_code'] == 'C004'
     assert {r['mapping_id'] for r in first['results']}.isdisjoint(r['mapping_id'] for r in second['results'])
-    assert browse(page_0=99).data['pages']['Unmapped']['page'] == 3
+    assert browse(page_0=99).data['pages']['Unmapped']['page'] == 2
     assert browse(order_0='source_code').data['results'][0]['source_code'] == 'C000'
 
 
@@ -55,11 +55,11 @@ def test_aliases_global_search_rejected_and_sections(browse):
 def test_duplicates_include_off_page_and_rejected_members(browse):
     row('MATCH', occurrence_count=0)
     row(' match ', source_vocabulary_id='ICD10CM', status='rejected')
-    for i in range(51):
+    for i in range(101):
         row(f'X{i}', occurrence_count=100)
     data = browse(search='X').data
     assert {r['source_code'] for r in data['duplicates']} == {'MATCH', ' match '}
-    assert len(data['results']) == 50
+    assert len(data['results']) == 100
 
 
 def test_bad_paging_or_sort_is_a_validation_error(browse):
@@ -104,3 +104,68 @@ def test_spa_shell_is_not_cached_across_default_changes():
     from django.test import RequestFactory
     response = resolve('/code-mappings/').func(RequestFactory().get('/code-mappings/'))
     assert 'no-store' in response['Cache-Control']
+
+
+@pytest.mark.parametrize('status_filter', [None, 'approved'])
+def test_plain_list_pages_before_serialization_and_filters_in_database(status_filter):
+    from unittest.mock import patch
+    from patient_portal.api import views
+
+    SourceCodeConceptMapping.objects.bulk_create([
+        SourceCodeConceptMapping(source_vocabulary_id='ICD10', source_code=f'P{i:03}', status='approved')
+        for i in range(105)
+    ] + [SourceCodeConceptMapping(source_vocabulary_id='ICD10', source_code='A-proposed')])
+    user = Identity.objects.create_user(email='list-pages@example.test', is_staff=True)
+
+    def get(**params):
+        if status_filter:
+            params['status'] = status_filter
+        request = APIRequestFactory().get('/api/v1/code-mappings/', params)
+        force_authenticate(request, user=user)
+        return code_mapping_list(request)
+
+    with patch.object(views, '_serialize_code_mapping_row', wraps=views._serialize_code_mapping_row) as serialize:
+        first = get(page_size=100000)
+        assert first.status_code == 200
+        assert len(first.data) == serialize.call_count == 100
+    assert first['X-Page-Size'] == '100'
+    assert first['X-Total-Count'] == ('105' if status_filter else '106')
+    assert 'page=2' in first['Link']
+    assert 'rel="next"' in first['Link']
+    second = get(page=2)
+    assert len(second.data) == (5 if status_filter else 6)
+    assert 'rel="prev"' in second['Link']
+    assert 'rel="next"' not in second['Link']
+    assert {r['mapping_id'] for r in first.data}.isdisjoint(r['mapping_id'] for r in second.data)
+    if status_filter:
+        assert all(r['status'] == 'approved' for r in first.data + second.data)
+    assert get(page='bad').status_code == 404
+    assert get(page=999).status_code == 404
+
+
+@pytest.mark.parametrize('origin', ['https://curation.example', 'https://blocked.example'])
+def test_plain_list_exposes_pagination_headers_only_to_allowed_origins(settings, origin):
+    settings.CORS_ALLOW_ALL_ORIGINS = False
+    settings.CORS_ALLOWED_ORIGINS = ['https://curation.example']
+    SourceCodeConceptMapping.objects.bulk_create([
+        SourceCodeConceptMapping(source_vocabulary_id='ICD10', source_code=f'C{i:03}')
+        for i in range(105)
+    ])
+    client = APIClient()
+    client.force_authenticate(user=Identity.objects.create_user(email='cors-pages@example.test', is_staff=True))
+
+    response = client.get('/api/v1/code-mappings/', {'source': 'ICD10'}, HTTP_ORIGIN=origin, secure=True)
+
+    assert response.status_code == 200
+    assert len(response.data) == 100
+    assert response['X-Total-Count'] == '105'
+    assert response['X-Page'] == '1'
+    assert response['X-Page-Size'] == '100'
+    assert 'page=2' in response['Link']
+    if origin == 'https://curation.example':
+        assert response['Access-Control-Allow-Origin'] == origin
+        exposed = {name.strip().lower() for name in response['Access-Control-Expose-Headers'].split(',')}
+        assert {'link', 'x-total-count', 'x-page', 'x-page-size'} <= exposed
+    else:
+        assert 'Access-Control-Allow-Origin' not in response
+        assert 'Access-Control-Expose-Headers' not in response
