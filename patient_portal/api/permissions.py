@@ -63,6 +63,8 @@ def get_request_org(request):
 _SAFE_METHODS = frozenset(('GET', 'HEAD', 'OPTIONS'))
 _READ_SCOPES = frozenset(('patient/*.read', 'user/*.read'))
 _WRITE_SCOPES = frozenset(('patient/*.write', 'user/*.write'))
+_ETL_WRITE_SCOPE = 'system/etl.write'
+_ETL_WRITE_METHODS = frozenset(('POST', 'PUT', 'PATCH'))
 # Vocabulary/concept data is reference (system) data, not patient data, so a
 # service consumer may read it with a system/reference scope in addition to the
 # patient/user read scopes. See healthkey-ai/promop#344.
@@ -142,6 +144,29 @@ class VocabReadPermission(ScopedTokenPermission):
     read_scopes = _VOCAB_READ_SCOPES
 
 
+def _has_legacy_etl_write_grant(request) -> bool:
+    """Accept the ETL capability only for the three non-delete write verbs.
+
+    SMART ``patient/*.write`` is resource-wide and also authorizes destructive
+    endpoints. The ETL capability is accepted only where an ETL-specific
+    permission class has deliberately been installed.
+    """
+    return (
+        is_service_token(request)
+        and request.method.upper() in _ETL_WRITE_METHODS
+        and _ETL_WRITE_SCOPE in settings.SERVICE_AUTH_SCOPES.split()
+    )
+
+
+class EtlWritePermission(ScopedTokenPermission):
+    """Allow the legacy ETL capability on an explicitly approved endpoint."""
+
+    def has_permission(self, request, view):
+        return _has_legacy_etl_write_grant(request) or super().has_permission(
+            request, view
+        )
+
+
 class LabSyncPermission(ScopedTokenPermission):
     """
     Permission for the lab result sync endpoint.
@@ -192,6 +217,15 @@ class PatientCrudPermission(ScopedTokenPermission):
                 return True
             return request.method in _PATIENT_CRUD_METHODS
         return super().has_permission(request, view)
+
+
+class EtlPatientCrudPermission(PatientCrudPermission):
+    """Patient CRUD rules plus the narrowly placed legacy ETL capability."""
+
+    def has_permission(self, request, view):
+        return _has_legacy_etl_write_grant(request) or super().has_permission(
+            request, view
+        )
 
 
 class IsStaffPermission(BasePermission):

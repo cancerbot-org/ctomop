@@ -7,6 +7,8 @@ from django.test import override_settings
 from django.utils import timezone
 
 from patient_portal.api.permissions import (
+    EtlPatientCrudPermission,
+    EtlWritePermission,
     SERVICE_TOKEN,
     LabSyncPermission,
     PatientCrudPermission,
@@ -21,6 +23,7 @@ PERMISSIONS = (
     ScopedTokenPermission, VocabReadPermission, LabSyncPermission,
     PatientCrudPermission, PatientDeletePermission,
 )
+ETL_PERMISSIONS = (EtlWritePermission, EtlPatientCrudPermission)
 METHODS = ('GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE')
 
 
@@ -47,6 +50,44 @@ def test_service_scopes(permission_class, method, scope, allowed_methods):
         allowed = False
     with override_settings(SERVICE_AUTH_SCOPES=scope):
         assert permission_class().has_permission(request, None) is allowed
+
+
+@pytest.mark.parametrize('permission_class', ETL_PERMISSIONS)
+@pytest.mark.parametrize('method', METHODS)
+@pytest.mark.parametrize('scope', ('system/etl.write', 'patient/*.read system/etl.write'))
+def test_etl_capability_is_non_destructive(permission_class, method, scope):
+    request = SimpleNamespace(
+        auth=SERVICE_TOKEN, method=method,
+        user=SimpleNamespace(is_authenticated=True, is_staff=False),
+    )
+    expected = method in ('POST', 'PUT', 'PATCH')
+    if method in ('GET', 'HEAD', 'OPTIONS'):
+        expected = 'patient/*.read' in scope
+    with override_settings(SERVICE_AUTH_SCOPES=scope):
+        assert permission_class().has_permission(request, None) is expected
+
+
+@pytest.mark.parametrize('permission_class', PERMISSIONS)
+@pytest.mark.parametrize('method', METHODS)
+def test_etl_capability_is_rejected_by_ordinary_permissions(permission_class, method):
+    request = SimpleNamespace(
+        auth=SERVICE_TOKEN, method=method,
+        user=SimpleNamespace(is_authenticated=True, is_staff=False),
+    )
+    with override_settings(SERVICE_AUTH_SCOPES='system/etl.write'):
+        assert permission_class().has_permission(request, None) is False
+
+
+@pytest.mark.parametrize('permission_class', ETL_PERMISSIONS)
+def test_oauth_token_cannot_use_legacy_etl_capability(permission_class):
+    token = SimpleNamespace(
+        scope='system/etl.write', expires=timezone.now() + timedelta(hours=1),
+    )
+    request = SimpleNamespace(
+        auth=token, method='POST',
+        user=SimpleNamespace(is_authenticated=True, is_staff=False),
+    )
+    assert permission_class().has_permission(request, None) is False
 
 
 @pytest.mark.parametrize('permission_class', PERMISSIONS)
