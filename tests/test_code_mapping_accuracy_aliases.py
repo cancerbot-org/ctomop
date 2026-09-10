@@ -172,3 +172,41 @@ def test_two_approved_suggestions_remain_perfect_when_new_model_has_no_reviews()
     current = next(model for model in history if model['model_version'] == 'v0.3')
     assert current['reviewed'] == 0
     assert (current['precision'], current['recall'], current['f1']) == (None, None, None)
+
+
+def test_all_models_snapshot_scores_every_version_together():
+    """The mapping page's strip reads this, so it must span model versions.
+
+    The newest reviewed version scores 100%; every version together is 3
+    accepted of 5 reviews.
+    """
+    from rest_framework.test import APIClient
+
+    SourceCodeConceptMapping.objects.bulk_create([
+        SourceCodeConceptMapping(
+            source_vocabulary_id='ICD10', source_code=f'all-models-{index}',
+            suggestion_model_version=version, suggestion_outcome=outcome,
+        )
+        for index, (version, outcome) in enumerate([
+            ('v0.1', 'accepted'), ('v0.1', 'rejected'), ('v0.1', 'overridden'),
+            ('v0.2', 'accepted'), ('v0.2', 'accepted'),
+        ])
+    ])
+    client = APIClient()
+    client.force_authenticate(Identity.objects.create_user(email='all-models@example.test', is_staff=True))
+    main = client.get('/api/v1/code-mappings/accuracy/').data
+
+    for snapshot in (main['overall'], main['by_source_vocabulary']['ICD10']):
+        all_models = snapshot['all_models']
+        assert all_models['model_versions'] == 2
+        assert all_models['suggestions'] == 5
+        assert all_models['reviewed'] == 5
+        assert (all_models['approved'], all_models['rejected'], all_models['overridden']) == (3, 1, 1)
+        assert all_models['precision'] == pytest.approx(3 / 5)
+        assert all_models['recall'] == pytest.approx(3 / 4)
+        assert all_models['f1'] == pytest.approx(2 / 3)
+        # The three counts stay consistent with the review_totals beside them.
+        assert {key: all_models[key] for key in ('approved', 'rejected', 'overridden')} == snapshot['review_totals']
+        # A single version's own numbers are unchanged and still perfect.
+        assert snapshot['latest_reviewed']['model_version'] == 'v0.2'
+        assert snapshot['latest_reviewed']['precision'] == 1

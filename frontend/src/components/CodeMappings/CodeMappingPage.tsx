@@ -123,6 +123,7 @@ interface RepointResult {
 
 interface SuggestionAccuracy {
   latest_reviewed?: SuggestionAccuracy | null;
+  all_models?: SuggestionAccuracy & { model_versions: number };
   review_totals?: { approved: number; rejected: number; overridden: number };
   model_version?: string | null;
   accepted: number;
@@ -649,8 +650,12 @@ export default function CodeMappingPage() {
   const modelAccuracy = scopedAccuracy ?? accuracy?.overall;
   const selectedAccuracy = modelAccuracy?.latest_reviewed ?? modelAccuracy;
   // An empty-string key is the Uncoded bucket. Never borrow another tab's
-  // reviews when this tab has none. The fallback supports older API responses.
-  const reviewTotals = scopedAccuracy?.review_totals ?? scopedAccuracy;
+  // reviews when this tab has none. Every box in the accuracy strip is scored
+  // over all model versions, so the six numbers describe one population; the
+  // fallbacks support older API responses.
+  const allModels = scopedAccuracy?.all_models;
+  const reviewTotals = allModels ?? scopedAccuracy?.review_totals ?? scopedAccuracy;
+  const aggregateMetrics = allModels ?? selectedAccuracy;
 
   const suggestModelVersion = accuracy?.suggest_model_version ?? "";
 
@@ -1544,11 +1549,11 @@ export default function CodeMappingPage() {
             />
             Replace Current Suggestions
           </label>
-          <section aria-label="Suggestion accuracy" className="ml-auto flex max-w-full shrink-0 flex-wrap divide-x rounded-md border border-slate-200 bg-slate-50 text-right text-xs">
-            <div className="px-3 py-2 text-left text-slate-500">
-              <div>Metrics: {selectedAccuracy?.model_version ? selectedAccuracy.model_version : "no model reviews"}</div>
-              {selectedAccuracy && <div>{selectedAccuracy.reviewed ? `${selectedAccuracy.reviewed} model reviews` : "Awaiting model reviews"}</div>}
-            </div>
+          <section
+            aria-label="Suggestion accuracy"
+            title="Reviews of every model version on this tab. Per-model results are on the History page."
+            className="ml-auto flex max-w-full shrink-0 flex-wrap divide-x rounded-md border border-slate-200 bg-slate-50 text-right text-xs"
+          >
             {([
               ['Approved', reviewTotals?.approved],
               ['Rejected', reviewTotals?.rejected],
@@ -1559,7 +1564,7 @@ export default function CodeMappingPage() {
                 <div className="text-sm font-semibold text-slate-900">{value ?? 0}</div>
               </div>
             ))}
-            {([['Precision', selectedAccuracy?.precision], ['Recall', selectedAccuracy?.recall], ['F1', selectedAccuracy?.f1]] as const).map(([label, value]) => (
+            {([['Precision', aggregateMetrics?.precision], ['Recall', aggregateMetrics?.recall], ['F1', aggregateMetrics?.f1]] as const).map(([label, value]) => (
               <div key={label} className="px-3 py-2">
                 <div className="font-medium text-slate-500">{label}</div>
                 <div className="text-sm font-semibold text-slate-900">{metric(value ?? null)}</div>

@@ -10101,6 +10101,15 @@ def code_mapping_accuracy(request):
                 **_suggestion_accuracy_from_counts(versions[reviewed_version]),
                 'model_version': reviewed_version,
             } if reviewed_version else None,
+            # Every model version's reviews, scored together. The mapping page
+            # shows this, because a curator asking "how good are the
+            # suggestions on this tab" means all the suggestions on it, not
+            # only the ones a single version happened to produce. The
+            # per-version breakdown is the History page's job.
+            'all_models': {
+                **_suggestion_accuracy_from_counts(totals),
+                'model_versions': len(versions),
+            },
             **_suggestion_accuracy_from_counts(versions.get(latest, {})),
             'model_version': latest,
             'review_totals': _suggestion_review_totals(totals),
