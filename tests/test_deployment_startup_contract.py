@@ -19,6 +19,9 @@ def test_production_loads_athena_before_mappings_that_depend_on_it():
     assert script.index(baseline_migration) < script.index(vocabulary_load)
     assert script.index(vocabulary_load) < script.index(remaining_migrations)
     assert 'ATHENA_VOCABULARY_GDRIVE_URL' in script
+    vocabulary_command = next(line for line in script.splitlines() if line.startswith(vocabulary_load))
+    assert '--skip-umls-cache' in vocabulary_command
+    assert '--concepts-only' not in vocabulary_command
 
 
 def test_render_requires_the_athena_source_for_the_web_service():

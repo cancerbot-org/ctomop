@@ -27,7 +27,9 @@ python manage.py migrate omop_core 0200 --noinput
 
 : "${ATHENA_VOCABULARY_GDRIVE_URL:?ATHENA_VOCABULARY_GDRIVE_URL must point to the full Athena vocabulary folder before this service can deploy}"
 echo "Loading the full Athena vocabulary before remaining migrations..."
-python manage.py load_athena_vocabularies --gdrive "$ATHENA_VOCABULARY_GDRIVE_URL"
+# Run the optional UMLS full-release cache/import as separate maintenance;
+# downloading it here can exhaust the web instance's temporary filesystem.
+python manage.py load_athena_vocabularies --gdrive "$ATHENA_VOCABULARY_GDRIVE_URL" --skip-umls-cache
 
 echo "Applying migrations that require the Athena vocabulary..."
 python manage.py migrate --noinput
